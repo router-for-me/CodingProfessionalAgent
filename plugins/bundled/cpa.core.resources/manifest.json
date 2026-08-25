@@ -1,0 +1,25 @@
+{
+    "id": "cpa.core.resources",
+    "name": "Resource Provider",
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "description": "Core resource loading and context provider",
+    "engines": {
+        "cpa": ">=1.0.0"
+    },
+    "entries": {
+        "agent": "./agent/index.ts"
+    },
+    "activationPriority": 105,
+    "dependencies": {},
+    "capabilities": [
+        "filesystem.read"
+    ],
+    "contributes": {
+        "resource-provider": [
+            "cpa.core.context",
+            "cpa.core.skills",
+            "cpa.core.prompt-templates"
+        ]
+    }
+}

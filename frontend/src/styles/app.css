@@ -1,0 +1,238 @@
+@import "tailwindcss";
+@source "../../../plugins/bundled/**/*.{ts,tsx}";
+@source "../../../packages/plugin-ui/src/**/*.{ts,tsx}";
+@source "../../../packages/context-usage/src/**/*.{ts,tsx}";
+@import "./tokens.css";
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  touch-action: manipulation;
+}
+
+body {
+  font-family: var(--font-sans, Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif);
+  font-size: var(--ui-font-size, 14px);
+  font-weight: var(--font-weight-ui, normal);
+  background: var(--bg-app);
+  color: var(--text-primary);
+  overflow: hidden;
+}
+
+/* Prevent mobile browser auto-zoom when focusing editable inputs */
+@media screen and (max-width: 768px) {
+  input:not([type="checkbox"]):not([type="radio"]),
+  textarea,
+  select,
+  [contenteditable="true"],
+  [role="textbox"],
+  [data-testid="composer-input"] {
+    font-size: 16px !important;
+  }
+}
+
+input,
+textarea,
+[contenteditable="true"],
+[role="textbox"] {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+code,
+pre,
+.font-mono {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
+  font-size: var(--code-font-size, 12px);
+}
+
+/* Window drag regions (custom title bar / macOS inset title bar). */
+[data-drag-region] {
+  -webkit-app-region: drag;
+}
+
+[data-no-drag],
+[data-no-drag] *,
+[data-drag-region] button,
+[data-drag-region] a,
+[data-drag-region] input,
+[data-drag-region] textarea,
+[data-drag-region] select,
+button,
+a,
+input,
+textarea,
+select {
+  -webkit-app-region: no-drag;
+}
+
+[data-testid="terminal-view"] .xterm {
+  height: 100%;
+}
+
+[data-testid="terminal-view"] .xterm-viewport {
+  overflow-y: auto !important;
+}
+
+@keyframes splash-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  50% {
+    background-position: 0% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
+
+@keyframes splash-glow-pulse {
+  0% {
+    transform: scale(0.85);
+    opacity: 0.5;
+  }
+  100% {
+    transform: scale(1.15);
+    opacity: 0.95;
+  }
+}
+
+/* Syntax Highlighting (CPA Dark Theme) */
+.hljs-comment,
+.hljs-quote {
+  color: #8b949e;
+  font-style: italic;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-subst {
+  color: #ff7b72;
+}
+
+.hljs-number,
+.hljs-literal,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-tag .hljs-attr {
+  color: #79c0ff;
+}
+
+.hljs-string,
+.hljs-doctag {
+  color: #a5d6ff;
+}
+
+.hljs-title,
+.hljs-section,
+.hljs-selector-id {
+  color: #d2a8ff;
+  font-weight: 500;
+}
+
+.hljs-title.class_,
+.hljs-class .hljs-title,
+.hljs-type {
+  color: #ffa657;
+}
+
+.hljs-title.function_,
+.hljs-function .hljs-title {
+  color: #d2a8ff;
+}
+
+.hljs-attr,
+.hljs-attribute {
+  color: #ff7b72;
+}
+
+.hljs-symbol,
+.hljs-bullet {
+  color: #79c0ff;
+}
+
+.hljs-built_in {
+  color: #ffa657;
+}
+
+.hljs-meta,
+.hljs-meta .hljs-keyword {
+  color: #79c0ff;
+}
+
+.hljs-punctuation,
+.hljs-operator {
+  color: #c9d1d9;
+}
+
+.hljs-addition {
+  color: #7ee787;
+  background-color: rgba(63, 185, 80, 0.15);
+}
+
+.hljs-deletion {
+  color: #ffa198;
+  background-color: rgba(248, 81, 73, 0.15);
+}
+
+/* Diff Card Flash Animation (Flashes border 3 times upon navigation) */
+@keyframes diff-card-flash {
+  0%,
+  100% {
+    border-color: var(--border-subtle);
+    box-shadow: 0 0 0 0 transparent;
+  }
+  50% {
+    border-color: var(--accent-blue);
+    box-shadow: 0 0 0 1.5px var(--accent-blue), 0 0 10px rgba(110, 168, 254, 0.35);
+  }
+}
+
+.animate-diff-card-flash {
+  animation: diff-card-flash 0.45s ease-in-out 3;
+}
+
+/* Tool Activity Shimmer Text Animation (Flowing light gradient for running tools) */
+@keyframes text-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
+
+.animate-text-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    var(--text-muted) 0%,
+    var(--text-muted) 20%,
+    var(--text-primary) 50%,
+    var(--text-muted) 80%,
+    var(--text-muted) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: text-shimmer 2.5s ease-in-out infinite;
+}
+
+/* Hide scrollbar utility */
+.no-scrollbar::-webkit-scrollbar,
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar,
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+
+
+

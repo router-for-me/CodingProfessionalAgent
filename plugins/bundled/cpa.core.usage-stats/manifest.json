@@ -1,0 +1,30 @@
+{
+    "id": "cpa.core.usage-stats",
+    "name": "Usage Statistics",
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "description": "Core token consumption and skill usage settings section",
+    "engines": {
+        "cpa": ">=1.0.0"
+    },
+    "entries": {
+        "renderer": "./renderer/index.tsx"
+    },
+    "activationPriority": 140,
+    "dependencies": {
+        "cpa.core.settings": ">=1.0.0"
+    },
+    "capabilities": [
+        "sessions.read",
+        "events.emit",
+        "ui.notifications"
+    ],
+    "contributes": {
+        "settings": [
+            "usage"
+        ],
+        "action": [
+            "user.remainingUsage"
+        ]
+    }
+}

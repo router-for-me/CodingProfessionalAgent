@@ -1,0 +1,47 @@
+{
+    "id": "cpa.core.subagent",
+    "name": "Subagents",
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "description": "Core sub-agent execution, panel tabs, and pill contributions",
+    "engines": {
+        "cpa": ">=1.0.0"
+    },
+    "entries": {
+        "renderer": "./renderer/index.tsx",
+        "agent": "./agent/index.ts"
+    },
+    "activationPriority": 60,
+    "dependencies": {
+        "cpa.core.chat": ">=1.0.0"
+    },
+    "capabilities": [
+        "agent.subagents",
+        "sessions.read"
+    ],
+    "contributes": {
+        "slot": [
+            "subagent-content",
+            "subagent-pills-slot",
+            "pinned-summary-subagents"
+        ],
+        "panel": [
+            "subagent"
+        ],
+        "settings": [
+            "subagents"
+        ],
+        "action": [
+            "toggle-activity-view",
+            "show-pet"
+        ],
+        "chat-renderer": [
+            "subagent-pills"
+        ],
+        "tool-factory": [
+            "spawn_agent",
+            "send_message",
+            "stop_agent"
+        ]
+    }
+}

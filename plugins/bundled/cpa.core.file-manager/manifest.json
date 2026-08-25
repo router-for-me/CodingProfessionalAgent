@@ -1,0 +1,33 @@
+{
+    "id": "cpa.core.file-manager",
+    "name": "File Manager",
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "description": "Core workspace file browser right-panel view",
+    "engines": {
+        "cpa": ">=1.0.0"
+    },
+    "entries": {
+        "renderer": "./renderer/index.tsx"
+    },
+    "activationPriority": 80,
+    "dependencies": {
+        "cpa.core.session-manager": ">=1.0.0"
+    },
+    "capabilities": [
+        "filesystem.read",
+        "filesystem.write",
+        "system.clipboard"
+    ],
+    "contributes": {
+        "panel": [
+            "file-manager"
+        ],
+        "action": [
+            "search-files",
+            "go-to-line",
+            "copy-file-path",
+            "reveal-in-file-manager"
+        ]
+    }
+}

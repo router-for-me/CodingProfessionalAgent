@@ -1,0 +1,34 @@
+{
+    "id": "cpa.core.protocol-codex",
+    "name": "Codex Protocol Provider",
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "description": "Core OpenAI Codex protocol provider and WebSocket transport",
+    "engines": {
+        "cpa": ">=1.0.0"
+    },
+    "entries": {
+        "renderer": "./renderer/index.tsx",
+        "agent": "./agent/index.ts"
+    },
+    "activationPriority": 110,
+    "dependencies": {
+        "cpa.core.settings": ">=1.0.0"
+    },
+    "capabilities": [
+        "network.http",
+        "network.websocket",
+        "models.read"
+    ],
+    "contributes": {
+        "protocol": [
+            "codex-responses-ws"
+        ],
+        "model-catalog": [
+            "cliproxyapi"
+        ],
+        "settings": [
+            "models"
+        ]
+    }
+}

@@ -1,0 +1,32 @@
+{
+    "id": "cpa.core.manage-todo-list",
+    "name": "Todo List Manager",
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "description": "Core todo list tracking tool and floating progress bar",
+    "engines": {
+        "cpa": ">=1.0.0"
+    },
+    "entries": {
+        "renderer": "./renderer/index.tsx",
+        "agent": "./agent/index.ts"
+    },
+    "activationPriority": 120,
+    "dependencies": {
+        "cpa.core.chat": ">=1.0.0"
+    },
+    "capabilities": [
+        "sessions.read"
+    ],
+    "contributes": {
+        "floating": [
+            "todo-progress-bar"
+        ],
+        "tool-factory": [
+            "todo"
+        ],
+        "chat-renderer": [
+            "manage-todo-list-tool-card"
+        ]
+    }
+}

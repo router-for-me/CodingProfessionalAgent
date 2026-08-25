@@ -1,0 +1,155 @@
+{
+  "name": "coding-professional-agent-root",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Coding Professional Agent desktop application built with Electron, React, and TypeScript",
+  "type": "module",
+  "packageManager": "pnpm@10.28.2",
+  "scripts": {
+    "dev": "node scripts/generate-bundled-plugin-catalog.mjs && node scripts/dev.js",
+    "generate:bundled-plugins": "node scripts/generate-bundled-plugin-catalog.mjs",
+    "profile": "node scripts/profile.mjs",
+    "cpa-profile": "node scripts/profile.mjs",
+    "download:binaries": "node scripts/download-binaries.js",
+    "download:binaries:all": "node scripts/download-binaries.js --all",
+    "postinstall": "node scripts/fix-node-pty.js && node scripts/setup-better-sqlite3.js && node scripts/fix-minipass.js && node scripts/fix-electron-builder.js",
+    "build": "node scripts/generate-bundled-plugin-catalog.mjs && pnpm build:packages && pnpm --dir frontend build && tsc -p tsconfig.electron.json",
+    "build:packages": "pnpm --filter \"@cpa/*\" build",
+    "build:main": "tsc -p tsconfig.electron.json",
+    "test": "node scripts/generate-bundled-plugin-catalog.mjs && pnpm build:packages && pnpm test:packages && pnpm --dir frontend test && vitest run --config vitest.electron.config.ts",
+    "test:packages": "pnpm --filter \"@cpa/*\" test",
+    "test:frontend": "pnpm --dir frontend test",
+    "test:electron": "vitest run --config vitest.electron.config.ts",
+    "check:plugin-architecture": "node scripts/plugin-architecture-report.mjs --enforce",
+    "package": "node scripts/download-binaries.js && pnpm build && electron-builder",
+    "package:dir": "node scripts/download-binaries.js && pnpm build && electron-builder --dir",
+    "package:all": "node scripts/download-binaries.js --all && pnpm build && electron-builder",
+    "package:mac:x64": "node scripts/download-binaries.js --target=darwin-x64 && pnpm build && electron-builder --mac --x64",
+    "package:mac:amd64": "node scripts/download-binaries.js --target=darwin-x64 && pnpm build && electron-builder --mac --x64",
+    "package:mac:arm64": "node scripts/download-binaries.js --target=darwin-arm64 && pnpm build && electron-builder --mac --arm64",
+    "package:mac:aarch64": "node scripts/download-binaries.js --target=darwin-arm64 && pnpm build && electron-builder --mac --arm64",
+    "package:linux:x64": "node scripts/download-binaries.js --target=linux-x64 && pnpm build && electron-builder --linux --x64",
+    "package:linux:amd64": "node scripts/download-binaries.js --target=linux-x64 && pnpm build && electron-builder --linux --x64",
+    "package:linux:arm64": "node scripts/download-binaries.js --target=linux-arm64 && pnpm build && electron-builder --linux --arm64",
+    "package:linux:aarch64": "node scripts/download-binaries.js --target=linux-arm64 && pnpm build && electron-builder --linux --arm64",
+    "package:win:x64": "node scripts/download-binaries.js --target=win32-x64 && pnpm build && electron-builder --win --x64",
+    "package:win:amd64": "node scripts/download-binaries.js --target=win32-x64 && pnpm build && electron-builder --win --x64",
+    "package:win:arm64": "node scripts/download-binaries.js --target=win32-arm64 && pnpm build && electron-builder --win --arm64",
+    "package:win:aarch64": "node scripts/download-binaries.js --target=win32-arm64 && pnpm build && electron-builder --win --arm64"
+  },
+  "main": "dist-electron/src/main/index.js",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "node-pty",
+      "better-sqlite3"
+    ],
+    "overrides": {
+      "node-gyp": "^11.1.1"
+    }
+  },
+  "build": {
+    "appId": "com.earendil.coding-professional-agent",
+    "productName": "Coding Professional Agent",
+    "artifactName": "Coding-Professional-Agent-${version}-${os}-${arch}.${ext}",
+    "npmRebuild": false,
+    "directories": {
+      "output": "bin/dist"
+    },
+    "asarUnpack": [
+      "**/node-pty/build/**/*",
+      "**/node-pty/prebuilds/**/*",
+      "**/better-sqlite3/build/**/*",
+      "**/better-sqlite3/prebuilds/**/*",
+      "**/better-sqlite3/lib/binding/**/*"
+    ],
+    "files": [
+      "dist-electron/**/*",
+      "frontend/dist/**/*",
+      "plugins/bundled/**/*",
+      "build/trayTemplate*.png",
+      "build/appicon.png",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        "dmg"
+      ],
+      "icon": "build/appicon.png",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
+      "notarize": true,
+      "extraResources": [
+        {
+          "from": "resources/bin/darwin-${arch}",
+          "to": "bin",
+          "filter": [
+            "rg",
+            "fd"
+          ]
+        }
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/windows/icon.ico",
+      "extraResources": [
+        {
+          "from": "resources/bin/win32-${arch}",
+          "to": "bin",
+          "filter": [
+            "rg.exe",
+            "fd.exe"
+          ]
+        }
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "tar.gz"
+      ],
+      "icon": "build/appicon.png",
+      "category": "Development",
+      "extraResources": [
+        {
+          "from": "resources/bin/linux-${arch}",
+          "to": "bin",
+          "filter": [
+            "rg",
+            "fd"
+          ]
+        }
+      ]
+    }
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^22.13.0",
+    "@types/pacote": "^11.1.8",
+    "@types/semver": "^7.8.0",
+    "@types/ws": "^8.5.14",
+    "electron": "^44.0.0",
+    "electron-builder": "^25.1.8",
+    "node-gyp": "^11.1.1",
+    "typescript": "~5.8.3",
+    "vitest": "^4.1.10"
+  },
+  "dependencies": {
+    "@cpa/context-usage": "workspace:*",
+    "@cpa/plugin-api": "workspace:*",
+    "@cpa/plugin-kernel": "workspace:*",
+    "@cpa/plugin-sdk": "workspace:*",
+    "@cpa/plugin-ui": "workspace:*",
+    "better-sqlite3": "^12.11.1",
+    "node-pty": "^1.1.0",
+    "pacote": "^22.0.0",
+    "semver": "^7.8.5",
+    "ws": "^8.18.1"
+  }
+}

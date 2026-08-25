@@ -1,0 +1,91 @@
+{
+    "id": "cpa.core.session-manager",
+    "name": "Session & Project Manager",
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "description": "Core session management, project registry, database, tools, and UI contributions",
+    "engines": {
+        "cpa": ">=1.0.0"
+    },
+    "entries": {
+        "main": "./main/index.ts",
+        "renderer": "./renderer/index.tsx",
+        "agent": "./agent/index.ts"
+    },
+    "activationPriority": 10,
+    "dependencies": {},
+    "capabilities": [
+        "sessions.*",
+        "projects.*",
+        "worktrees.*",
+        "ui.*",
+        "dialog.*",
+        "clipboard.*",
+        "native.*",
+        "fs.*",
+        "process.*"
+    ],
+    "contributes": {
+        "service": [
+            "sessionService",
+            "sessionRunRegistry"
+        ],
+        "rpc": [
+            "session:get",
+            "session:set",
+            "session:delete",
+            "session:list",
+            "session:listSessions",
+            "session:listSessionsByScheduleId",
+            "session:setMeta",
+            "session:broadcastRunStatus",
+            "session:broadcastStreamEvent",
+            "session:broadcastSubAgentState",
+            "session:updateSubAgent",
+            "session:abortRun",
+            "session:getActiveRuns",
+            "session:getResumePromptState",
+            "session:broadcastResumePromptState",
+            "session:resumePromptAction",
+            "session:delegateRun",
+            "session:queryMetrics",
+            "session:search"
+        ],
+        "settings-group": [
+            "archived"
+        ],
+        "settings": [
+            "archived"
+        ],
+        "slot": [
+            "sidebar-nav-top",
+            "sidebar-session-list",
+            "titlebar-left-sidebar-toggle",
+            "titlebar-session-title",
+            "titlebar-right-controls"
+        ],
+        "composer": [
+            "project-picker",
+            "work-location-picker",
+            "environment-picker",
+            "branch-picker"
+        ],
+        "action": [
+            "new-chat",
+            "new-standalone-chat",
+            "next-chat",
+            "previous-chat",
+            "archive-chat",
+            "toggle-pin",
+            "mark-as-unread",
+            "fork-chat",
+            "switch-chat",
+            "user.invite"
+        ],
+        "tool-factory": [
+            "title",
+            "session_search",
+            "create_session"
+        ]
+    }
+}

@@ -1,0 +1,96 @@
+import { describe, expect, it } from 'vitest'
+import { getFilteredModels, orderModels } from './filteredModels'
+import type { ModelCatalogEntry } from './types'
+
+describe('filteredModels', () => {
+    const mockModels: ModelCatalogEntry[] = [
+        {
+            id: 'model-a',
+            label: 'Model A',
+            supportsFast: true,
+            reasoningLevels: [
+                { id: 'low', requestValue: 'low' },
+                { id: 'medium', requestValue: 'medium' },
+                { id: 'high', requestValue: 'high' },
+            ],
+            input: ['text'],
+            contextWindow: 128000,
+            maxTokens: 4096,
+        },
+        {
+            id: 'model-b',
+            label: 'Model B',
+            supportsFast: false,
+            reasoningLevels: [
+                { id: 'medium', requestValue: 'medium' },
+            ],
+            input: ['text'],
+            contextWindow: 128000,
+            maxTokens: 4096,
+        },
+    ]
+
+    it('returns all models unchanged when enableAll is true', () => {
+        const result = getFilteredModels(mockModels, {
+            enableAll: true,
+            models: {},
+        })
+        expect(result).toEqual(mockModels)
+    })
+
+    it('returns all models unchanged when modelSettings is undefined', () => {
+        const result = getFilteredModels(mockModels, undefined)
+        expect(result).toEqual(mockModels)
+    })
+
+    it('filters out disabled models when enableAll is false', () => {
+        const result = getFilteredModels(mockModels, {
+            enableAll: false,
+            models: {
+                'model-a': { enabled: false },
+                'model-b': { enabled: true },
+            },
+        })
+        expect(result.map((m) => m.id)).toEqual(['model-b'])
+    })
+
+    it('filters reasoning levels for enabled models when enableAll is false', () => {
+        const result = getFilteredModels(mockModels, {
+            enableAll: false,
+            models: {
+                'model-a': {
+                    enabled: true,
+                    enabledReasoningLevels: ['low', 'high'],
+                },
+            },
+        })
+        expect(result).toHaveLength(2)
+        const modelA = result.find((m) => m.id === 'model-a')
+        expect(modelA?.reasoningLevels.map((r) => r.id)).toEqual(['low', 'high'])
+    })
+
+    it('retains all reasoning levels if enabledReasoningLevels is not specified', () => {
+        const result = getFilteredModels(mockModels, {
+            enableAll: false,
+            models: {
+                'model-a': { enabled: true },
+            },
+        })
+        const modelA = result.find((m) => m.id === 'model-a')
+        expect(modelA?.reasoningLevels.map((r) => r.id)).toEqual(['low', 'medium', 'high'])
+    })
+
+    it('reorders models based on modelOrder array', () => {
+        const ordered = orderModels(mockModels, ['model-b', 'model-a'])
+        expect(ordered.map((m) => m.id)).toEqual(['model-b', 'model-a'])
+    })
+
+    it('returns filtered models in custom modelOrder', () => {
+        const result = getFilteredModels(mockModels, {
+            enableAll: true,
+            models: {},
+            modelOrder: ['model-b', 'model-a'],
+        })
+        expect(result.map((m) => m.id)).toEqual(['model-b', 'model-a'])
+    })
+})

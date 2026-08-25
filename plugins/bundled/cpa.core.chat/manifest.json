@@ -1,0 +1,37 @@
+{
+    "id": "cpa.core.chat",
+    "name": "Chat View & Message Rendering",
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "description": "Core chat message timeline, compaction, and turn header contributions",
+    "engines": {
+        "cpa": ">=1.0.0"
+    },
+    "entries": {
+        "renderer": "./renderer/index.tsx"
+    },
+    "activationPriority": 20,
+    "dependencies": {
+        "cpa.core.session-manager": ">=1.0.0"
+    },
+    "capabilities": [
+        "sessions.read",
+        "agent.run"
+    ],
+    "contributes": {
+        "view": [
+            "chat"
+        ],
+        "slot": [
+            "turn-header"
+        ],
+        "chat-renderer": [
+            "user-message",
+            "assistant-message",
+            "compaction-message",
+            "thinking-part",
+            "text-part",
+            "tool-call-part"
+        ]
+    }
+}

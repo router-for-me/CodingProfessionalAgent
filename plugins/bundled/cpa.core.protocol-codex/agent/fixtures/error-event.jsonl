@@ -1,0 +1,2 @@
+{"type":"response.created","response":{"id":"resp_err_1","status":"in_progress"}}
+{"type":"error","code":"invalid_request","message":"bad payload"}

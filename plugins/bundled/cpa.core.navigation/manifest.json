@@ -1,0 +1,29 @@
+{
+    "id": "cpa.core.navigation",
+    "name": "Navigation",
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "description": "Core navigation and route transition contributions",
+    "engines": {
+        "cpa": ">=1.0.0"
+    },
+    "entries": {
+        "renderer": "./renderer/index.tsx"
+    },
+    "activationPriority": 16,
+    "dependencies": {
+        "cpa.core.home": ">=1.0.0"
+    },
+    "capabilities": [
+        "ui.navigation",
+        "events.emit"
+    ],
+    "contributes": {
+        "action": [
+            "toggle-sidebar",
+            "focus-main-chat-input",
+            "navigate-back",
+            "navigate-forward"
+        ]
+    }
+}

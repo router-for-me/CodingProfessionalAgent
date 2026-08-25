@@ -1,0 +1,35 @@
+{
+    "name": "@cpa/plugin-sdk",
+    "version": "1.0.0",
+    "type": "module",
+    "description": "Universal Plugin Platform SDK for Coding Professional Agent plugin developers",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.js"
+        }
+    },
+    "files": [
+        "dist"
+    ],
+    "scripts": {
+        "build": "tsc -p tsconfig.json",
+        "test": "vitest run"
+    },
+    "dependencies": {
+        "@cpa/plugin-api": "workspace:*",
+        "diff": "^5.2.0",
+        "ignore": "^5.3.1",
+        "semver": "^7.7.1",
+        "yaml": "^2.9.0"
+    },
+    "devDependencies": {
+        "@types/diff": "^5.2.3",
+        "@types/node": "^22.13.0",
+        "@types/semver": "^7.5.8",
+        "typescript": "~5.8.3",
+        "vitest": "^4.1.10"
+    }
+}

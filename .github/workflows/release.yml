@@ -1,0 +1,201 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag name (e.g. v1.0.0, defaults to package.json version if empty)'
+        required: false
+        type: string
+      draft:
+        description: 'Create draft release'
+        required: false
+        type: boolean
+        default: false
+      prerelease:
+        description: 'Identify as pre-release'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref_name || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  create-release:
+    name: Prepare Release
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release_tag.outputs.tag }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Determine release tag
+        id: release_tag
+        run: |
+          if [ -n "${{ github.event.inputs.tag_name }}" ]; then
+            echo "tag=${{ github.event.inputs.tag_name }}" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          else
+            APP_VERSION=$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version")
+            echo "tag=v${APP_VERSION}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create GitHub Release Anchor
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.release_tag.outputs.tag }}
+          name: Release ${{ steps.release_tag.outputs.tag }}
+          draft: ${{ github.event.inputs.draft == 'true' }}
+          prerelease: ${{ github.event.inputs.prerelease == 'true' }}
+          generate_release_notes: true
+
+  build:
+    name: Build (${{ matrix.name }})
+    needs: create-release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS-amd64
+            os: macos-latest
+            target_bin: darwin-x64
+            builder_args: --mac --x64
+          - name: macOS-aarch64
+            os: macos-latest
+            target_bin: darwin-arm64
+            builder_args: --mac --arm64
+          - name: Linux-amd64
+            os: ubuntu-latest
+            target_bin: linux-x64
+            builder_args: --linux --x64
+          - name: Linux-aarch64
+            os: ubuntu-24.04-arm
+            target_bin: linux-arm64
+            builder_args: --linux --arm64
+          - name: Windows-amd64
+            os: windows-latest
+            target_bin: win32-x64
+            builder_args: --win --x64
+          - name: Windows-aarch64
+            os: windows-latest
+            target_bin: win32-arm64
+            builder_args: --win --arm64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - name: Sync package version from release tag
+        run: node scripts/sync-version.js "${{ github.event.inputs.tag_name || github.ref }}"
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools
+          sudo apt-get install -y libfuse2 || sudo apt-get install -y libfuse2t64 || true
+
+      - name: Install dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --dir frontend install --frozen-lockfile
+
+      - name: Prepare native helper binaries (ripgrep & fd)
+        run: node scripts/download-binaries.js --target=${{ matrix.target_bin }}
+
+      - name: Build frontend and Electron main
+        run: pnpm build
+
+      - name: Package with electron-builder
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS Code Signing & Notarization secrets (only provided on macOS runners)
+          CSC_LINK: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE || '' }}
+          CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_CERTIFICATE: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_ID: ${{ runner.os == 'macOS' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          # Windows Code Signing secrets (optional)
+          WIN_CSC_LINK: ${{ runner.os == 'Windows' && secrets.WIN_CSC_LINK || '' }}
+          WIN_CSC_KEY_PASSWORD: ${{ runner.os == 'Windows' && secrets.WIN_CSC_KEY_PASSWORD || '' }}
+        run: pnpm exec electron-builder ${{ matrix.builder_args }} --publish never
+
+      - name: Normalize artifact names (amd64/aarch64) and cleanup metadata
+        run: node scripts/normalize-artifacts.js
+
+      - name: Upload artifacts directly to GitHub Release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ needs.create-release.outputs.tag }}
+          files: |
+            bin/dist/*.dmg
+            bin/dist/*.exe
+            bin/dist/*.AppImage
+            bin/dist/*.tar.gz
+            bin/dist/*.zip
+
+  finalize:
+    name: Finalize Release (Checksums)
+    needs: [create-release, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Download all release assets and generate SHA256SUMS
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.create-release.outputs.tag }}
+        run: |
+          mkdir -p release-assets
+          cd release-assets
+          gh release download "$TAG" --pattern "*.dmg" --pattern "*.exe" --pattern "*.AppImage" --pattern "*.tar.gz" --pattern "*.zip" || true
+          rm -f SHA256SUMS.txt
+          for file in *; do
+            if [ -f "$file" ]; then
+              sha256sum "$file" >> SHA256SUMS.txt
+            fi
+          done
+          echo "Generated checksums:"
+          cat SHA256SUMS.txt
+          if [ -s SHA256SUMS.txt ]; then
+            gh release upload "$TAG" SHA256SUMS.txt --clobber
+          fi

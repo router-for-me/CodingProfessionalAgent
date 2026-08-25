@@ -1,0 +1,79 @@
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg-app: #0e0e0e;
+  --bg-sidebar: #161616;
+  --bg-sidebar-hover: #222222;
+  --bg-elevated: #1c1c1c;
+  --bg-card: rgba(255, 255, 255, 0.035);
+  --bg-composer: #222222;
+  /* Context bar above the input — sits between app background and composer background. */
+  --bg-composer-bar: #181818;
+  --border-composer: rgba(255, 255, 255, 0.12);
+  --border-subtle: rgba(255, 255, 255, 0.09);
+  --text-primary: #ececec;
+  --text-secondary: color-mix(in srgb, var(--text-primary) 68%, transparent);
+  --text-muted: color-mix(in srgb, var(--text-primary) 45%, transparent);
+  --accent-blue: #6ea8fe;
+  --accent-purple: #b197fc;
+  --accent-green: #63e6be;
+  --accent-orange: #ff922b;
+  --radius-card: 14px;
+  --radius-composer: 20px;
+  --sidebar-width: 272px;
+  /*
+   * macOS traffic lights (hidden-inset title bar):
+   * lights start ~20px from left, 12px diameter, ~8px gaps → end ~72px.
+   * Keep extra gap so the collapse control sits clear of the green light.
+   * Row height matches the native traffic-light band for vertical centering.
+   */
+  --traffic-lights-pad: 84px;
+  --titlebar-height: 52px;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --bg-app: #f5f5f5;
+  --bg-sidebar: #ececec;
+  --bg-sidebar-hover: #e2e2e2;
+  --bg-elevated: #ffffff;
+  --bg-card: rgba(0, 0, 0, 0.03);
+  --bg-composer: #ffffff;
+  --bg-composer-bar: #ececec;
+  --border-composer: rgba(0, 0, 0, 0.09);
+  --border-subtle: rgba(0, 0, 0, 0.08);
+  --text-primary: #171717;
+  --text-secondary: color-mix(in srgb, var(--text-primary) 68%, transparent);
+  --text-muted: color-mix(in srgb, var(--text-primary) 45%, transparent);
+  --accent-blue: #6ea8fe;
+  --accent-purple: #b197fc;
+  --accent-green: #63e6be;
+  --accent-orange: #ff922b;
+  --radius-card: 14px;
+  --radius-composer: 20px;
+  --sidebar-width: 272px;
+  --traffic-lights-pad: 84px;
+  --titlebar-height: 52px;
+}
+
+@theme {
+  --color-bg-app: var(--bg-app);
+  --color-bg-sidebar: var(--bg-sidebar);
+  --color-bg-sidebar-hover: var(--bg-sidebar-hover);
+  --color-bg-elevated: var(--bg-elevated);
+  --color-bg-card: var(--bg-card);
+  --color-bg-composer: var(--bg-composer);
+  --color-bg-composer-bar: var(--bg-composer-bar);
+  --color-border-composer: var(--border-composer);
+  --color-border-subtle: var(--border-subtle);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+  --color-accent-blue: var(--accent-blue);
+  --color-accent-purple: var(--accent-purple);
+  --color-accent-green: var(--accent-green);
+  --color-accent-orange: var(--accent-orange);
+  --radius-card: 14px;
+  --radius-composer: 20px;
+  --spacing-sidebar: 272px;
+}

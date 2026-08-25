@@ -1,0 +1,7 @@
+{"type":"response.created","response":{"id":"resp_tool_1","status":"in_progress"}}
+{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"read","arguments":""}}
+{"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"path\":"}
+{"type":"response.function_call_arguments.delta","output_index":0,"delta":"\"src/main.ts\"}"}
+{"type":"response.function_call_arguments.done","output_index":0,"arguments":"{\"path\":\"src/main.ts\"}"}
+{"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"read","arguments":"{\"path\":\"src/main.ts\"}"}}
+{"type":"response.completed","response":{"id":"resp_tool_1","status":"completed","usage":{"input_tokens":12,"output_tokens":6,"total_tokens":18,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}}

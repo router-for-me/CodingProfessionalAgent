@@ -1,0 +1,14 @@
+{
+    "id": "cpa.bad.dup-caps",
+    "name": "Bad Duplicate Caps",
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "engines": { "cpa": ">=1.0.0" },
+    "entries": {},
+    "dependencies": {},
+    "capabilities": [
+        "filesystem.read",
+        "filesystem.read"
+    ],
+    "contributes": {}
+}

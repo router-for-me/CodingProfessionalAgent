@@ -1,0 +1,39 @@
+{
+    "id": "cpa.core.hooks",
+    "name": "Lifecycle Hooks",
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "description": "Core event lifecycle hooks engine and command runner",
+    "engines": {
+        "cpa": ">=1.0.0"
+    },
+    "entries": {
+        "renderer": "./renderer/index.tsx",
+        "agent": "./agent/index.ts"
+    },
+    "activationPriority": 95,
+    "dependencies": {},
+    "capabilities": [
+        "filesystem.read",
+        "filesystem.write",
+        "process.spawn"
+    ],
+    "contributes": {
+        "settings": [
+            "hooks"
+        ],
+        "hook": [
+            "SessionStart",
+            "UserPromptSubmit",
+            "PreToolUse",
+            "PermissionRequest",
+            "PostToolUse",
+            "PreCompact",
+            "PostCompact",
+            "SubagentStart",
+            "SubagentStop",
+            "Stop",
+            "SessionEnd"
+        ]
+    }
+}

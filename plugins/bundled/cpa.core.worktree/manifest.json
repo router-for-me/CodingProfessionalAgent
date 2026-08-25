@@ -1,0 +1,46 @@
+{
+    "id": "cpa.core.worktree",
+    "name": "Worktree Manager",
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "description": "Git worktree isolation and environment management",
+    "engines": {
+        "cpa": ">=1.0.0"
+    },
+    "entries": {
+        "main": "./main/index.ts",
+        "renderer": "./renderer/index.tsx"
+    },
+    "activationPriority": 18,
+    "dependencies": {
+        "cpa.core.session-manager": ">=1.0.0"
+    },
+    "capabilities": [
+        "filesystem.*",
+        "process.spawn",
+        "projects.*",
+        "sessions.write",
+        "settings.read",
+        "settings.write",
+        "ui.navigation",
+        "events.emit",
+        "ui.notifications"
+    ],
+    "contributes": {
+        "service": [
+            "worktreeCoordinationService"
+        ],
+        "rpc": [
+            "worktree:setup",
+            "worktree:list",
+            "worktree:delete",
+            "worktree:resolve-root"
+        ],
+        "settings": [
+            "worktrees"
+        ],
+        "action": [
+            "toggle-local-worktree"
+        ]
+    }
+}

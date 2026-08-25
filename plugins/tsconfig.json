@@ -1,0 +1,16 @@
+{
+  "extends": "../frontend/tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
+  },
+  "include": [
+    "../frontend/src/vite-env.d.ts",
+    "../frontend/src/test/setup.ts",
+    "bundled/**/*"
+  ],
+  "exclude": [
+    "**/fixtures/**"
+  ]
+}

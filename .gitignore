@@ -1,0 +1,55 @@
+.worktrees/
+.superpowers/
+docs/
+.task
+bin
+dist-electron
+node_modules
+frontend/dist
+packages/*/dist
+frontend/node_modules
+node_modules/
+
+# Override global ignore of build/ so Wails packaging assets stay tracked.
+!build/
+!build/**
+build/linux/appimage/build
+build/windows/nsis/MicrosoftEdgeWebview2Setup.exe
+# Mobile generated (per-machine; overlays hold absolute paths)
+build/ios/xcode/overlay.json
+build/ios/xcode/gen/
+build/android/overlay.json
+build/android/gen/
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+*.local
+*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
+frontend/vitest.config.js
+frontend/vitest.config.d.ts
+frontend/vite.aliases.js
+frontend/vite.aliases.d.ts
+test-output
+.tmp_bin
+resources/bin
+
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

@@ -1,0 +1,6 @@
+export * from '@cpa/plugin-api'
+export * from './definePluginEntry.js'
+export * from './manifestValidator.js'
+export * from './agentAdapter.js'
+export * from './agent.js'
+export * from './testing/createPluginTestHarness.js'

@@ -1,0 +1,25 @@
+{
+    "id": "cpa.core.file-changes",
+    "name": "File Changes Tracker",
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "description": "Core file mutation tracker and turn diff state",
+    "engines": {
+        "cpa": ">=1.0.0"
+    },
+    "entries": {
+        "renderer": "./renderer/index.tsx"
+    },
+    "activationPriority": 125,
+    "dependencies": {
+        "cpa.core.chat": ">=1.0.0"
+    },
+    "capabilities": [
+        "filesystem.read"
+    ],
+    "contributes": {
+        "chat-renderer": [
+            "file-changes-tool-card"
+        ]
+    }
+}

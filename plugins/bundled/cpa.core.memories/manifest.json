@@ -1,0 +1,37 @@
+{
+    "id": "cpa.core.memories",
+    "name": "Memories",
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "description": "Core project memory system prompt and settings section",
+    "engines": {
+        "cpa": ">=1.0.0"
+    },
+    "entries": {
+        "renderer": "./renderer/index.tsx",
+        "agent": "./agent/index.ts"
+    },
+    "activationPriority": 150,
+    "dependencies": {
+        "cpa.core.resources": ">=1.0.0",
+        "cpa.core.settings": ">=1.0.0"
+    },
+    "capabilities": [
+        "filesystem.read",
+        "filesystem.write"
+    ],
+    "contributes": {
+        "tool-factory": [
+            "memories_list",
+            "memories_read",
+            "memories_search",
+            "memories_add_ad_hoc_note"
+        ],
+        "resource-provider": [
+            "cpa.core.memories"
+        ],
+        "component-wrapper": [
+            "cpa.memories.personalization-wrapper"
+        ]
+    }
+}

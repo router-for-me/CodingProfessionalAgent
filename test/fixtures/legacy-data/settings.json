@@ -1,0 +1,10 @@
+{
+  "settings": {
+    "language": "zh-CN",
+    "theme": "dark",
+    "fontSize": 14,
+    "legacyCustomField": "preserved-value"
+  },
+  "retainedUnknown": true,
+  "app-version": "1.0.0"
+}

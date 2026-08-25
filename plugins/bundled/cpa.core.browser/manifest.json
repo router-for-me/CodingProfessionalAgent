@@ -1,0 +1,35 @@
+{
+    "id": "cpa.core.browser",
+    "name": "Browser Preview",
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "description": "Core right-sidebar web browser panel",
+    "engines": {
+        "cpa": ">=1.0.0"
+    },
+    "entries": {
+        "renderer": "./renderer/index.tsx"
+    },
+    "activationPriority": 50,
+    "dependencies": {
+        "cpa.core.session-manager": ">=1.0.0"
+    },
+    "capabilities": [
+        "network.http",
+        "network.websocket"
+    ],
+    "contributes": {
+        "panel": [
+            "browser"
+        ],
+        "action": [
+            "open-browser-tab",
+            "toggle-browser-panel",
+            "reload-browser-page",
+            "force-reload-browser-page",
+            "browser-back",
+            "browser-forward",
+            "focus-browser-address-bar"
+        ]
+    }
+}

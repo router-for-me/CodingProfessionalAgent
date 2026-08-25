@@ -1,0 +1,45 @@
+{
+    "name": "@cpa/context-usage",
+    "version": "1.0.0",
+    "type": "module",
+    "description": "Shared context-window usage estimation and hover ring UI for Coding Professional Agent",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.js"
+        }
+    },
+    "files": [
+        "dist"
+    ],
+    "scripts": {
+        "build": "tsc -p tsconfig.build.json",
+        "test": "vitest run"
+    },
+    "dependencies": {
+        "@cpa/plugin-ui": "workspace:*"
+    },
+    "devDependencies": {
+        "@testing-library/jest-dom": "^7.0.0",
+        "@testing-library/react": "^16.3.2",
+        "@types/react": "^19.1.8",
+        "@types/react-dom": "^19.1.6",
+        "jsdom": "^30.0.1",
+        "typescript": "~5.8.3",
+        "vitest": "^4.1.10"
+    },
+    "peerDependencies": {
+        "react": ">=19.0.0",
+        "react-dom": ">=19.0.0"
+    },
+    "peerDependenciesMeta": {
+        "react": {
+            "optional": true
+        },
+        "react-dom": {
+            "optional": true
+        }
+    }
+}

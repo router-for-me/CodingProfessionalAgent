@@ -1,0 +1,9 @@
+[
+  {
+    "id": "sched-legacy-1",
+    "title": "Daily Code Review",
+    "schedule": "0 9 * * 1-5",
+    "enabled": true,
+    "customScheduleAttr": "preserved-sched-prop"
+  }
+]

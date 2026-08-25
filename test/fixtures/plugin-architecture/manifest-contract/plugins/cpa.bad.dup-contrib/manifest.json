@@ -1,0 +1,16 @@
+{
+    "id": "cpa.bad.dup-contrib",
+    "name": "Bad Duplicate Contrib",
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "engines": { "cpa": ">=1.0.0" },
+    "entries": {},
+    "dependencies": {},
+    "capabilities": [],
+    "contributes": {
+        "view": [
+            "dup-view",
+            "dup-view"
+        ]
+    }
+}

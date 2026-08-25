@@ -1,0 +1,36 @@
+{
+    "id": "cpa.core.terminal",
+    "name": "Terminal",
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "description": "Core embedded PTY terminal panel and bottom drawer",
+    "engines": {
+        "cpa": ">=1.0.0"
+    },
+    "entries": {
+        "renderer": "./renderer/index.tsx"
+    },
+    "activationPriority": 40,
+    "dependencies": {
+        "cpa.core.session-manager": ">=1.0.0"
+    },
+    "capabilities": [
+        "pty.spawn",
+        "pty.write",
+        "pty.resize",
+        "pty.close"
+    ],
+    "contributes": {
+        "slot": [
+            "terminal-content",
+            "terminal-bottom-tabs"
+        ],
+        "panel": [
+            "terminal"
+        ],
+        "action": [
+            "toggle-bottom-panel",
+            "open-terminal"
+        ]
+    }
+}

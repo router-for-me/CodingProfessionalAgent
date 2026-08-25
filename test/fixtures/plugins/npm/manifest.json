@@ -1,0 +1,18 @@
+{
+  "id": "cpa.fixture.npm",
+  "name": "Fixture NPM Plugin",
+  "version": "1.0.0",
+  "apiVersion": "1.0.0",
+  "engines": {
+    "cpa": ">=1.0.0"
+  },
+  "activationPriority": 40,
+  "dependencies": {},
+  "capabilities": [
+    "tools:register"
+  ],
+  "contributes": {},
+  "entries": {
+    "main": "./index.js"
+  }
+}

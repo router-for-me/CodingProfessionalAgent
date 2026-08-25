@@ -1,0 +1,36 @@
+{
+    "id": "cpa.core.review",
+    "name": "Diff Review",
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "description": "Core Git diff inspector and branch review right-panel view",
+    "engines": {
+        "cpa": ">=1.0.0"
+    },
+    "entries": {
+        "renderer": "./renderer/index.tsx"
+    },
+    "activationPriority": 70,
+    "dependencies": {
+        "cpa.core.session-manager": ">=1.0.0"
+    },
+    "capabilities": [
+        "filesystem.read",
+        "process.spawn",
+        "projects.read",
+        "sessions.read",
+        "ui.notifications"
+    ],
+    "contributes": {
+        "panel": [
+            "review"
+        ],
+        "action": [
+            "open-review-tab",
+            "toggle-review-panel"
+        ],
+        "chat-renderer": [
+            "review-diff-tool-card"
+        ]
+    }
+}

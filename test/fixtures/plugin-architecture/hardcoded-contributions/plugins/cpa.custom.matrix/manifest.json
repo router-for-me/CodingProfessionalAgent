@@ -1,0 +1,25 @@
+{
+    "id": "cpa.custom.matrix",
+    "name": "Custom Matrix Plugin",
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "engines": {
+        "cpa": ">=1.0.0"
+    },
+    "entries": {
+        "renderer": "./renderer/index.tsx"
+    },
+    "dependencies": {},
+    "capabilities": [],
+    "contributes": {
+        "view": [
+            "custom-matrix-view"
+        ],
+        "action": [
+            "custom-matrix-action"
+        ],
+        "panel": [
+            "custom-matrix-panel"
+        ]
+    }
+}

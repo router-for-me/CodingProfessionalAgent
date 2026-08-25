@@ -1,0 +1,8 @@
+{"type":"response.created","response":{"id":"resp_two_1","status":"in_progress"}}
+{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_a","call_id":"call_a","name":"read","arguments":""}}
+{"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"path\":\"a.ts\"}"}
+{"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_a","call_id":"call_a","name":"read","arguments":"{\"path\":\"a.ts\"}"}}
+{"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","id":"fc_b","call_id":"call_b","name":"write","arguments":""}}
+{"type":"response.function_call_arguments.delta","output_index":1,"delta":"{\"path\":\"b.ts\",\"content\":\"x\"}"}
+{"type":"response.output_item.done","output_index":1,"item":{"type":"function_call","id":"fc_b","call_id":"call_b","name":"write","arguments":"{\"path\":\"b.ts\",\"content\":\"x\"}"}}
+{"type":"response.completed","response":{"id":"resp_two_1","status":"completed","usage":{"input_tokens":15,"output_tokens":10,"total_tokens":25,"input_tokens_details":{"cached_tokens":1},"output_tokens_details":{"reasoning_tokens":0}}}}

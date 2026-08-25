@@ -1,0 +1,29 @@
+{
+    "id": "cpa.core.ask",
+    "name": "Ask User Tool",
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "description": "Core interactive user question tool and modal overlay",
+    "engines": {
+        "cpa": ">=1.0.0"
+    },
+    "entries": {
+        "renderer": "./renderer/index.tsx",
+        "agent": "./agent/index.ts"
+    },
+    "activationPriority": 130,
+    "dependencies": {
+        "cpa.core.chat": ">=1.0.0"
+    },
+    "capabilities": [
+        "ui.overlay"
+    ],
+    "contributes": {
+        "floating": [
+            "ask-overlay"
+        ],
+        "tool-factory": [
+            "ask"
+        ]
+    }
+}

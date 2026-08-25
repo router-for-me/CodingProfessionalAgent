@@ -1,0 +1,52 @@
+{
+    "id": "cpa.core.composer",
+    "name": "Composer",
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "description": "Core prompt input composer, slash commands, attachment providers, preprocessors, and model selection",
+    "engines": {
+        "cpa": ">=1.0.0"
+    },
+    "entries": {
+        "renderer": "./renderer/index.tsx"
+    },
+    "activationPriority": 30,
+    "dependencies": {
+        "cpa.core.session-manager": ">=1.0.0"
+    },
+    "capabilities": [
+        "settings.*",
+        "models.*",
+        "agent.*",
+        "sessions.*",
+        "projects.*",
+        "skills.*",
+        "filesystem.*",
+        "ui.*"
+    ],
+    "contributes": {
+        "slot": [
+            "composer-container"
+        ],
+        "composer": [
+            "composer-attach",
+            "request-approval",
+            "context-usage-ring",
+            "model-select",
+            "files",
+            "goal",
+            "plan-mode",
+            "prompt-preprocessor",
+            "skill-preprocessor"
+        ],
+        "action": [
+            "cycle-reasoning-effort",
+            "next-model",
+            "previous-model",
+            "open-model-selector",
+            "open-folder",
+            "compact",
+            "stop-execution"
+        ]
+    }
+}

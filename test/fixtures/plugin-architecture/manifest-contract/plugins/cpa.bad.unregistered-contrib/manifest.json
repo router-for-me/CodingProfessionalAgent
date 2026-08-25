@@ -1,0 +1,13 @@
+{
+    "id": "cpa.bad.unregistered-contrib",
+    "name": "Bad Unregistered Contrib",
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "engines": { "cpa": ">=1.0.0" },
+    "entries": {
+        "renderer": "./renderer/index.tsx"
+    },
+    "dependencies": {},
+    "capabilities": [],
+    "contributes": {}
+}

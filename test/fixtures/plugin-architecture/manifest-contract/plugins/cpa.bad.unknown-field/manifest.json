@@ -1,0 +1,12 @@
+{
+    "id": "cpa.bad.unknown-field",
+    "name": "Bad Unknown Field",
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "engines": { "cpa": ">=1.0.0" },
+    "entries": {},
+    "dependencies": {},
+    "capabilities": [],
+    "contributes": {},
+    "rogueSecretKey": 12345
+}

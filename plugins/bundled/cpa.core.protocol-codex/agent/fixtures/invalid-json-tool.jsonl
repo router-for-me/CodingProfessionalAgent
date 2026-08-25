@@ -1,0 +1,5 @@
+{"type":"response.created","response":{"id":"resp_bad_json","status":"in_progress"}}
+{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_bad","call_id":"call_bad","name":"read","arguments":""}}
+{"type":"response.function_call_arguments.delta","output_index":0,"delta":"not-json"}
+{"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_bad","call_id":"call_bad","name":"read","arguments":"not-json"}}
+{"type":"response.completed","response":{"id":"resp_bad_json","status":"completed","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}}

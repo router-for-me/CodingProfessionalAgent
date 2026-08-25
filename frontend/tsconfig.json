@@ -1,0 +1,47 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "typeRoots": ["./node_modules/@types"],
+    "paths": {
+      "@/*": ["src/*"],
+      "@shared/*": ["../src/shared/*"],
+      "react": ["node_modules/@types/react"],
+      "react/jsx-runtime": ["node_modules/@types/react/jsx-runtime"],
+      "react-dom": ["node_modules/@types/react-dom"],
+      "@tanstack/react-router": ["node_modules/@tanstack/react-router"],
+      "@xterm/xterm": ["node_modules/@xterm/xterm"],
+      "@xterm/addon-fit": ["node_modules/@xterm/addon-fit"],
+      "diff": ["node_modules/diff"],
+      "yaml": ["node_modules/yaml"],
+      "ignore": ["node_modules/ignore"],
+      "zustand": ["node_modules/zustand"],
+      "lucide-react": ["node_modules/lucide-react"],
+      "clsx": ["node_modules/clsx"],
+      "@testing-library/react": ["node_modules/@testing-library/react"],
+      "@testing-library/user-event": ["node_modules/@testing-library/user-event"],
+      "@testing-library/jest-dom": ["node_modules/@testing-library/jest-dom"],
+      "@testing-library/jest-dom/*": ["node_modules/@testing-library/jest-dom/*"]
+    },
+
+    /* Linting */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["src", "../src/shared/**/*"],
+  "references": [{ "path": "./tsconfig.node.json" }]
+}

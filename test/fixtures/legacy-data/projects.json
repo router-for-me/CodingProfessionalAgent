@@ -1,0 +1,13 @@
+[
+  {
+    "id": "proj-legacy-1",
+    "name": "Legacy Project 1",
+    "path": "/path/to/legacy-1",
+    "extraMetadata": "preserved-proj-prop"
+  },
+  {
+    "id": "proj-legacy-2",
+    "name": "Legacy Project 2",
+    "path": "/path/to/legacy-2"
+  }
+]

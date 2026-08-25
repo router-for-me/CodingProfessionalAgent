@@ -1,0 +1,54 @@
+{
+    "id": "cpa.core.scheduler",
+    "name": "Scheduler",
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "description": "Core task scheduling and background job coordination",
+    "engines": {
+        "cpa": ">=1.0.0"
+    },
+    "entries": {
+        "main": "./main/index.ts",
+        "renderer": "./renderer/index.tsx"
+    },
+    "activationPriority": 17,
+    "dependencies": {
+        "cpa.core.session-manager": ">=1.0.0"
+    },
+    "capabilities": [
+        "schedule.*",
+        "storage.kv",
+        "sessions.read",
+        "sessions.write",
+        "sessions.create",
+        "sessions.manage",
+        "agent.run",
+        "projects.read",
+        "settings.read",
+        "events.emit",
+        "ui.navigation",
+        "ui.toast"
+    ],
+    "contributes": {
+        "service": [
+            "schedulerCoordinationService"
+        ],
+        "rpc": [
+            "schedule:list",
+            "schedule:save",
+            "schedule:trigger"
+        ],
+        "view": [
+            "scheduled"
+        ],
+        "navigation": [
+            "scheduled"
+        ],
+        "action": [
+            "manage-scheduled-tasks"
+        ],
+        "slot": [
+            "scheduled-drawer-overlay"
+        ]
+    }
+}

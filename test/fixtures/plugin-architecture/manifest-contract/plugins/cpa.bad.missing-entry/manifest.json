@@ -1,0 +1,13 @@
+{
+    "id": "cpa.bad.missing-entry",
+    "name": "Bad Missing Entry",
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "engines": { "cpa": ">=1.0.0" },
+    "entries": {
+        "renderer": "./renderer/does-not-exist.tsx"
+    },
+    "dependencies": {},
+    "capabilities": [],
+    "contributes": {}
+}

@@ -1,0 +1,17 @@
+{
+    "id": "cpa.bad.loop-helper-contrib",
+    "name": "Bad Loop Helper Contrib Plugin",
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "engines": {
+        "cpa": ">=1.0.0"
+    },
+    "entries": {
+        "renderer": "./renderer/index.tsx"
+    },
+    "contributes": {
+        "view": [
+            { "id": "declared-view", "title": "Declared View" }
+        ]
+    }
+}

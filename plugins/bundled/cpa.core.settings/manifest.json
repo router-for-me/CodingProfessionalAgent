@@ -1,0 +1,56 @@
+{
+    "id": "cpa.core.settings",
+    "name": "Settings",
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "description": "Core application settings sections, configuration store, and key-value persistence service",
+    "engines": {
+        "cpa": ">=1.0.0"
+    },
+    "entries": {
+        "main": "./main/index.ts",
+        "renderer": "./renderer/index.tsx"
+    },
+    "activationPriority": 90,
+    "dependencies": {},
+    "capabilities": [
+        "settings.*",
+        "storage.*",
+        "filesystem.*",
+        "native.*",
+        "webserver.*",
+        "plugins.read",
+        "plugins.manage",
+        "plugins.install"
+    ],
+    "contributes": {
+        "service": [
+            "kvStoreService"
+        ],
+        "rpc": [
+            "kvstore:get",
+            "kvstore:set",
+            "kvstore:save"
+        ],
+        "settings-group": [
+            "personal",
+            "integrations",
+            "code"
+        ],
+        "settings": [
+            "general",
+            "appearance",
+            "personalization",
+            "shortcuts",
+            "connections",
+            "plugins",
+            "git",
+            "environments"
+        ],
+        "action": [
+            "settings",
+            "user.logout",
+            "keyboard-shortcuts"
+        ]
+    }
+}

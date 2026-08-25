@@ -1,0 +1,27 @@
+{
+    "id": "cpa.core.tools",
+    "name": "Built-in Tools",
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "description": "Core agent tools (read, write, bash, edit)",
+    "engines": {
+        "cpa": ">=1.0.0"
+    },
+    "entries": {
+        "agent": "./agent/index.ts"
+    },
+    "activationPriority": 100,
+    "dependencies": {},
+    "capabilities": [
+        "filesystem.*",
+        "process.spawn"
+    ],
+    "contributes": {
+        "tool-factory": [
+            "read",
+            "shell",
+            "edit",
+            "write"
+        ]
+    }
+}

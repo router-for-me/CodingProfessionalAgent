@@ -1,0 +1,52 @@
+{
+    "name": "@cpa/plugin-ui",
+    "version": "1.0.0",
+    "type": "module",
+    "description": "Universal Plugin Platform UI primitives and theme surfaces for Coding Professional Agent",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.js"
+        }
+    },
+    "files": [
+        "dist"
+    ],
+    "scripts": {
+        "build": "tsc -p tsconfig.json",
+        "test": "vitest run"
+    },
+    "dependencies": {
+        "@cpa/plugin-api": "workspace:*",
+        "clsx": "^2.1.1",
+        "highlight.js": "^11.12.0",
+        "lucide-react": "^1.30.0",
+        "react-i18next": "^17.0.12",
+        "react-markdown": "^10.1.0",
+        "remark-gfm": "^4.0.1",
+        "tailwind-merge": "^3.6.0"
+    },
+    "devDependencies": {
+        "@testing-library/jest-dom": "^7.0.0",
+        "@testing-library/react": "^16.3.2",
+        "@types/react": "^19.1.8",
+        "@types/react-dom": "^19.1.6",
+        "jsdom": "^30.0.1",
+        "typescript": "~5.8.3",
+        "vitest": "^4.1.10"
+    },
+    "peerDependencies": {
+        "react": ">=19.0.0",
+        "react-dom": ">=19.0.0"
+    },
+    "peerDependenciesMeta": {
+        "react": {
+            "optional": true
+        },
+        "react-dom": {
+            "optional": true
+        }
+    }
+}

@@ -1,0 +1,31 @@
+{
+    "id": "cpa.core.home",
+    "name": "Home View",
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "description": "Core home and welcome view UI contributions",
+    "engines": {
+        "cpa": ">=1.0.0"
+    },
+    "entries": {
+        "renderer": "./renderer/index.tsx"
+    },
+    "activationPriority": 15,
+    "dependencies": {
+        "cpa.core.session-manager": ">=1.0.0"
+    },
+    "capabilities": [
+        "projects.read",
+        "ui.navigation",
+        "sessions.write",
+        "sessions.create"
+    ],
+    "contributes": {
+        "view": [
+            "home"
+        ],
+        "navigation": [
+            "home"
+        ]
+    }
+}
