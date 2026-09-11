@@ -221,17 +221,129 @@ select {
   animation: text-shimmer 2.5s ease-in-out infinite;
 }
 
+/* Hide native browser scrollbars globally so custom macOS-style overlay scrollbars take over */
+*::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+* {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+
 /* Hide scrollbar utility */
 .no-scrollbar::-webkit-scrollbar,
 .scrollbar-none::-webkit-scrollbar {
-  display: none;
+  display: none !important;
 }
 
 .no-scrollbar,
 .scrollbar-none {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
+  -ms-overflow-style: none !important;
+  scrollbar-width: none !important;
 }
+
+/*
+ * macOS-Style Non-System Overlay Scrollbars
+ * Replaces native scrollbars with smooth floating macOS-like scrollbars:
+ * - Visible ONLY when scrolling, hidden when idle (moving mouse over does not show).
+ * - Smooth fade-out transition (350ms) when hiding after scrolling stops.
+ * - Expands from 6px to 10px on hover/drag while visible.
+ * - Rounded pill shape with macOS-like inset margin.
+ */
+
+#cpa-mac-scrollbars-host {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+  z-index: 99999;
+  overflow: hidden;
+}
+
+.cpa-mac-scrollbar {
+  position: absolute;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  opacity: 0;
+  transition: opacity 350ms cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: 10;
+}
+
+.cpa-mac-scrollbar--visible {
+  opacity: 1;
+  transition: opacity 120ms ease-out;
+}
+
+.cpa-mac-scrollbar--vertical {
+  width: 12px;
+}
+
+.cpa-mac-scrollbar--horizontal {
+  height: 12px;
+}
+
+.cpa-mac-scrollbar-thumb {
+  position: absolute;
+  pointer-events: auto;
+  cursor: default;
+  border-radius: 9999px;
+  background-color: var(--scrollbar-thumb, rgba(255, 255, 255, 0.28));
+  box-sizing: border-box;
+  transition:
+    opacity 350ms cubic-bezier(0.4, 0, 0.2, 1),
+    width 150ms cubic-bezier(0.25, 1, 0.5, 1),
+    height 150ms cubic-bezier(0.25, 1, 0.5, 1),
+    right 150ms cubic-bezier(0.25, 1, 0.5, 1),
+    bottom 150ms cubic-bezier(0.25, 1, 0.5, 1),
+    background-color 150ms ease;
+  will-change: transform;
+}
+
+.cpa-mac-scrollbar--vertical .cpa-mac-scrollbar-thumb {
+  width: 6px;
+  right: 3px;
+}
+
+.cpa-mac-scrollbar--horizontal .cpa-mac-scrollbar-thumb {
+  height: 6px;
+  bottom: 3px;
+}
+
+/* Hover & Active States: Expands thumb and deepens contrast */
+.cpa-mac-scrollbar--hover .cpa-mac-scrollbar-thumb,
+.cpa-mac-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover, rgba(255, 255, 255, 0.55));
+}
+
+.cpa-mac-scrollbar--vertical.cpa-mac-scrollbar--hover .cpa-mac-scrollbar-thumb,
+.cpa-mac-scrollbar--vertical .cpa-mac-scrollbar-thumb:hover {
+  width: 10px;
+  right: 1px;
+}
+
+.cpa-mac-scrollbar--horizontal.cpa-mac-scrollbar--hover .cpa-mac-scrollbar-thumb,
+.cpa-mac-scrollbar--horizontal .cpa-mac-scrollbar-thumb:hover {
+  height: 10px;
+  bottom: 1px;
+}
+
+.cpa-mac-scrollbar--dragging .cpa-mac-scrollbar-thumb,
+.cpa-mac-scrollbar-thumb:active {
+  background-color: var(--scrollbar-thumb-active, rgba(255, 255, 255, 0.72));
+}
+
+/* Disable pointer interactions on hidden scrollbars and thumbs to prevent blocking clicks underneath or waking on hover */
+.cpa-mac-scrollbar:not(.cpa-mac-scrollbar--visible),
+.cpa-mac-scrollbar:not(.cpa-mac-scrollbar--visible) * {
+  pointer-events: none !important;
+}
+
 
 
 

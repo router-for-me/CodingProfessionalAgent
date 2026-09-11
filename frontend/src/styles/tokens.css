@@ -29,6 +29,9 @@
    */
   --traffic-lights-pad: 84px;
   --titlebar-height: 52px;
+  --scrollbar-thumb: rgba(255, 255, 255, 0.28);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.55);
+  --scrollbar-thumb-active: rgba(255, 255, 255, 0.72);
 }
 
 [data-theme="light"] {
@@ -54,6 +57,9 @@
   --sidebar-width: 272px;
   --traffic-lights-pad: 84px;
   --titlebar-height: 52px;
+  --scrollbar-thumb: rgba(0, 0, 0, 0.32);
+  --scrollbar-thumb-hover: rgba(0, 0, 0, 0.60);
+  --scrollbar-thumb-active: rgba(0, 0, 0, 0.75);
 }
 
 @theme {
@@ -76,4 +82,7 @@
   --radius-card: 14px;
   --radius-composer: 20px;
   --spacing-sidebar: 272px;
+  --color-scrollbar-thumb: var(--scrollbar-thumb);
+  --color-scrollbar-thumb-hover: var(--scrollbar-thumb-hover);
+  --color-scrollbar-thumb-active: var(--scrollbar-thumb-active);
 }

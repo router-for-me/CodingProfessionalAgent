@@ -7,6 +7,7 @@ import { bootstrapApplication } from './application/services/bootstrapApplicatio
 import { ensureBrowserHostTransport } from './application/services/hostTransport'
 import { initReactGrab } from './lib/reactGrab'
 import { observeReactPerformanceMeasures } from './lib/reactPerformanceMeasures'
+import { initMacScrollbars } from './lib/macScrollbar'
 import { waitForWebAuthentication } from './features/web-auth/WebAuthGate'
 import './styles/app.css'
 import type { Root } from 'react-dom/client'
@@ -33,6 +34,7 @@ export async function runStartup(deps?: StartupDependencies): Promise<void> {
     ;(deps?.initBrowserBridge ?? initBrowserBridge)()
     // Warm browser RPC transport so persistence reuses desktop settings/KV store.
     ensureBrowserHostTransport()
+    initMacScrollbars()
     await (deps?.initReactGrab ?? initReactGrab)()
     await (deps?.bootstrapApp ?? bootstrapApplication)()
     if (deps?.renderApp) {
