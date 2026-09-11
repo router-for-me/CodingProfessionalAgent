@@ -230,7 +230,7 @@ export function BranchPicker({
                 className={cn(
                     'inline-flex max-w-[200px] items-center gap-1.5 rounded-full',
                     'border border-transparent bg-transparent',
-                    'px-2.5 py-[5px] text-[12px] leading-none transition-colors',
+                    'px-2.5 py-[5px] text-[12px] leading-normal transition-colors',
                     'text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
                     'hover:bg-[var(--bg-elevated)]',
                     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-blue)]/40',

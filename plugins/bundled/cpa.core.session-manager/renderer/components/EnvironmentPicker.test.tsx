@@ -371,4 +371,11 @@ describe('EnvironmentPicker', () => {
 
         expect(screen.getByRole('button', { name: /Environment/i })).toHaveTextContent('Backend API Project')
     })
+
+    it('uses leading-normal instead of leading-none on trigger button', () => {
+        render(<EnvironmentPicker />)
+        const trigger = screen.getByRole('button', { name: /Environment/i })
+        expect(trigger.className).toContain('leading-normal')
+        expect(trigger.className).not.toContain('leading-none')
+    })
 })

@@ -261,4 +261,19 @@ describe('BranchPicker', () => {
         expect(checkoutBranch).not.toHaveBeenCalled()
         expect(onChange).toHaveBeenCalledWith('dev')
     })
+
+    it('uses leading-normal instead of leading-none on trigger button', () => {
+        render(
+            <BranchPicker
+                value="dev"
+                onChange={() => undefined}
+                projectName="CLIProxyAPI"
+                projectPaths={['/workspace/example']}
+                loadRepo={async () => sampleRepo}
+            />,
+        )
+        const trigger = screen.getByRole('button', { name: /Select branch|dev/i })
+        expect(trigger.className).toContain('leading-normal')
+        expect(trigger.className).not.toContain('leading-none')
+    })
 })

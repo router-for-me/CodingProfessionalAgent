@@ -191,4 +191,11 @@ describe('ProjectPicker', () => {
         expect(useProjectStore.getState().projects).toHaveLength(0)
         expect(onChange).not.toHaveBeenCalled()
     })
+
+    it('uses leading-normal instead of leading-none to prevent text descenders from being clipped', () => {
+        render(<ProjectPicker value={null} onChange={() => undefined} />)
+        const trigger = screen.getByRole('button', { name: /Select project/i })
+        expect(trigger.className).toContain('leading-normal')
+        expect(trigger.className).not.toContain('leading-none')
+    })
 })
