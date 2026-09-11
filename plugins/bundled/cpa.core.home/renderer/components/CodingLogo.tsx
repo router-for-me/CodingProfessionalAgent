@@ -4,9 +4,14 @@ import type { SVGProps } from 'react'
  * Coding Professional Agent logo icon.
  * Pure vector representation traced from brand asset.
  */
-export function CodingLogo({ className, ...props }: SVGProps<SVGSVGElement>) {
+export function CodingLogo({
+    className,
+    ref,
+    ...props
+}: SVGProps<SVGSVGElement> & { ref?: React.Ref<SVGSVGElement> }) {
     return (
         <svg
+            ref={ref}
             viewBox="0 0 2400 2400"
             fill="currentColor"
             className={className}

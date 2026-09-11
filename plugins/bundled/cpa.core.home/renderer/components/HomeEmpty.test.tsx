@@ -144,6 +144,48 @@ describe('HomeEmpty component', () => {
         expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument()
     })
 
+    it('animates rolling on logo click and settles back upright', () => {
+        let rafCallback: FrameRequestCallback | null = null
+        let currentTime = 1000
+        vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+            rafCallback = cb
+            return 1
+        })
+        vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {
+            rafCallback = null
+        })
+
+        const { container } = render(<HomeEmpty />)
+        const logoButton = screen.getByRole('button', { name: 'Logo' })
+        expect(logoButton).toBeInTheDocument()
+
+        const svg = container.querySelector('svg')
+        expect(svg).toBeInTheDocument()
+        expect(svg?.style.transform).toBe('')
+
+        // First click triggers rotation
+        fireEvent.click(logoButton)
+        expect(rafCallback).not.toBeNull()
+
+        // Step a frame
+        currentTime += 16
+        rafCallback!(currentTime)
+        expect(svg?.style.transform).toMatch(/rotate\(.+deg\)/)
+
+        // Second click adds another turn
+        fireEvent.click(logoButton)
+
+        // Step through frames until animation settles back to upright
+        for (let i = 0; i < 200 && rafCallback; i++) {
+            currentTime += 16
+            const cb: FrameRequestCallback = rafCallback
+            rafCallback = null
+            cb(currentTime)
+        }
+
+        expect(svg?.style.transform).toBe('')
+    })
+
     it('statically enforces zero window.electronBridge access across cpa.core.home', () => {
         const homePluginDir = path.resolve(__dirname, '../../')
         const scanFiles = (dir: string): string[] => {
