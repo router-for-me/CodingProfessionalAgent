@@ -338,9 +338,19 @@ describe('createHostServices', () => {
         unsubscribe?.()
 
         const skills = [{ name: 'gh-issue', description: 'Triage' }]
+        const catalogListener = vi.fn()
+        const unsubscribeCatalog = services.skillUsage.subscribeAvailableSkills?.(catalogListener)
         services.skillUsage.setAvailableSkills?.(skills)
-        expect(services.skillUsage.getAvailableSkills?.()).toEqual(skills)
+        expect(services.skillUsage.getAvailableSkills?.()).toBe(skills)
         expect((globalThis as any).__cpaComposerSkills).toEqual(skills)
+        expect(catalogListener).toHaveBeenCalledTimes(1)
+        services.skillUsage.setAvailableSkills?.([])
+        expect(services.skillUsage.getAvailableSkills?.()).toEqual([])
+        expect((globalThis as any).__cpaComposerSkills).toEqual([])
+        expect(catalogListener).toHaveBeenCalledTimes(2)
+        unsubscribeCatalog?.()
+        services.skillUsage.setAvailableSkills?.(skills)
+        expect(catalogListener).toHaveBeenCalledTimes(2)
 
         useSkillUsageStore.getState().reset()
         delete (globalThis as any).__cpaComposerSkills

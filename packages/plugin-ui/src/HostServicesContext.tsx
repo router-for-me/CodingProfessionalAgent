@@ -91,6 +91,7 @@ const EMPTY_SESSIONS: readonly SessionItem[] = Object.freeze([])
 const EMPTY_PROJECTS: readonly Project[] = Object.freeze([])
 const EMPTY_NAV_ITEMS: readonly NavigationContribution[] = Object.freeze([])
 const EMPTY_SKILL_USAGE_COUNTS: Record<string, number> = Object.freeze({})
+const EMPTY_AVAILABLE_SKILLS: readonly any[] = Object.freeze([])
 
 const DEFAULT_FALLBACK_SETTINGS: AppSettings = Object.freeze({
     theme: 'dark',
@@ -222,6 +223,24 @@ export function useProjects(): readonly Project[] {
         },
         () => (projectService?.getSnapshot ? projectService.getSnapshot() : EMPTY_PROJECTS),
         () => EMPTY_PROJECTS,
+    )
+}
+
+export function useAvailableSkills(): readonly any[] {
+    const service = useHostService(SkillUsageServiceToken)
+    return useSyncExternalStore(
+        useCallback((listener: () => void) =>
+            service?.subscribeAvailableSkills?.(listener) ?? (() => {}), [service]),
+        useCallback(() => {
+            const skills = service?.getAvailableSkills?.()
+            if (skills?.length) return skills
+            // Older publishers expose their catalog through the shared compatibility cache.
+            const published = (globalThis as any).__cpaComposerSkills
+            return Array.isArray(published) && published.length > 0
+                ? published
+                : EMPTY_AVAILABLE_SKILLS
+        }, [service]),
+        () => EMPTY_AVAILABLE_SKILLS,
     )
 }
 

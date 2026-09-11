@@ -4,7 +4,8 @@ export type SkillDraftPart =
     | { type: 'text'; text: string }
     | { type: 'skill'; name: string; displayName: string }
 
-const SKILL_TOKEN_RE = /(^|\s)(\$|\/skill:)([^\s]+)(?=\s|$)/g
+// Keep token parsing, query detection, and insertion boundaries consistent.
+const SKILL_TOKEN_RE = /(^|[\s\p{P}])(\$|\/skill:)([^\s]+)(?=\s|$)/gu
 
 /** Title-case kebab/snake skill names for chip labels. */
 export function formatSkillDisplayName(name: string): string {
@@ -123,7 +124,7 @@ function splitAtCaret(
 /** Active `$query` token immediately before the caret, if any. */
 export function getSkillQuery(text: string, cursor?: number): string | null {
     const { before } = splitAtCaret(text, cursor)
-    const match = /(?:^|\s)\$([^\s]*)$/.exec(before)
+    const match = /(?:^|[\s\p{P}])\$([^\s]*)$/u.exec(before)
     if (!match) return null
     return match[1] ?? ''
 }
@@ -135,7 +136,7 @@ function insertSkillToken(
 ): { text: string; cursor: number } {
     const { before, after } = splitAtCaret(text, cursor)
     const nextBefore = before.replace(
-        /(^|\s)\$[^\s]*$/,
+        /(^|[\s\p{P}])\$[^\s]*$/u,
         (_match, prefix: string) => `${prefix}${insertText}`,
     )
     return { text: nextBefore + after, cursor: nextBefore.length }

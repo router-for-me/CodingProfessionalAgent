@@ -1025,6 +1025,7 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
     }
 
     let availableComposerSkills: readonly any[] | null = null
+    const availableSkillsListeners = new Set<() => void>()
 
     const skillUsage: SkillUsageService = {
         async fetchUsageCounts(): Promise<Record<string, number>> {
@@ -1101,6 +1102,12 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
             if (typeof globalThis !== 'undefined') {
                 ;(globalThis as any).__cpaComposerSkills = availableComposerSkills
             }
+            for (const listener of availableSkillsListeners) listener()
+        },
+
+        subscribeAvailableSkills(listener: () => void): () => void {
+            availableSkillsListeners.add(listener)
+            return () => { availableSkillsListeners.delete(listener) }
         },
     }
 

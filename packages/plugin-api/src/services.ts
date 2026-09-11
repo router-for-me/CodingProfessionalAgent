@@ -468,6 +468,8 @@ export interface SkillUsageService {
     getAvailableSkills?(): readonly any[]
     /** Publish composer-discovered skills for cross-plugin consumers. */
     setAvailableSkills?(skills: readonly any[]): void
+    /** Subscribe to available skill catalog changes independently of usage counts. */
+    subscribeAvailableSkills?(listener: () => void): () => void
     /** Current usage counts snapshot for React subscriptions. */
     getSnapshot?(): Record<string, number>
     /** Subscribe to usage count changes. */

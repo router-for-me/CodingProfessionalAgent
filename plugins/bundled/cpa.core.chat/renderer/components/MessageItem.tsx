@@ -33,6 +33,7 @@ import {
     remarkGfm,
     useHostServices,
     useSkillUsageCounts,
+    useAvailableSkills,
     useTranslation,
     useChatRenderers,
 } from '@cpa/plugin-ui'
@@ -248,10 +249,7 @@ export const UserMessageRenderer = memo(function UserMessageRenderer(
         }
     }
 
-    const composerSkills =
-        services?.skillUsage?.getAvailableSkills?.() ??
-        (typeof globalThis !== 'undefined' ? (globalThis as any).__cpaComposerSkills : undefined) ??
-        []
+    const composerSkills = useAvailableSkills()
 
     const skillQuery = getSkillQuery(editText, editCursor)
     const skillSuggestions = useMemo(() => {

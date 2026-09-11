@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '@/i18n'
 import { HostServicesProvider } from '@cpa/plugin-ui'
@@ -152,7 +152,7 @@ describe('MessageItem user actions', () => {
     expect(editor).toHaveAttribute('data-value', '$gh-issue 4793')
   })
 
-  it('shows a skill menu when typing $ in the edit box', () => {
+  it.each(['', '你是做什么的？'])('shows a skill menu after "%s" in the edit box', (prefix) => {
     const skills = [
       {
         name: 'gh-issue',
@@ -186,7 +186,7 @@ describe('MessageItem user actions', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Edit/i }))
     const editor = screen.getByTestId('message-edit-input')
-    setContentEditableValue(editor, '$')
+    setContentEditableValue(editor, `${prefix}$`)
 
     const menu = screen.getByTestId('message-edit-skill-menu')
     expect(menu).toBeInTheDocument()
@@ -202,10 +202,64 @@ describe('MessageItem user actions', () => {
     expect(screen.queryByText('$gh-issue')).not.toBeInTheDocument()
 
     fireEvent.mouseDown(screen.getByRole('option', { name: /Gh Issue/i }))
-    expect(editor).toHaveAttribute('data-value', '$gh-issue ')
+    expect(editor).toHaveAttribute('data-value', `${prefix}$gh-issue `)
     expect(screen.queryByTestId('message-edit-skill-menu')).not.toBeInTheDocument()
     expect(screen.getByTestId('composer-skill-chip')).toHaveTextContent('Gh Issue')
   })
+
+    it('uses published skills when the edit service has an empty catalog', () => {
+        vi.stubGlobal('__cpaComposerSkills', [{ name: 'gh-issue' }])
+        try {
+            render(
+                <HostServicesProvider services={{ skillUsage: { getAvailableSkills: () => [] } } as any}>
+                    <MessageItem message={message} onEditMessage={() => undefined} />
+                </HostServicesProvider>,
+            )
+            fireEvent.click(screen.getByRole('button', { name: /Edit/i }))
+            const editor = screen.getByTestId('message-edit-input')
+            setContentEditableValue(editor, '')
+            setContentEditableValue(editor, '$')
+            expect(screen.getByTestId('message-edit-skill-menu')).toBeInTheDocument()
+            fireEvent.keyDown(editor, { key: 'Enter' })
+            expect(editor).toHaveAttribute('data-value', '$gh-issue ')
+        } finally {
+            vi.unstubAllGlobals()
+        }
+    })
+
+    it('refreshes an open edit query when skills arrive and clears removed skills', () => {
+        let skills: readonly { name: string }[] = []
+        const listeners = new Set<() => void>()
+        const services = {
+            skillUsage: {
+                getAvailableSkills: () => skills,
+                subscribeAvailableSkills: (listener: () => void) => {
+                    listeners.add(listener)
+                    return () => listeners.delete(listener)
+                },
+            },
+        }
+        const { unmount } = render(
+            <HostServicesProvider services={services as any}>
+                <MessageItem message={message} onEditMessage={() => undefined} />
+            </HostServicesProvider>,
+        )
+        fireEvent.click(screen.getByRole('button', { name: /Edit/i }))
+        setContentEditableValue(screen.getByTestId('message-edit-input'), '$')
+        expect(screen.queryByTestId('message-edit-skill-menu')).not.toBeInTheDocument()
+        act(() => {
+            skills = [{ name: 'gh-issue' }]
+            listeners.forEach((listener) => listener())
+        })
+        expect(screen.getByTestId('message-edit-skill-menu')).toBeInTheDocument()
+        act(() => {
+            skills = []
+            listeners.forEach((listener) => listener())
+        })
+        expect(screen.queryByTestId('message-edit-skill-menu')).not.toBeInTheDocument()
+        unmount()
+        expect(listeners.size).toBe(0)
+    })
 
   it('keeps arrow-key selection when the skill menu opens below', () => {
     const skills = [

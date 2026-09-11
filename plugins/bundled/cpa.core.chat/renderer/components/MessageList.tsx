@@ -260,14 +260,17 @@ export function MessageList({
                       if (message.kind === 'compaction') {
                         return <CompactionDivider key={message.id} />
                       }
+                      // User message edit menus must escape the row's paint bounds.
+                      const isUser = message.role === 'user'
                       const isPendingUser =
-                        message.role === 'user' && Boolean((message as any).pendingStatus)
+                        isUser && Boolean((message as any).pendingStatus)
                       return (
                         <div
                           key={message.id}
                           className={cn(
                             '[contain-intrinsic-size:120px]',
-                            isPendingUser ? 'overflow-visible py-1' : '[content-visibility:auto]',
+                            isUser ? 'overflow-visible' : '[content-visibility:auto]',
+                            isPendingUser && 'py-1',
                           )}
                         >
                           <MessageItem
@@ -385,8 +388,9 @@ function renderCompactTurns(
         <div
           key={turn.message.id}
           className={cn(
-            '[contain-intrinsic-size:100px]',
-            isPendingUser ? 'overflow-visible py-1' : '[content-visibility:auto]',
+            // Paint containment would clip the inline skill menu outside this row.
+            '[contain-intrinsic-size:100px] overflow-visible',
+            isPendingUser && 'py-1',
           )}
         >
           <MessageItem

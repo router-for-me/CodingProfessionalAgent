@@ -91,6 +91,29 @@ describe('getSkillQuery', () => {
     })
 })
 
+describe('punctuation-adjacent skill tokens', () => {
+    it.each(['你是做什么的？', '请使用：', '你好，', 'Use (', 'Use!'])(
+        'supports querying, inserting, and folding after %s',
+        (prefix) => {
+            expect(getSkillQuery(`${prefix}$`)).toBe('')
+            expect(getSkillQuery(`${prefix}$de`)).toBe('de')
+            const inserted = insertSkillAtCaret(`${prefix}$de suffix`, 'demo', prefix.length + 3)
+            expect(inserted).toEqual({
+                text: `${prefix}$demo  suffix`,
+                cursor: prefix.length + 6,
+            })
+            expect(replaceSkillToken(`${prefix}$de`, '$demo ')).toBe(`${prefix}$demo `)
+            const parts = parseSkillDraft(inserted.text, skills)
+            expect(parts).toEqual([
+                { type: 'text', text: prefix },
+                { type: 'skill', name: 'demo', displayName: 'Demo' },
+                { type: 'text', text: '  suffix' },
+            ])
+            expect(serializeSkillDraft(parts)).toBe(inserted.text)
+        },
+    )
+})
+
 describe('insertSkillAtCaret / replaceSkillToken', () => {
     it('replaces the trailing $ token including mid-text mentions', () => {
         expect(replaceSkillToken('$', '$alpha ')).toBe('$alpha ')

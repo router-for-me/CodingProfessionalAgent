@@ -1,8 +1,60 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '@/i18n'
+import { HostServicesProvider } from '@cpa/plugin-ui'
 import type { DisplayMessage } from '../types.js'
 import { MessageList } from './MessageList.js'
+
+describe('MessageList inline skill menu containment', () => {
+    beforeEach(async () => {
+        await i18n.changeLanguage('en')
+    })
+
+    it.each([false, true])('does not paint-contain user edit menus (compact=%s)', (compactActivity) => {
+        const services = {
+            skillUsage: {
+                getAvailableSkills: () => skills,
+            },
+        }
+        const skills = [{ name: 'gh-issue' }]
+        const messages: DisplayMessage[] = [
+            {
+                kind: 'message', id: 'u1', sessionId: 's1', role: 'user',
+                content: 'hello', parts: [{ type: 'text', text: 'hello' }], createdAt: 1000,
+            },
+            {
+                kind: 'message', id: 'a1', sessionId: 's1', role: 'assistant',
+                content: 'reply', parts: [{ type: 'text', text: 'reply' }], createdAt: 2000,
+            },
+        ]
+        const { container } = render(
+            <HostServicesProvider services={services as any}>
+                <MessageList
+                    compactActivity={compactActivity}
+                    messages={messages}
+                    onEditMessage={() => undefined}
+                />
+            </HostServicesProvider>,
+        )
+        fireEvent.click(screen.getByRole('button', { name: /Edit/i }))
+        const editor = screen.getByTestId('message-edit-input')
+        editor.focus()
+        editor.textContent = '$'
+        const range = document.createRange()
+        range.selectNodeContents(editor)
+        range.collapse(false)
+        window.getSelection()?.removeAllRanges()
+        window.getSelection()?.addRange(range)
+        fireEvent.input(editor)
+        const menu = screen.getByTestId('message-edit-skill-menu')
+        // jsdom cannot paint; guard every ancestor against reintroducing paint containment.
+        for (let parent = menu.parentElement; parent; parent = parent.parentElement) {
+            expect(parent).not.toHaveClass('[content-visibility:auto]')
+        }
+        // Assistant rows retain the rendering optimization.
+        expect(container.querySelector('[class*="content-visibility:auto"]')).not.toBeNull()
+    })
+})
 
 describe('MessageList compact thinking placeholder', () => {
   beforeEach(async () => {
