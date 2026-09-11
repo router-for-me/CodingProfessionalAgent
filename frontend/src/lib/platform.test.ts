@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
-import { isBrowserEnvironment, isMobileBrowser, useIsMobileBrowser } from './platform'
+import { isBrowserEnvironment, isMobileBrowser, isWindowsPlatform, useIsMobileBrowser } from './platform'
 
 describe('platform', () => {
   const originalUserAgent = navigator.userAgent
@@ -19,6 +19,36 @@ describe('platform', () => {
     Object.defineProperty(window, 'innerWidth', {
       value: originalInnerWidth,
       configurable: true,
+    })
+  })
+
+  describe('isWindowsPlatform', () => {
+    it('returns true when userAgent contains Windows', () => {
+      Object.defineProperty(navigator, 'userAgent', {
+        value: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        configurable: true,
+      })
+      expect(isWindowsPlatform()).toBe(true)
+    })
+
+    it('returns true when userAgent contains Windows Electron', () => {
+      Object.defineProperty(navigator, 'userAgent', {
+        value: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Electron/34.2.0 Safari/537.36',
+        configurable: true,
+      })
+      expect(isWindowsPlatform()).toBe(true)
+    })
+
+    it('returns false for macOS userAgent without Windows indicators', () => {
+      Object.defineProperty(navigator, 'userAgent', {
+        value: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+        configurable: true,
+      })
+      Object.defineProperty(navigator, 'platform', {
+        value: 'MacIntel',
+        configurable: true,
+      })
+      expect(isWindowsPlatform()).toBe(false)
     })
   })
 

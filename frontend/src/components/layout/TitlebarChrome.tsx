@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { cn } from '@/lib/cn'
-import { isBrowserEnvironment } from '@/lib/platform'
+import { isBrowserEnvironment, isWindowsPlatform } from '@/lib/platform'
 
 interface TitlebarChromeProps {
   children: ReactNode
@@ -10,15 +10,15 @@ interface TitlebarChromeProps {
 /**
  * Window title-bar strip that clears macOS traffic lights in Electron desktop window
  * and vertically centers toolbar controls with them.
- * In browser mode, native traffic lights do not exist, so controls align cleanly to the left.
+ * In browser mode or on Windows, native traffic lights do not exist, so controls align cleanly to the left.
  *
- * Layout (Electron): [ traffic-light spacer | controls | drag fill ]
- * Layout (Browser):  [ controls | drag fill ]
+ * Layout (Electron macOS): [ traffic-light spacer | controls | drag fill ]
+ * Layout (Browser / Windows):  [ controls | drag fill ]
  */
 export function TitlebarChrome({ children, className }: TitlebarChromeProps) {
-  const isBrowser = isBrowserEnvironment()
+  const isWebLayout = isBrowserEnvironment() || isWindowsPlatform()
 
-  if (isBrowser) {
+  if (isWebLayout) {
     return (
       <div
         data-drag-region

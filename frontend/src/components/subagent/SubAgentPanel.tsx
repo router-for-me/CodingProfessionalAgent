@@ -11,7 +11,7 @@ import {
     usePanels,
 } from '@/plugins/platform/contributions/panels'
 import { cn } from '@/lib/cn'
-import { isBrowserEnvironment, useIsMobileBrowser } from '@/lib/platform'
+import { isBrowserEnvironment, isWindowsPlatform, useIsMobileBrowser } from '@/lib/platform'
 import { PanelResizeHandle } from '@/components/layout/PanelResizeHandle'
 import { SidebarToggle } from '@/components/layout/SidebarToggle'
 import {
@@ -239,7 +239,7 @@ export function SubAgentPanel({
     const panelWidth =
         storedWidth ?? dynamicPreferredWidth ?? DEFAULT_RIGHT_SIDEBAR_WIDTH
 
-    const isBrowser = isBrowserEnvironment()
+    const isWebLayout = isBrowserEnvironment() || isWindowsPlatform()
     const isMobile = useIsMobileBrowser()
 
     useEffect(() => {
@@ -311,7 +311,7 @@ export function SubAgentPanel({
                             : cn(
                                 'pr-24',
                                 maximized && sidebarCollapsed
-                                    ? isBrowser
+                                    ? isWebLayout
                                         ? 'pl-2.5'
                                         : 'pl-0'
                                     : 'pl-2',
@@ -325,7 +325,7 @@ export function SubAgentPanel({
                         </div>
                     ) : maximized && sidebarCollapsed ? (
                         <>
-                            {!isBrowser ? (
+                            {!isWebLayout ? (
                                 <div
                                     aria-hidden
                                     className="h-full shrink-0"

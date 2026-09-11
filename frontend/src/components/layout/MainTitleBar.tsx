@@ -1,7 +1,7 @@
 import { FileText } from 'lucide-react'
 import { ExtensionSlot } from '@/plugins/registry/ExtensionSlot'
 import { cn } from '@/lib/cn'
-import { isBrowserEnvironment } from '@/lib/platform'
+import { isBrowserEnvironment, isWindowsPlatform } from '@/lib/platform'
 import { SidebarToggle } from './SidebarToggle'
 import {
     PinnedSummaryToggle,
@@ -33,7 +33,7 @@ export function MainTitleBar({
         reserveWindowToolbar,
         sessionTitle,
     }
-    const isBrowser = isBrowserEnvironment()
+    const isWebLayout = isBrowserEnvironment() || isWindowsPlatform()
 
     return (
         <div
@@ -47,7 +47,7 @@ export function MainTitleBar({
                 fallback={
                     leftSidebarCollapsed ? (
                         <>
-                            {!isBrowser ? (
+                            {!isWebLayout ? (
                                 <div
                                     aria-hidden
                                     className="h-full shrink-0"
@@ -55,7 +55,7 @@ export function MainTitleBar({
                                     data-drag-region
                                 />
                             ) : null}
-                            <div className={cn('flex -translate-y-px items-center pr-1', isBrowser && 'pl-2.5')}>
+                            <div className={cn('flex -translate-y-px items-center pr-1', isWebLayout && 'pl-2.5')}>
                                 <SidebarToggle />
                             </div>
                         </>

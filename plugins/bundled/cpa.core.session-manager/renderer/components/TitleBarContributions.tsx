@@ -1,6 +1,6 @@
 import { cn, useHostService, useTranslation, FileText, PanelLeft } from '@cpa/plugin-ui'
 import { UiServiceToken } from '@cpa/plugin-api'
-import { isBrowserEnvironment } from '../utils/platform.js'
+import { isBrowserEnvironment, isWindowsPlatform } from '../utils/platform.js'
 
 export interface TitleBarSlotProps {
     leftSidebarCollapsed?: boolean
@@ -17,7 +17,7 @@ export function TitleBarLeftContribution({ leftSidebarCollapsed }: TitleBarSlotP
         return null
     }
 
-    const isBrowser = isBrowserEnvironment()
+    const isWebLayout = isBrowserEnvironment() || isWindowsPlatform()
 
     const handleToggle = () => {
         uiService?.toggleSidebar?.()
@@ -25,7 +25,7 @@ export function TitleBarLeftContribution({ leftSidebarCollapsed }: TitleBarSlotP
 
     return (
         <div className="flex items-center">
-            {!isBrowser ? (
+            {!isWebLayout ? (
                 <div
                     aria-hidden
                     className="h-full shrink-0"
@@ -33,7 +33,7 @@ export function TitleBarLeftContribution({ leftSidebarCollapsed }: TitleBarSlotP
                     data-drag-region
                 />
             ) : null}
-            <div className={cn('flex -translate-y-px items-center pr-1', isBrowser && 'pl-2.5')}>
+            <div className={cn('flex -translate-y-px items-center pr-1', isWebLayout && 'pl-2.5')}>
                 <button
                     type="button"
                     aria-label={t('nav.expandSidebar')}

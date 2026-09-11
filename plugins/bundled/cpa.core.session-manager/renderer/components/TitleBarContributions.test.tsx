@@ -54,4 +54,21 @@ describe('TitleBarLeftContribution', () => {
     const trafficSpacer = container.querySelector('div[style*="--traffic-lights-pad"]')
     expect(trafficSpacer).toBeInTheDocument()
   })
+
+  it('renders sidebar toggle without traffic light spacer in Windows Electron mode', () => {
+    Object.defineProperty(navigator, 'userAgent', {
+      value: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Electron/34.2.0 Safari/537.36',
+      configurable: true,
+    })
+
+    const { container } = render(
+      <TitleBarLeftContribution leftSidebarCollapsed={true} />,
+    )
+
+    expect(screen.getByRole('button', { name: /sidebar/i })).toBeInTheDocument()
+    const trafficSpacer = container.querySelector('div[style*="--traffic-lights-pad"]')
+    expect(trafficSpacer).toBeNull()
+    const toggleWrapper = screen.getByRole('button', { name: /sidebar/i }).parentElement
+    expect(toggleWrapper?.className).toContain('pl-2.5')
+  })
 })

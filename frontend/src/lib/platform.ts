@@ -5,6 +5,16 @@
 import { useEffect, useState } from 'react'
 
 /**
+ * Checks whether the frontend is running on a Windows platform.
+ */
+export function isWindowsPlatform(): boolean {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return false
+  const ua = (navigator.userAgent || '').toLowerCase()
+  const platform = ((navigator as { platform?: string }).platform || '').toLowerCase()
+  return ua.includes('win') || platform.includes('win')
+}
+
+/**
  * Checks whether the frontend is running inside a web browser rather than Electron desktop window.
  */
 export function isBrowserEnvironment(): boolean {

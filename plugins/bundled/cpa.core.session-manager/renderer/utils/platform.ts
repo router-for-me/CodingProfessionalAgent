@@ -1,5 +1,12 @@
 import { useEffect, useState } from 'react'
 
+export function isWindowsPlatform(): boolean {
+    if (typeof window === 'undefined' || typeof navigator === 'undefined') return false
+    const ua = (navigator.userAgent || '').toLowerCase()
+    const platform = ((navigator as { platform?: string }).platform || '').toLowerCase()
+    return ua.includes('win') || platform.includes('win')
+}
+
 export function isBrowserEnvironment(): boolean {
     if (typeof window === 'undefined') return false
     return !navigator.userAgent.includes('Electron')
