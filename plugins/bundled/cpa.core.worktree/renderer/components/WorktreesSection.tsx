@@ -19,9 +19,10 @@ import {
     type GitCommandRunner,
     type WorktreeFsBridge,
 } from '../utils/worktrees.js'
+import { getAppConfigDirName } from '@cpa/plugin-api'
 
 export const DEFAULT_WORKTREE_SETTINGS = {
-    rootDir: '~/.coding-professional-agent/worktrees',
+    rootDir: `~/${getAppConfigDirName()}/worktrees`,
     fetchUpstream: false,
     autoDeleteOld: true,
     deleteLimit: 15,

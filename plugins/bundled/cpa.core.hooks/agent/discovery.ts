@@ -4,6 +4,7 @@
  */
 
 import type { NativeBridge } from './types.js'
+import { getAppConfigDirName } from '@cpa/plugin-api'
 import { computeHookHash } from './hash.js'
 import type {
     HookEventName,
@@ -36,11 +37,12 @@ function normalizePath(p: string): string {
 
 export async function getUserHooksPath(bridge?: NativeBridge): Promise<string> {
     if (!bridge || typeof bridge.runtimeInfo !== 'function') {
-        return normalizePath(`/.coding-professional-agent/${USER_HOOKS_FILENAME}`)
+        return normalizePath(`/${getAppConfigDirName()}/${USER_HOOKS_FILENAME}`)
     }
     const runtime = await bridge.runtimeInfo().catch(() => ({ platform: 'darwin', homeDir: '' }))
     const base = (runtime as any)?.homeDir || ''
-    return normalizePath(`${base}/.coding-professional-agent/${USER_HOOKS_FILENAME}`)
+    const configDirName = (runtime as any)?.appConfigDirName || getAppConfigDirName((runtime as any)?.isDebug)
+    return normalizePath(`${base}/${configDirName}/${USER_HOOKS_FILENAME}`)
 }
 
 export function getProjectHooksPath(projectPath: string): string {

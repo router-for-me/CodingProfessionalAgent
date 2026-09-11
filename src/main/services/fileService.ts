@@ -23,12 +23,16 @@ export class FileService {
       userConfigDir = process.env.XDG_CONFIG_HOME || path.join(homeDir, '.config')
     }
 
+    const isDev = this.isDebug
+    const configDirName = isDev ? '.coding-professional-agent-dev' : '.coding-professional-agent'
+
     return {
       platform: process.platform,
       userConfigDir,
       tempDir: os.tmpdir(),
       homeDir,
-      isDebug: this.isDebug,
+      isDebug: isDev,
+      appConfigDirName: configDirName,
     }
   }
 

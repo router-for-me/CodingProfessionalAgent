@@ -19,6 +19,7 @@ import {
 import { bootstrapPluginGraph } from './plugins/catalog/bootstrapPluginGraph.js'
 import { MainPluginRuntimeHost } from './plugins/runtime/MainPluginRuntimeHost.js'
 import { MainPluginActivationCoordinator } from './plugins/runtime/MainPluginActivationCoordinator.js'
+import { rotateNativeImage45 } from './utils/imageRotate.js'
 
 // Register privileged schemes before app ready
 registerPluginSchemesAsPrivileged()
@@ -48,8 +49,34 @@ let pluginRuntimeHost: MainPluginRuntimeHost | null = null
 let isQuitting = false
 
 const isDev = !app.isPackaged || process.env.NODE_ENV === 'development'
+if (isDev) {
+  process.env.CPA_DEV = '1'
+  process.env.CPA_CONFIG_DIR_NAME = '.coding-professional-agent-dev'
+} else {
+  process.env.CPA_CONFIG_DIR_NAME = '.coding-professional-agent'
+}
 
-function getAppIcon(): Electron.NativeImage | undefined {
+function getAppIcon(isDevMode: boolean = isDev): Electron.NativeImage | undefined {
+  if (isDevMode) {
+    const devCandidates = [
+      path.resolve(__dirname, '../../../build/appicon-dev.png'),
+      path.resolve(__dirname, '../../build/appicon-dev.png'),
+      path.resolve(process.cwd(), 'build/appicon-dev.png'),
+      path.resolve(app.getAppPath?.() || '', 'build/appicon-dev.png'),
+      path.resolve(process.resourcesPath || '', 'build/appicon-dev.png'),
+    ]
+    for (const devPath of devCandidates) {
+      try {
+        if (fs.existsSync(devPath)) {
+          const img = nativeImage.createFromPath(devPath)
+          if (!img.isEmpty()) {
+            return img
+          }
+        }
+      } catch {}
+    }
+  }
+
   const candidates = [
     path.resolve(__dirname, '../../../build/appicon.png'),
     path.resolve(__dirname, '../../build/appicon.png'),
@@ -66,10 +93,14 @@ function getAppIcon(): Electron.NativeImage | undefined {
     path.resolve(app.getAppPath?.() || '', 'frontend/public/appicon.png'),
   ]
   for (const iconPath of candidates) {
-    const img = nativeImage.createFromPath(iconPath)
-    if (!img.isEmpty()) {
-      return img
-    }
+    try {
+      if (fs.existsSync(iconPath)) {
+        const img = nativeImage.createFromPath(iconPath)
+        if (!img.isEmpty()) {
+          return isDevMode ? rotateNativeImage45(img) : img
+        }
+      }
+    } catch {}
   }
   return undefined
 }

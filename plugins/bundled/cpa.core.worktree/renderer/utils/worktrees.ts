@@ -1,4 +1,5 @@
 import type { FileSystemService, ProcessService } from '@cpa/plugin-api'
+import { getAppConfigDirName } from '@cpa/plugin-api'
 
 export interface DiscoveredWorktree {
     name: string
@@ -40,11 +41,17 @@ export async function resolveWorktreeRootDir(
     const trimmed = configuredRootDir?.trim()
     let homeDir = runtimeHomeDir
 
+    let configDirName = getAppConfigDirName()
     if (!homeDir && fileSystemService?.getRuntimeInfo) {
         try {
             const info = await fileSystemService.getRuntimeInfo()
             if (info?.homeDir) {
                 homeDir = info.homeDir
+            }
+            if ((info as any)?.appConfigDirName) {
+                configDirName = (info as any).appConfigDirName
+            } else if (typeof (info as any)?.isDebug === 'boolean') {
+                configDirName = getAppConfigDirName((info as any).isDebug)
             }
         } catch {
             // Fallback
@@ -59,9 +66,9 @@ export async function resolveWorktreeRootDir(
     }
 
     if (homeDir) {
-        return `${homeDir}/.coding-professional-agent/worktrees`
+        return `${homeDir}/${configDirName}/worktrees`
     }
-    return '~/.coding-professional-agent/worktrees'
+    return `~/${configDirName}/worktrees`
 }
 
 function normalizePath(p: string): string {

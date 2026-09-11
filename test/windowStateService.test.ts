@@ -281,6 +281,12 @@ describe('WindowStateService', () => {
       expect((service as unknown as { storePath: string }).storePath).toBe(expectedPath)
     })
 
+    it('uses ~/.coding-professional-agent-dev/ui.json when isDev is true', () => {
+      const service = new WindowStateService({ getHomeDir: () => '/mock-home', isDev: true })
+      const expectedPath = path.join('/mock-home', '.coding-professional-agent-dev', 'ui.json')
+      expect((service as unknown as { storePath: string }).storePath).toBe(expectedPath)
+    })
+
     it('preserves non-window UI properties in ui.json when saving window state', async () => {
       await fs.writeFile(
         storeFile,

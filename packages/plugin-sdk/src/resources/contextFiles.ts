@@ -5,6 +5,7 @@
 
 import type { NativeBridge, NativeDirEntry } from '../agentAdapter.js'
 import { dirnamePath, isAbsolutePath, normalizeDirectoryCacheKey, resolveToCwd } from '../path.js'
+import { getAppConfigDirName } from '@cpa/plugin-api'
 
 export const CONTEXT_FILE_CANDIDATES = [
     'AGENTS.override.md',
@@ -63,8 +64,9 @@ export async function loadContextFiles(
     }
 
     const resolvedHomeDir = await resolveHomeDir(bridge, homeDir, diagnostics)
+    const configDirName = await resolveConfigDirName(bridge)
     const homeAgentDir = resolvedHomeDir
-        ? joinPath(resolvedHomeDir, ...HOME_AGENT_DIR_SEGMENTS)
+        ? joinPath(resolvedHomeDir, configDirName)
         : undefined
 
     const globalDirs: string[] = [agentDir]
@@ -330,6 +332,21 @@ function normalizeDirKey(dirPath: string): string {
     } catch {
         return dirPath.replace(/\\/g, '/').replace(/\/+$/, '') || '/'
     }
+}
+
+async function resolveConfigDirName(bridge: NativeBridge): Promise<string> {
+    if (bridge.runtimeInfo) {
+        try {
+            const info = await bridge.runtimeInfo()
+            if (info?.appConfigDirName) return info.appConfigDirName
+            if (typeof info?.isDebug === 'boolean') {
+                return getAppConfigDirName(info.isDebug)
+            }
+        } catch {
+            // fallback
+        }
+    }
+    return getAppConfigDirName()
 }
 
 async function resolveHomeDir(

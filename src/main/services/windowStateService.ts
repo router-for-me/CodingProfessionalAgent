@@ -3,6 +3,7 @@ import * as fsSync from 'node:fs'
 import * as path from 'node:path'
 import * as os from 'node:os'
 import type { BrowserWindow } from 'electron'
+import { getAppConfigDirName } from '../utils/version.js'
 
 export interface WindowBounds {
   width: number
@@ -33,6 +34,7 @@ export interface WindowStateServiceOptions {
   customPath?: string
   debounceMs?: number
   getHomeDir?: () => string
+  isDev?: boolean
 }
 
 /**
@@ -86,7 +88,8 @@ export class WindowStateService {
       this.isCustomPath = true
     } else {
       const homeDir = this.getHomeDir()
-      const appDir = path.join(homeDir, '.coding-professional-agent')
+      const configDirName = getAppConfigDirName(options.isDev)
+      const appDir = path.join(homeDir, configDirName)
       this.storePath = path.join(appDir, 'ui.json')
       this.isCustomPath = false
     }

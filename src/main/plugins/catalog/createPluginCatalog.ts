@@ -1,6 +1,7 @@
 import * as path from 'node:path'
 import type { ResolvedPluginPackage } from '@cpa/plugin-api'
 import type { CreatePluginCatalogOptions } from '../config/pluginSourceConfig.js'
+import { getAppConfigDirName } from '../../utils/version.js'
 import { BundledPluginSource } from '../sources/BundledPluginSource.js'
 import { DirectoryPluginSource } from '../sources/DirectoryPluginSource.js'
 import { ConfiguredPluginSource } from '../sources/ConfiguredPluginSource.js'
@@ -39,13 +40,15 @@ export async function createPluginCatalog(
         npmPackages,
     } = options
 
+    const configDirName = options.configDirName || getAppConfigDirName(options.isDev)
+
     const installer =
         npmInstaller ??
         (homeDir && homeDir.trim().length > 0
             ? new ManagedNpmInstaller({
                   pluginsDir: path.join(
                       path.resolve(homeDir),
-                      '.coding-professional-agent',
+                      configDirName,
                       'plugins',
                   ),
               })
@@ -82,7 +85,7 @@ export async function createPluginCatalog(
     if (globalConfig?.sources && globalConfig.sources.length > 0) {
         const baseDir =
             globalConfigDir ??
-            path.join(path.resolve(homeDir), '.coding-professional-agent')
+            path.join(path.resolve(homeDir), configDirName)
         const source = new ConfiguredPluginSource({
             entries: globalConfig.sources,
             baseDir,
@@ -92,12 +95,12 @@ export async function createPluginCatalog(
         globalConfigPackages = await source.discover()
     }
 
-    // Tier 4: Global Directory (~/.coding-professional-agent/plugins)
+    // Tier 4: Global Directory
     let globalDirPackages: ResolvedPluginPackage[] = []
     if (homeDir && homeDir.trim().length > 0) {
         const globalPluginsDir = path.join(
             path.resolve(homeDir),
-            '.coding-professional-agent',
+            configDirName,
             'plugins',
         )
         const source = new DirectoryPluginSource({

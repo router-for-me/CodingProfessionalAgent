@@ -251,12 +251,49 @@ export interface NativeEvent {
   error?: string
 }
 
+export const DEFAULT_APP_CONFIG_DIR_NAME = '.coding-professional-agent'
+export const DEV_APP_CONFIG_DIR_NAME = '.coding-professional-agent-dev'
+
+export function getAppConfigDirName(isDev?: boolean): string {
+  if (typeof isDev === 'boolean') {
+    return isDev ? DEV_APP_CONFIG_DIR_NAME : DEFAULT_APP_CONFIG_DIR_NAME
+  }
+  if (typeof process !== 'undefined' && process.env) {
+    if (process.env.CPA_CONFIG_DIR_NAME) {
+      return process.env.CPA_CONFIG_DIR_NAME
+    }
+    if (process.env.CPA_DEV === '1' || process.env.CPA_DEV === 'true') {
+      return DEV_APP_CONFIG_DIR_NAME
+    }
+    if (process.env.CPA_DEV === '0' || process.env.CPA_DEV === 'false') {
+      return DEFAULT_APP_CONFIG_DIR_NAME
+    }
+    if (process.env.NODE_ENV === 'development') {
+      return DEV_APP_CONFIG_DIR_NAME
+    }
+    if (process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST)) {
+      return DEFAULT_APP_CONFIG_DIR_NAME
+    }
+  }
+  if (typeof import.meta !== 'undefined') {
+    const env = (import.meta as any)?.env
+    if (env?.MODE === 'test' || env?.VITEST) {
+      return DEFAULT_APP_CONFIG_DIR_NAME
+    }
+    if (env?.DEV) {
+      return DEV_APP_CONFIG_DIR_NAME
+    }
+  }
+  return DEFAULT_APP_CONFIG_DIR_NAME
+}
+
 export interface RuntimeInfo {
   platform: string
   userConfigDir: string
   tempDir: string
   homeDir: string
   isDebug?: boolean
+  appConfigDirName?: string
 }
 
 export interface ProjectDirectorySelection {

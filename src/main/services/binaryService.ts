@@ -2,11 +2,14 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { app } from 'electron'
+import { getAppConfigDirName } from '../utils/version.js'
 
 export interface BinaryServiceOptions {
   customHomeDir?: string
   customResourcesPath?: string
   isPackaged?: boolean
+  isDev?: boolean
+  customTargetDir?: string
   appPath?: string
 }
 
@@ -18,7 +21,8 @@ export class BinaryService {
 
   constructor(options?: BinaryServiceOptions) {
     const homeDir = options?.customHomeDir ?? os.homedir()
-    this.targetDir = path.join(homeDir, '.coding-professional-agent', 'bin')
+    const configDirName = getAppConfigDirName(options?.isDev)
+    this.targetDir = options?.customTargetDir ?? path.join(homeDir, configDirName, 'bin')
     this.isPackaged = options?.isPackaged ?? (typeof app !== 'undefined' ? app.isPackaged : false)
     this.resourcesPath = options?.customResourcesPath ?? (typeof process !== 'undefined' && process.resourcesPath ? process.resourcesPath : '')
     this.appPath = options?.appPath ?? (typeof app !== 'undefined' && app.getAppPath ? app.getAppPath() : process.cwd())

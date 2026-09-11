@@ -7,6 +7,7 @@ import type {
   UserProfileSettings,
   WorktreeSettings,
 } from '@cpa/plugin-api'
+import { getAppConfigDirName } from '@cpa/plugin-api'
 
 export type {
   ActionPlatform,
@@ -138,7 +139,7 @@ export const DEFAULT_GIT_SETTINGS: GitSettings = {
 }
 
 export const DEFAULT_WORKTREE_SETTINGS: WorktreeSettings = {
-  rootDir: '~/.coding-professional-agent/worktrees',
+  rootDir: `~/${getAppConfigDirName()}/worktrees`,
   fetchUpstream: false,
   autoDeleteOld: true,
   deleteLimit: 15,

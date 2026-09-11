@@ -7,6 +7,7 @@ import ignore from 'ignore'
 import type { NativeBridge, NativeDirEntry } from '../agentAdapter.js'
 import { dirnamePath, isAbsolutePath, normalizeDirectoryCacheKey, resolveToCwd } from '../path.js'
 import { FrontmatterError, parseFrontmatter } from '../frontmatter.js'
+import { getAppConfigDirName } from '@cpa/plugin-api'
 
 const MAX_NAME_LENGTH = 64
 const MAX_DESCRIPTION_LENGTH = 1024
@@ -92,7 +93,8 @@ export async function loadSkills(options: LoadSkillsOptions): Promise<LoadSkills
         if (homeCheck) {
             diagnostics.push({ type: 'warning', message: homeCheck, path: homeDir })
         } else {
-            await scanRoot(joinPath(homeDir, ...HOME_SKILL_DIR_SEGMENTS))
+            const configDirName = await resolveConfigDirName(options.bridge)
+            await scanRoot(joinPath(homeDir, configDirName, 'skills'))
         }
     }
 
@@ -107,6 +109,21 @@ export async function loadSkills(options: LoadSkillsOptions): Promise<LoadSkills
 
     const skills = Array.from(skillMap.values()).sort((a, b) => compareCodePoints(a.name, b.name))
     return { skills, diagnostics }
+}
+
+async function resolveConfigDirName(bridge: NativeBridge): Promise<string> {
+    if (bridge.runtimeInfo) {
+        try {
+            const info = await bridge.runtimeInfo()
+            if (info?.appConfigDirName) return info.appConfigDirName
+            if (typeof info?.isDebug === 'boolean') {
+                return getAppConfigDirName(info.isDebug)
+            }
+        } catch {
+            // fallback
+        }
+    }
+    return getAppConfigDirName()
 }
 
 async function resolveHomeDir(options: LoadSkillsOptions): Promise<string | undefined> {

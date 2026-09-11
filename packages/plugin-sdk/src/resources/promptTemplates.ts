@@ -6,6 +6,7 @@
 import type { NativeBridge, NativeDirEntry } from '../agentAdapter.js'
 import { isAbsolutePath, normalizeDirectoryCacheKey, resolveToCwd } from '../path.js'
 import { FrontmatterError, parseFrontmatter } from '../frontmatter.js'
+import { getAppConfigDirName } from '@cpa/plugin-api'
 
 const PROJECT_CONFIG_DIR = '.cpa'
 const DESCRIPTION_TRUNCATE = 60
@@ -237,7 +238,8 @@ export async function loadPromptTemplates(
 
     const resolvedHomeDir = await resolveHomeDir(options.bridge, options.homeDir, diagnostics)
     if (resolvedHomeDir) {
-        const homePromptsDir = joinPath(resolvedHomeDir, ...HOME_PROMPT_DIR_SEGMENTS)
+        const configDirName = await resolveConfigDirName(options.bridge)
+        const homePromptsDir = joinPath(resolvedHomeDir, configDirName, 'prompts')
         const agentPromptsDir = joinPath(options.agentDir, 'prompts')
         if (normalizeDirKey(homePromptsDir) !== normalizeDirKey(agentPromptsDir)) {
             await collectFromDir(
@@ -465,6 +467,21 @@ function compareCodePoints(a: string, b: string): number {
     if (a < b) return -1
     if (a > b) return 1
     return 0
+}
+
+async function resolveConfigDirName(bridge: NativeBridge): Promise<string> {
+    if (bridge.runtimeInfo) {
+        try {
+            const info = await bridge.runtimeInfo()
+            if (info?.appConfigDirName) return info.appConfigDirName
+            if (typeof info?.isDebug === 'boolean') {
+                return getAppConfigDirName(info.isDebug)
+            }
+        } catch {
+            // fallback
+        }
+    }
+    return getAppConfigDirName()
 }
 
 async function resolveHomeDir(

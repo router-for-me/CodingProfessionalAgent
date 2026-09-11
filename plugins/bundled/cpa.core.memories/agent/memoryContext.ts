@@ -12,6 +12,7 @@ import {
     type ElectronBridgeLike,
 } from './localMemoriesBackend.js'
 import { MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_SUMMARY_TOKEN_LIMIT } from './types.js'
+import { getAppConfigDirName } from '@cpa/plugin-api'
 
 export interface LoadMemoryReadPathContextOptions {
     homeDir?: string
@@ -184,15 +185,26 @@ export async function loadMemoryReadPathContext(
     if (options?.memoryRoot) {
         memoryRoot = normalizeSeparators(options.memoryRoot).replace(/\/+$/, '')
     } else if (options?.homeDir) {
+        let configDirName = getAppConfigDirName()
+        if (typeof (bridge as any)?.runtimeInfo === 'function') {
+            try {
+                const info = await (bridge as any).runtimeInfo()
+                if (info?.appConfigDirName) configDirName = info.appConfigDirName
+                else if (typeof info?.isDebug === 'boolean') configDirName = getAppConfigDirName(info.isDebug)
+            } catch {
+                // Ignore
+            }
+        }
         memoryRoot = normalizeSeparators(
-            joinPath(options.homeDir, '.coding-professional-agent', 'memories'),
+            joinPath(options.homeDir, configDirName, 'memories'),
         ).replace(/\/+$/, '')
     } else if (typeof (bridge as any).runtimeInfo === 'function') {
         try {
             const info = await (bridge as any).runtimeInfo()
             if (info?.homeDir) {
+                const configDirName = info.appConfigDirName || getAppConfigDirName(info.isDebug)
                 memoryRoot = normalizeSeparators(
-                    joinPath(info.homeDir, '.coding-professional-agent', 'memories'),
+                    joinPath(info.homeDir, configDirName, 'memories'),
                 ).replace(/\/+$/, '')
             }
         } catch {

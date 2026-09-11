@@ -13,6 +13,7 @@ import {
     SettingsServiceToken,
     UiServiceToken,
     type PersonalityTone,
+    getAppConfigDirName,
 } from '@cpa/plugin-api'
 
 export interface PersonalizationSectionProps {
@@ -119,7 +120,8 @@ export function BasePersonalizationSection(props: PersonalizationSectionProps = 
                     const homeDir = info?.homeDir
                     if (!homeDir) return
                     const sep = homeDir.includes('\\') ? '\\' : '/'
-                    const filePath = `${homeDir}${sep}.coding-professional-agent${sep}AGENTS.md`
+                    const configDirName = (info as any)?.appConfigDirName || getAppConfigDirName((info as any)?.isDebug)
+                    const filePath = `${homeDir}${sep}${configDirName}${sep}AGENTS.md`
                     const res = fileSystemService.readFileIfExists
                         ? await fileSystemService.readFileIfExists(filePath)
                         : await fileSystemService.readFile(filePath)
@@ -158,7 +160,8 @@ export function BasePersonalizationSection(props: PersonalizationSectionProps = 
                     return
                 }
                 const sep = homeDir.includes('\\') ? '\\' : '/'
-                const dirPath = `${homeDir}${sep}.coding-professional-agent`
+                const configDirName = (info as any)?.appConfigDirName || getAppConfigDirName((info as any)?.isDebug)
+                const dirPath = `${homeDir}${sep}${configDirName}`
                 const filePath = `${dirPath}${sep}AGENTS.md`
 
                 if (fileSystemService.mkdirAll) {

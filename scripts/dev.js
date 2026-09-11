@@ -7,16 +7,18 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
 
 async function run() {
-  // Sync dev icon on macOS to avoid showing the default Electron icon in dev mode
+  // Sync dev icon on macOS to avoid showing the default Electron icon in dev mode (use rotated 45deg dev icon)
   if (process.platform === 'darwin') {
     const electronIcnsPath = path.resolve(
       rootDir,
       'node_modules/electron/dist/Electron.app/Contents/Resources/electron.icns',
     )
+    const sourceIcnsDevPath = path.resolve(rootDir, 'build/darwin/icons-dev.icns')
     const sourceIcnsPath = path.resolve(rootDir, 'build/darwin/icons.icns')
-    if (fs.existsSync(electronIcnsPath) && fs.existsSync(sourceIcnsPath)) {
+    const targetSource = fs.existsSync(sourceIcnsDevPath) ? sourceIcnsDevPath : sourceIcnsPath
+    if (fs.existsSync(electronIcnsPath) && fs.existsSync(targetSource)) {
       try {
-        fs.copyFileSync(sourceIcnsPath, electronIcnsPath)
+        fs.copyFileSync(targetSource, electronIcnsPath)
       } catch {
         // Non-critical if electron binary directory is read-only
       }

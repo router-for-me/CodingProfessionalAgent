@@ -204,7 +204,7 @@ export function createPlatformServiceDescriptors(
         {
             id: 'trayService',
             dependencies: [],
-            create: () => new TrayService(getMainWindow),
+            create: () => new TrayService(getMainWindow, isDebug),
             dispose: (service: TrayService) => {
                 service.dispose()
             },

@@ -1,6 +1,8 @@
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { app, type BrowserWindow, Menu, nativeImage, Tray } from 'electron'
+import { isDevEnvironment } from '../utils/version.js'
+import { rotateNativeImage45 } from '../utils/imageRotate.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -28,10 +30,48 @@ export const TRAY_TEMPLATE_2X_DATA_URL =
 /**
  * Creates the menu bar tray icon (template-image friendly on macOS).
  */
-export function createTrayIcon(): Electron.NativeImage {
+export function createTrayIcon(isDev: boolean = isDevEnvironment()): Electron.NativeImage {
   const appPath = app.getAppPath?.() || ''
   const resourcesPath = process.resourcesPath || ''
   const cwd = process.cwd()
+
+  if (isDev) {
+    const devCandidatePaths = [
+      path.resolve(appPath, 'build/trayTemplate-dev.png'),
+      path.resolve(appPath, 'frontend/dist/trayTemplate-dev.png'),
+      path.resolve(resourcesPath, 'build/trayTemplate-dev.png'),
+      path.resolve(resourcesPath, 'frontend/dist/trayTemplate-dev.png'),
+      path.resolve(__dirname, '../../../../build/trayTemplate-dev.png'),
+      path.resolve(__dirname, '../../../build/trayTemplate-dev.png'),
+      path.resolve(__dirname, '../../build/trayTemplate-dev.png'),
+      path.resolve(cwd, 'build/trayTemplate-dev.png'),
+      path.resolve(cwd, 'frontend/dist/trayTemplate-dev.png'),
+      path.resolve(appPath, 'build/trayTemplate-dev@2x.png'),
+      path.resolve(appPath, 'frontend/dist/trayTemplate-dev@2x.png'),
+      path.resolve(resourcesPath, 'build/trayTemplate-dev@2x.png'),
+      path.resolve(resourcesPath, 'frontend/dist/trayTemplate-dev@2x.png'),
+      path.resolve(__dirname, '../../../../build/trayTemplate-dev@2x.png'),
+      path.resolve(__dirname, '../../../build/trayTemplate-dev@2x.png'),
+      path.resolve(__dirname, '../../build/trayTemplate-dev@2x.png'),
+      path.resolve(cwd, 'build/trayTemplate-dev@2x.png'),
+      path.resolve(cwd, 'frontend/dist/trayTemplate-dev@2x.png'),
+    ]
+
+    for (const devPath of devCandidatePaths) {
+      try {
+        const img = nativeImage.createFromPath(devPath)
+        if (img && !img.isEmpty?.()) {
+          const size = img.getSize ? img.getSize() : { width: ICON_SIZE, height: ICON_SIZE }
+          const shouldResize = Math.abs(size.width - ICON_SIZE) > 4 || Math.abs(size.height - ICON_SIZE) > 4
+          const result = shouldResize && img.resize ? img.resize({ width: ICON_SIZE, height: ICON_SIZE }) : img
+          if (process.platform === 'darwin' && result.setTemplateImage) {
+            result.setTemplateImage(true)
+          }
+          return result
+        }
+      } catch {}
+    }
+  }
 
   // Base icon name (trayTemplate.png) automatically associates trayTemplate@2x.png on macOS
   const candidatePaths = [
@@ -67,7 +107,8 @@ export function createTrayIcon(): Electron.NativeImage {
     if (img && !img.isEmpty?.()) {
       const size = img.getSize ? img.getSize() : { width: ICON_SIZE, height: ICON_SIZE }
       const shouldResize = Math.abs(size.width - ICON_SIZE) > 4 || Math.abs(size.height - ICON_SIZE) > 4
-      const result = shouldResize && img.resize ? img.resize({ width: ICON_SIZE, height: ICON_SIZE }) : img
+      const resized = shouldResize && img.resize ? img.resize({ width: ICON_SIZE, height: ICON_SIZE }) : img
+      const result = isDev ? rotateNativeImage45(resized) : resized
       if (process.platform === 'darwin' && result.setTemplateImage) {
         result.setTemplateImage(true)
       }
@@ -88,10 +129,11 @@ export function createTrayIcon(): Electron.NativeImage {
         dataURL: TRAY_TEMPLATE_2X_DATA_URL,
       })
       if (!fallbackImg.isEmpty()) {
-        if (process.platform === 'darwin' && fallbackImg.setTemplateImage) {
-          fallbackImg.setTemplateImage(true)
+        const result = isDev ? rotateNativeImage45(fallbackImg) : fallbackImg
+        if (process.platform === 'darwin' && result.setTemplateImage) {
+          result.setTemplateImage(true)
         }
-        return fallbackImg
+        return result
       }
     } catch {
       // If addRepresentation fails, proceed to createFromDataURL
@@ -105,10 +147,11 @@ export function createTrayIcon(): Electron.NativeImage {
     const resized = shouldResize && imgFromDataUrl.resize
       ? imgFromDataUrl.resize({ width: ICON_SIZE, height: ICON_SIZE })
       : imgFromDataUrl
-    if (process.platform === 'darwin' && resized.setTemplateImage) {
-      resized.setTemplateImage(true)
+    const result = isDev ? rotateNativeImage45(resized) : resized
+    if (process.platform === 'darwin' && result.setTemplateImage) {
+      result.setTemplateImage(true)
     }
-    return resized
+    return result
   }
 
   // Final fallback programmatic generation
@@ -149,9 +192,11 @@ export class TrayService {
   private locale: TrayLocale = 'zh-CN'
   private enabled = false
   private getMainWindow: () => BrowserWindow | null
+  private readonly isDev: boolean
 
-  constructor(getMainWindow: () => BrowserWindow | null) {
+  constructor(getMainWindow: () => BrowserWindow | null, isDev?: boolean) {
     this.getMainWindow = getMainWindow
+    this.isDev = isDev ?? isDevEnvironment()
   }
 
   /** Returns whether the tray icon / menu bar mode is currently active. */
@@ -240,7 +285,7 @@ export class TrayService {
     if (this.tray) {
       return
     }
-    this.tray = new Tray(createTrayIcon())
+    this.tray = new Tray(createTrayIcon(this.isDev))
     this.tray.setToolTip('Coding Professional Agent')
     this.tray.on('click', () => this.toggleWindow())
     this.tray.on('double-click', () => this.toggleWindow())

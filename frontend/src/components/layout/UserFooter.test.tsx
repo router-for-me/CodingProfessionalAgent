@@ -363,26 +363,35 @@ describe('UserFooter', () => {
     expect(screen.getByText('60s')).toBeInTheDocument()
   })
 
-  it('returns to Web login when direct profiling fetch receives 401', async () => {
+  it('renders React Grab button but hides profiling button in web environment', () => {
     setHostBridge(null)
-    const originalFetch = globalThis.fetch
-    globalThis.fetch = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 }),
-    )
-    webAuthMocks.requireAuthenticatedResponse.mockImplementation(() => {
-      throw new webAuthMocks.RequiredError('Web authentication required')
-    })
-
     render(<UserFooter />)
+
+    const reactGrabButton = screen.getByRole('button', {
+      name: /reactgrab|react grab/i,
+    })
+    expect(reactGrabButton).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: /profiling/i }),
+    ).toBeNull()
+  })
+
+  it('activates React Grab on button click in web environment', async () => {
+    setHostBridge(null)
+    const activateSpy = vi.spyOn(reactGrabModule, 'activateReactGrab').mockResolvedValue(true)
+    render(<UserFooter />)
+
+    const reactGrabButton = screen.getByRole('button', {
+      name: /reactgrab|react grab/i,
+    })
+    expect(reactGrabButton).toBeInTheDocument()
+
     await act(async () => {
-      fireEvent.click(
-        screen.getByRole('button', { name: /profiling/i }),
-      )
+      fireEvent.click(reactGrabButton)
     })
 
-    expect(webAuthMocks.requireAuthenticatedResponse).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 401 }),
-    )
-    globalThis.fetch = originalFetch
+    expect(activateSpy).toHaveBeenCalledTimes(1)
+    const toasts = useUiStore.getState().toasts
+    expect(toasts.some((t) => /reactgrab|react grab/i.test(t.message))).toBe(true)
   })
 })

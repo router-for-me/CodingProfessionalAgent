@@ -33,6 +33,15 @@ describe('BinaryService', () => {
     expect(service.getTargetDir()).toBe(path.join(tempHomeDir, '.coding-professional-agent', 'bin'))
   })
 
+  it('resolves target bin directory under .coding-professional-agent-dev when isDev is true', () => {
+    const service = new BinaryService({
+      customHomeDir: tempHomeDir,
+      isPackaged: false,
+      isDev: true,
+    })
+    expect(service.getTargetDir()).toBe(path.join(tempHomeDir, '.coding-professional-agent-dev', 'bin'))
+  })
+
   it('extracts binaries and makes them executable on unpackaged dev mode', () => {
     const platformKey = `${process.platform}-${process.arch}`
     const fakeDevBinDir = path.join(tempResourcesDir, 'resources', 'bin', platformKey)

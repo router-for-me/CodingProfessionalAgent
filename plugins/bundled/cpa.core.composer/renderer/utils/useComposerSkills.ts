@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useHostServices } from '@cpa/plugin-ui'
+import { getAppConfigDirName } from '@cpa/plugin-api'
 import type { Skill } from '../types.js'
 
 function parseFrontmatter(raw: string): { frontmatter: Record<string, any>; body: string } {
@@ -124,9 +125,10 @@ export function useComposerSkills(customProjectId?: string | null): readonly Ski
                 if (userConfigDir) {
                     await scanDir(`${userConfigDir}/coding-professional-agent/agent/skills`)
                 }
-                // 2. User home skills: <homeDir>/.coding-professional-agent/skills
+                // 2. User home skills: <homeDir>/<configDirName>/skills
                 if (homeDir) {
-                    await scanDir(`${homeDir}/.coding-professional-agent/skills`)
+                    const configDirName = (runtimeInfo as any)?.appConfigDirName || getAppConfigDirName((runtimeInfo as any)?.isDebug)
+                    await scanDir(`${homeDir}/${configDirName}/skills`)
                 }
                 // 3. Project skills: <cwd>/.cpa/skills
                 if (cwd) {

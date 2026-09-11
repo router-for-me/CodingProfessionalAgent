@@ -2,11 +2,12 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { spawn } from 'node:child_process'
-import type {
-    DiscoveredWorktree,
-    WorktreeDeleteResult,
-    WorktreeSetupInput,
-    WorktreeSetupResult,
+import {
+    type DiscoveredWorktree,
+    type WorktreeDeleteResult,
+    type WorktreeSetupInput,
+    type WorktreeSetupResult,
+    getAppConfigDirName,
 } from '@cpa/plugin-api'
 
 export class WorktreeCoordinationService {
@@ -27,7 +28,7 @@ export class WorktreeCoordinationService {
             return trimmed
         }
 
-        return path.join(homeDir, '.coding-professional-agent', 'worktrees')
+        return path.join(homeDir, getAppConfigDirName(), 'worktrees')
     }
 
     async listWorktrees(rootDir?: string): Promise<DiscoveredWorktree[]> {

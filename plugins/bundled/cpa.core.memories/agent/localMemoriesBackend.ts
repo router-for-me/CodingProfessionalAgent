@@ -20,6 +20,7 @@ import {
     type SearchMemoriesRequest,
     type SearchMemoriesResponse,
 } from './types'
+import { getAppConfigDirName } from '@cpa/plugin-api'
 
 export interface ElectronBridgeLike {
     RuntimeInfo?(): Promise<{ platform?: string; userConfigDir?: string; tempDir?: string; homeDir: string }>
@@ -318,13 +319,14 @@ export async function resolveMemoryRoot(options?: LocalMemoriesBackendOptions): 
             const info = await bridge.RuntimeInfo()
             if (info?.homeDir) {
                 const sep = info.homeDir.includes('\\') ? '\\' : '/'
-                return `${info.homeDir}${sep}.coding-professional-agent${sep}memories`
+                const dirName = (info as any)?.appConfigDirName || getAppConfigDirName((info as any)?.isDebug)
+                return `${info.homeDir}${sep}${dirName}${sep}memories`
             }
         } catch {
             // Fall back to default location
         }
     }
-    return '~/.coding-professional-agent/memories'
+    return `~/${getAppConfigDirName()}/memories`
 }
 
 /**

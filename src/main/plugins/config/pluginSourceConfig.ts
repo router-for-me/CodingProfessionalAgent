@@ -3,6 +3,7 @@ import * as path from 'node:path'
 import { createHash } from 'node:crypto'
 import type { CapabilityId, PluginSourceSpec, ResolvedPluginPackage } from '@cpa/plugin-api'
 import type { ManagedNpmInstaller } from '../packages/ManagedNpmInstaller.js'
+import { getAppConfigDirName } from '../../utils/version.js'
 
 export interface PluginSourceConfigEntry {
     source: PluginSourceSpec | string
@@ -42,6 +43,8 @@ export interface PrepareDurableConfigOptions {
     candidateRevision: string
     generation: number
     transactionId?: string
+    configDirName?: string
+    isDev?: boolean
 }
 
 export interface CreatePluginCatalogOptions {
@@ -56,6 +59,8 @@ export interface CreatePluginCatalogOptions {
     npmSources?: readonly PluginSourceConfigEntry[]
     npmSpecs?: readonly string[]
     npmPackages?: readonly ResolvedPluginPackage[]
+    configDirName?: string
+    isDev?: boolean
 }
 
 function sha256(content: string | Buffer): string {
@@ -218,10 +223,11 @@ export async function saveProjectPluginConfig(
  */
 export async function loadGlobalPluginConfig(
     homeDir: string,
+    configDirName = getAppConfigDirName(),
 ): Promise<PluginSourceConfig> {
     const settingsPath = path.join(
         path.resolve(homeDir),
-        '.coding-professional-agent',
+        configDirName,
         'settings.json',
     )
     try {
@@ -247,12 +253,13 @@ export async function loadGlobalPluginConfig(
 export async function saveGlobalPluginConfig(
     homeDir: string,
     config: PluginSourceConfig,
+    configDirName = getAppConfigDirName(),
 ): Promise<void> {
     if (!homeDir || typeof homeDir !== 'string' || homeDir.trim().length === 0) {
         return
     }
 
-    const baseDir = path.join(path.resolve(homeDir), '.coding-professional-agent')
+    const baseDir = path.join(path.resolve(homeDir), configDirName)
     await fs.mkdir(baseDir, { recursive: true })
 
     const settingsPath = path.join(baseDir, 'settings.json')
@@ -299,7 +306,8 @@ export async function prepareDurableConfig(
         options.transactionId ??
         `tx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 
-    const globalBaseDir = path.join(path.resolve(homeDir), '.coding-professional-agent')
+    const configDirName = options.configDirName || getAppConfigDirName(options.isDev)
+    const globalBaseDir = path.join(path.resolve(homeDir), configDirName)
     await fs.mkdir(globalBaseDir, { recursive: true })
 
     const journalPath = path.join(globalBaseDir, 'plugin-graph-journal.json')
@@ -421,8 +429,9 @@ export async function prepareDurableConfig(
 export async function finalizeDurableConfig(
     journal: PluginGraphJournal,
     homeDir: string,
+    configDirName = getAppConfigDirName(),
 ): Promise<void> {
-    const globalBaseDir = path.join(path.resolve(homeDir), '.coding-professional-agent')
+    const globalBaseDir = path.join(path.resolve(homeDir), configDirName)
     const journalPath = path.join(globalBaseDir, 'plugin-graph-journal.json')
 
     // 1. Mark journal as committed
@@ -484,8 +493,9 @@ export async function finalizeDurableConfig(
 export async function rollbackDurableConfig(
     journal: PluginGraphJournal,
     homeDir: string,
+    configDirName = getAppConfigDirName(),
 ): Promise<void> {
-    const globalBaseDir = path.join(path.resolve(homeDir), '.coding-professional-agent')
+    const globalBaseDir = path.join(path.resolve(homeDir), configDirName)
     const journalPath = path.join(globalBaseDir, 'plugin-graph-journal.json')
 
     for (const file of journal.files) {
@@ -532,9 +542,10 @@ export async function recoverFromJournal(
         return
     }
 
+    const configDirName = getAppConfigDirName()
     const journalPath = path.join(
         path.resolve(homeDir),
-        '.coding-professional-agent',
+        configDirName,
         'plugin-graph-journal.json',
     )
 

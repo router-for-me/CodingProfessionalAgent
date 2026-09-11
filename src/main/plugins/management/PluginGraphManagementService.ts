@@ -42,6 +42,7 @@ import {
 import { PluginResourceService } from '../resources/PluginResourceService.js'
 import { ManagedNpmInstaller } from '../packages/ManagedNpmInstaller.js'
 import type { MainPluginActivationCoordinator } from '../runtime/MainPluginActivationCoordinator.js'
+import { getAppConfigDirName } from '../../utils/version.js'
 
 export interface PluginGraphManagementOptions {
     homeDir: string
@@ -52,6 +53,8 @@ export interface PluginGraphManagementOptions {
     resourceService?: PluginResourceService
     coordinator: MainPluginActivationCoordinator
     npmInstaller?: ManagedNpmInstaller
+    configDirName?: string
+    isDev?: boolean
 }
 
 export interface PrepareActionOptions {
@@ -120,12 +123,13 @@ export class PluginGraphManagementService {
         this.cpaVersion = options.cpaVersion ?? '1.0.0'
         this.resourceService = options.resourceService ?? new PluginResourceService()
         this.coordinator = options.coordinator
+        const configDirName = options.configDirName || getAppConfigDirName(options.isDev)
         this.npmInstaller =
             options.npmInstaller ??
             new ManagedNpmInstaller({
                 pluginsDir: path.join(
                     path.resolve(this.homeDir),
-                    '.coding-professional-agent',
+                    configDirName,
                     'plugins',
                 ),
             })

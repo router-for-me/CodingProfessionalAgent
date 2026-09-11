@@ -9,4 +9,5 @@ export * from './errors.js'
 export * from './services.js'
 export * from './shortcuts.js'
 export * from './graph.js'
+export * from './config.js'
 

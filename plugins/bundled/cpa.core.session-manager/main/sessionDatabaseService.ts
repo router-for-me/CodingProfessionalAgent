@@ -25,6 +25,7 @@ import {
   parseRightSidebar,
   parseWorktreeSetup,
 } from './sessionSqliteSchema.js'
+import { getAppConfigDirName } from '@cpa/plugin-api'
 
 export { parseRightSidebar, parseWorktreeSetup }
 
@@ -32,6 +33,8 @@ export interface SessionDatabaseOptions {
   dbPath?: string
   customDir?: string
   getHomeDir?: () => string
+  configDirName?: string
+  isDev?: boolean
 }
 
 const SKILL_DIR_REGEX = /(?:^|\/)([a-zA-Z0-9_-]+)\/(?:SKILL|skill)\.md$/i
@@ -99,7 +102,8 @@ export class SessionDatabaseService {
       this.dbPath = path.join(options.customDir, 'data.db')
     } else {
       const homeDir = this.getHomeDir()
-      this.dbPath = path.join(homeDir, '.coding-professional-agent', 'sessions', 'data.db')
+      const configDirName = options.configDirName || getAppConfigDirName(options.isDev)
+      this.dbPath = path.join(homeDir, configDirName, 'sessions', 'data.db')
     }
 
     this.initDatabase()

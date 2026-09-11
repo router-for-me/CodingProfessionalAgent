@@ -40,6 +40,12 @@ describe('KVStoreService', () => {
     expect((defaultService as unknown as { storePath: string }).storePath).toBe(expectedPath)
   })
 
+  it('uses ~/.coding-professional-agent-dev/settings.json when in dev mode', () => {
+    const devService = new KVStoreService({ getHomeDir: () => '/mock-home', isDev: true })
+    const expectedPath = path.join('/mock-home', '.coding-professional-agent-dev', 'settings.json')
+    expect((devService as unknown as { storePath: string }).storePath).toBe(expectedPath)
+  })
+
   it('separates projects into projects.json, cachedModels into cached_models.json, and shortcuts into shortcuts.json', async () => {
     const mockProjects = [
       { id: 'p1', name: 'Project 1', path: '/test/p1' },

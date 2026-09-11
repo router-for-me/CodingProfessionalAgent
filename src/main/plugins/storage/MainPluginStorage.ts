@@ -7,6 +7,7 @@ import type {
   PluginStorageNamespace,
   PluginStorageTransaction,
 } from '@cpa/plugin-api'
+import { getAppConfigDirName } from '../../utils/version.js'
 
 export type {
   PluginStorageContribution,
@@ -126,6 +127,7 @@ export interface MainPluginStorageOptions {
   dbPath?: string
   baseDir?: string
   getHomeDir?: () => string
+  isDev?: boolean
 }
 
 /**
@@ -149,8 +151,9 @@ export class MainPluginStorage implements PluginStorageContribution {
       )
     } else {
       const home = getHomeDir()
+      const configDirName = getAppConfigDirName(options.isDev)
       this.sqliteStorage = new PluginSqliteStorage(
-        path.join(home, '.coding-professional-agent', 'sessions', 'data.db'),
+        path.join(home, configDirName, 'sessions', 'data.db'),
       )
     }
   }

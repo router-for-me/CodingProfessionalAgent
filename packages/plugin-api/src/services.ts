@@ -698,7 +698,7 @@ export interface FileSystemService {
     removeFile?(path: string): Promise<void>
     selectFilesAndFolders?(title?: string): Promise<Array<{ name: string; path: string; isDirectory: boolean }>>
     revealInFileManager?(path: string): Promise<void>
-    getRuntimeInfo?(): Promise<{ platform: string; homeDir: string; userConfigDir: string; tempDir: string }>
+    getRuntimeInfo?(): Promise<{ platform: string; homeDir: string; userConfigDir: string; tempDir: string; isDebug?: boolean; appConfigDirName?: string }>
 }
 
 export interface ProcessRunOptions {

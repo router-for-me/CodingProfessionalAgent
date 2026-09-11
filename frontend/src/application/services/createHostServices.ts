@@ -46,7 +46,7 @@ import type {
     RendererContributionsService,
     SubAgentService,
 } from '@cpa/plugin-api'
-import { PluginManagementUnavailableError } from '@cpa/plugin-api'
+import { PluginManagementUnavailableError, getAppConfigDirName } from '@cpa/plugin-api'
 import { setDefaultHostServices } from '@cpa/plugin-ui'
 import { isSessionResumable } from '@/features/agent-runtime/session/unfinished'
 import { rendererRegistry, type RendererRegistry } from '@/plugins/platform/rendererRegistry'
@@ -615,6 +615,23 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
                 // Fallback
             }
 
+            let configDirName = getAppConfigDirName()
+            if (fileSystem.getRuntimeInfo) {
+                try {
+                    const info = await fileSystem.getRuntimeInfo()
+                    if (info?.homeDir) {
+                        homeDir = info.homeDir
+                    }
+                    if ((info as any)?.appConfigDirName) {
+                        configDirName = (info as any).appConfigDirName
+                    } else if (typeof (info as any)?.isDebug === 'boolean') {
+                        configDirName = getAppConfigDirName((info as any).isDebug)
+                    }
+                } catch {
+                    // Fallback
+                }
+            }
+
             if (trimmed) {
                 if (trimmed.startsWith('~') && homeDir) {
                     return trimmed.replace(/^~(?=$|\/|\\)/, homeDir)
@@ -623,9 +640,9 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
             }
 
             if (homeDir) {
-                return `${homeDir}/.coding-professional-agent/worktrees`
+                return `${homeDir}/${configDirName}/worktrees`
             }
-            return '~/.coding-professional-agent/worktrees'
+            return `~/${configDirName}/worktrees`
         },
 
         async listWorktrees(rootDir?: string): Promise<DiscoveredWorktree[]> {
@@ -1414,7 +1431,8 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
             try {
                 const info = await fileSystem.getRuntimeInfo?.()
                 const homeDir = info?.homeDir || ''
-                const filePath = `${homeDir}/.coding-professional-agent/AGENTS.md`
+                const configDirName = (info as any)?.appConfigDirName || getAppConfigDirName((info as any)?.isDebug)
+                const filePath = `${homeDir}/${configDirName}/AGENTS.md`
                 const res = fileSystem.readFileIfExists
                     ? await fileSystem.readFileIfExists(filePath)
                     : await fileSystem.readFile(filePath)
@@ -1434,7 +1452,8 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
         async saveInstructions(content: string): Promise<void> {
             const info = await fileSystem.getRuntimeInfo?.()
             const homeDir = info?.homeDir || ''
-            const dir = `${homeDir}/.coding-professional-agent`
+            const configDirName = (info as any)?.appConfigDirName || getAppConfigDirName((info as any)?.isDebug)
+            const dir = `${homeDir}/${configDirName}`
             const filePath = `${dir}/AGENTS.md`
             if (fileSystem.mkdirAll) {
                 await fileSystem.mkdirAll(dir).catch(() => {})

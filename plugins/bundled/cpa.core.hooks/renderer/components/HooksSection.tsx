@@ -24,6 +24,7 @@ import {
     toggleHookEnabled,
 } from '../hooksActions.js'
 import type { HookEventName, HookMetadata, Project, SessionItem } from '@cpa/plugin-api'
+import { getAppConfigDirName } from '@cpa/plugin-api'
 import { HOOK_EVENT_NAMES } from '../../agent/types.js'
 import { HookEditorModal } from './HookEditorModal.js'
 import { HookLearnMoreModal } from './HookLearnMoreModal.js'
@@ -130,7 +131,7 @@ export function HooksSection() {
               t('settings.hooks.projectConfig', { defaultValue: 'Project configuration' })
 
         const pathInfo = isUser
-            ? '~/.coding-professional-agent/hooks.json'
+            ? `~/${getAppConfigDirName()}/hooks.json`
             : `${selectedSource}/.cpa/hooks.json`
 
         return (

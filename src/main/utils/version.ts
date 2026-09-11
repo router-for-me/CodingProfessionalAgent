@@ -3,13 +3,37 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import * as os from 'node:os'
+import {
+  DEFAULT_APP_CONFIG_DIR_NAME,
+  DEV_APP_CONFIG_DIR_NAME,
+} from '../../shared/types.js'
+
 let cachedAppVersion: string | null = null
 
 export function isDevEnvironment(): boolean {
+  if (process.env.CPA_DEV === '1' || process.env.CPA_DEV === 'true') {
+    return true
+  }
+  if (process.env.CPA_DEV === '0' || process.env.CPA_DEV === 'false') {
+    return false
+  }
   if (typeof app === 'object' && app !== null && typeof app.isPackaged === 'boolean') {
     return !app.isPackaged
   }
   return process.env.NODE_ENV === 'development'
+}
+
+export function getAppConfigDirName(isDev?: boolean): string {
+  if (process.env.CPA_CONFIG_DIR_NAME) {
+    return process.env.CPA_CONFIG_DIR_NAME
+  }
+  const dev = isDev ?? isDevEnvironment()
+  return dev ? DEV_APP_CONFIG_DIR_NAME : DEFAULT_APP_CONFIG_DIR_NAME
+}
+
+export function getAppConfigDir(homeDir: string = os.homedir(), isDev?: boolean): string {
+  return path.join(homeDir, getAppConfigDirName(isDev))
 }
 
 export function getAppVersion(): string {

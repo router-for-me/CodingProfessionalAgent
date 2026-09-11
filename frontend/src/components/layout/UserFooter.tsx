@@ -15,6 +15,7 @@ import { cn } from '@/lib/cn'
 import { formatProfilingReportMarkdown } from '@/lib/profilingReport'
 import {
   activateReactGrab,
+  isMainProgramInDebugMode,
   isReactGrabActive,
   isReactGrabLoading,
 } from '@/lib/reactGrab'
@@ -32,7 +33,7 @@ function getProfileReportFilename(date: Date = new Date()): string {
   return `cpa-profile-report-${yyyy}-${MM}-${dd}-${HH}${mm}${ss}.md`
 }
 
-function DevControls() {
+function DevControls({ isWeb }: { isWeb?: boolean }) {
   const { t } = useTranslation()
   const pushToast = useUiStore((s) => s.pushToast)
 
@@ -277,37 +278,39 @@ function DevControls() {
           )}
         />
       </button>
-      <button
-        type="button"
-        aria-label={
-          isProfiling
-            ? t('nav.profilingActive', { seconds: remainingSeconds })
-            : t('nav.profile')
-        }
-        title={
-          isProfiling
-            ? t('nav.profilingActive', { seconds: remainingSeconds })
-            : t('nav.profile')
-        }
-        className={cn(
-          'flex h-7 shrink-0 items-center justify-center gap-1 rounded-md px-1.5 text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-sidebar-hover)] hover:text-[var(--text-primary)]',
-          isProfiling &&
-            'bg-red-500/10 text-red-400 hover:bg-red-500/20 hover:text-red-300',
-        )}
-        onClick={handleProfilingClick}
-      >
-        <Activity
+      {!isWeb && (
+        <button
+          type="button"
+          aria-label={
+            isProfiling
+              ? t('nav.profilingActive', { seconds: remainingSeconds })
+              : t('nav.profile')
+          }
+          title={
+            isProfiling
+              ? t('nav.profilingActive', { seconds: remainingSeconds })
+              : t('nav.profile')
+          }
           className={cn(
-            'size-3.5',
-            isProfiling && 'animate-pulse text-red-400',
+            'flex h-7 shrink-0 items-center justify-center gap-1 rounded-md px-1.5 text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-sidebar-hover)] hover:text-[var(--text-primary)]',
+            isProfiling &&
+              'bg-red-500/10 text-red-400 hover:bg-red-500/20 hover:text-red-300',
           )}
-        />
-        {isProfiling && (
-          <span className="text-[10px] font-mono font-medium leading-none">
-            {remainingSeconds}s
-          </span>
-        )}
-      </button>
+          onClick={handleProfilingClick}
+        >
+          <Activity
+            className={cn(
+              'size-3.5',
+              isProfiling && 'animate-pulse text-red-400',
+            )}
+          />
+          {isProfiling && (
+            <span className="text-[10px] font-mono font-medium leading-none">
+              {remainingSeconds}s
+            </span>
+          )}
+        </button>
+      )}
     </>
   )
 }
@@ -318,13 +321,27 @@ function DevControls() {
 export function UserFooter() {
   const { t } = useTranslation()
   const setSettingsOpen = useUiStore((s) => s.setSettingsOpen)
-  const isDev = Boolean(import.meta.env.DEV || isDevMode())
+  const [isDev, setIsDev] = useState(() => Boolean(import.meta.env.DEV || isDevMode()))
+  const isWeb = !isNativeRuntime()
+
+  useEffect(() => {
+    if (isDev) return
+    let cancelled = false
+    void isMainProgramInDebugMode().then((debug) => {
+      if (!cancelled && debug) {
+        setIsDev(true)
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [isDev])
 
   return (
     <>
       <ResumePromptBanner />
       <div className="relative flex shrink-0 items-center justify-end gap-1 border-t border-[var(--border-subtle)] px-2.5 py-2">
-        {isDev && <DevControls />}
+        {isDev && <DevControls isWeb={isWeb} />}
         <button
           type="button"
           aria-label={t('settings.title')}

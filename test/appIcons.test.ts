@@ -27,6 +27,25 @@ describe('App and Tray icon paths', () => {
         expect(fs.statSync(trayTemplate2x).size).toBeGreaterThan(0)
     })
 
+    it('verifies rotated 45deg dev icon assets exist in the build directory', () => {
+        const appIconDevPng = path.join(repoRoot, 'build/appicon-dev.png')
+        const darwinDevIcns = path.join(repoRoot, 'build/darwin/icons-dev.icns')
+        const trayDevTemplate = path.join(repoRoot, 'build/trayTemplate-dev.png')
+        const trayDevTemplate2x = path.join(repoRoot, 'build/trayTemplate-dev@2x.png')
+
+        expect(fs.existsSync(appIconDevPng)).toBe(true)
+        expect(fs.statSync(appIconDevPng).size).toBeGreaterThan(0)
+
+        expect(fs.existsSync(darwinDevIcns)).toBe(true)
+        expect(fs.statSync(darwinDevIcns).size).toBeGreaterThan(0)
+
+        expect(fs.existsSync(trayDevTemplate)).toBe(true)
+        expect(fs.statSync(trayDevTemplate).size).toBeGreaterThan(0)
+
+        expect(fs.existsSync(trayDevTemplate2x)).toBe(true)
+        expect(fs.statSync(trayDevTemplate2x).size).toBeGreaterThan(0)
+    })
+
     it('verifies tray template icons exist in frontend public directory for web and packaging redundancy', () => {
         const publicTray = path.join(repoRoot, 'frontend/public/trayTemplate.png')
         const publicTray2x = path.join(repoRoot, 'frontend/public/trayTemplate@2x.png')

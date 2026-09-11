@@ -37,7 +37,7 @@ export function resetReactGrabStateForTests(): void {
 }
 
 import { isBrowserEnvironment } from './platform'
-import { getHostBridge, isNativeRuntime } from '@/application/services/hostTransport'
+import { getHostBridge, isNativeRuntime, isDevMode } from '@/application/services/hostTransport'
 
 export { isBrowserEnvironment }
 
@@ -126,7 +126,7 @@ export async function shouldEnableReactGrab(
   if (typeof options?.isDebug === 'boolean') {
     return options.isDebug
   }
-  const isDev = options?.isDev ?? import.meta.env.DEV
+  const isDev = options?.isDev ?? (Boolean(import.meta.env.DEV) || isDevMode())
   if (isDev) {
     return true
   }

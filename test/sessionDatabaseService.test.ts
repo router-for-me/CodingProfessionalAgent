@@ -107,6 +107,15 @@ describe('SessionDatabaseService', () => {
     } finally {
       homeService.close()
     }
+
+    const devHomeService = new SessionDatabaseService({ getHomeDir: () => homeMock, isDev: true })
+    try {
+      expect(devHomeService.getDbPath()).toBe(
+        path.join(homeMock, '.coding-professional-agent-dev', 'sessions', 'data.db'),
+      )
+    } finally {
+      devHomeService.close()
+    }
   })
 
   it('gets, sets, updates, lists, and deletes standard session entries', async () => {

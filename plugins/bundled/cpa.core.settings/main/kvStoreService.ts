@@ -13,11 +13,14 @@ import {
     normalizePluginSourceConfig,
     type PluginSourceConfig,
 } from '../../../../src/main/plugins/config/pluginSourceConfig.js'
+import { getAppConfigDirName } from '@cpa/plugin-api'
 
 export interface KVStoreServiceOptions {
     customPath?: string
     homeDir?: string
     getHomeDir?: () => string
+    configDirName?: string
+    isDev?: boolean
 }
 
 export const UI_SETTING_KEYS = [
@@ -105,10 +108,15 @@ export class KVStoreService {
             this.schedulePath = path.join(dir, 'schedule.json')
         } else {
             const rawHome = options.homeDir || process.env.CPA_HOME || this.getHomeDir()
-            const appDir =
-                rawHome.endsWith('.coding-professional-agent') || path.basename(rawHome) === '.coding-professional-agent'
-                    ? rawHome
-                    : path.join(rawHome, '.coding-professional-agent')
+            const configDirName = options.configDirName || getAppConfigDirName(options.isDev)
+            const isAlreadyAppDir =
+                rawHome.endsWith(configDirName) ||
+                path.basename(rawHome) === configDirName ||
+                rawHome.endsWith('.coding-professional-agent') ||
+                path.basename(rawHome) === '.coding-professional-agent' ||
+                rawHome.endsWith('.coding-professional-agent-dev') ||
+                path.basename(rawHome) === '.coding-professional-agent-dev'
+            const appDir = isAlreadyAppDir ? rawHome : path.join(rawHome, configDirName)
             this.storePath = path.join(appDir, 'settings.json')
             this.projectsPath = path.join(appDir, 'projects.json')
             this.cachedModelsPath = path.join(appDir, 'cached_models.json')
@@ -136,7 +144,7 @@ export class KVStoreService {
     private getLegacyUiStorePath(): string | null {
         if (this.isCustomPath) return null
         const homeDir = this.getHomeDir()
-        const localLegacy = path.join(homeDir, '.coding-professional-agent', 'window-state.json')
+        const localLegacy = path.join(homeDir, getAppConfigDirName(), 'window-state.json')
         if (fsSync.existsSync(localLegacy)) {
             return localLegacy
         }
