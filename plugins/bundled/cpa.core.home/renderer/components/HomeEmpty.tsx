@@ -1,10 +1,11 @@
 import { useEffect } from 'react'
-import { Cloud, useHostServices, useTranslation } from '@cpa/plugin-ui'
+import { useHostServices, useTranslation } from '@cpa/plugin-ui'
 import { useNavigate } from '@tanstack/react-router'
 import {
     getQuickActionPrompt,
     type QuickActionKind,
 } from '../utils/templates.js'
+import { CodingLogo } from './CodingLogo.js'
 import { QuickActionCards } from './QuickActionCards.js'
 
 export interface HomeEmptyProps {
@@ -12,7 +13,7 @@ export interface HomeEmptyProps {
 }
 
 /**
- * Centered home empty state: cloud mark, title, and quick-action cards.
+ * Centered home empty state: logo mark, title, and quick-action cards.
  * Card click sends the template prompt through host services and navigates.
  */
 export function HomeEmpty({ onSelect }: HomeEmptyProps = {}) {
@@ -93,13 +94,10 @@ export function HomeEmpty({ onSelect }: HomeEmptyProps = {}) {
         <div className="flex h-full w-full items-center justify-center overflow-auto p-8">
             <div className="flex w-full max-w-[720px] flex-col items-center pb-28 text-center">
                 <div
-                    className="relative mb-5 flex size-14 items-center justify-center text-[var(--text-muted)]"
+                    className="mb-5 flex size-16 items-center justify-center text-[var(--text-muted)]"
                     aria-hidden
                 >
-                    <Cloud className="size-12 stroke-[1.25]" />
-                    <span className="pointer-events-none absolute inset-0 flex items-center justify-center pt-1 font-mono text-[11px] font-medium tracking-tight text-[var(--text-secondary)]">
-                        &gt;_
-                    </span>
+                    <CodingLogo className="size-16" />
                 </div>
 
                 <h1 className="mb-8 text-[22px] font-medium tracking-tight text-[var(--text-primary)]">
