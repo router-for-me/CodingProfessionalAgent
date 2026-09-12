@@ -1290,4 +1290,48 @@ describe('SubAgentHost', () => {
         expect(childModel?.id).toBe('gpt-5.5')
         expect(childReasoningEffort).toBe('high')
     })
+
+    it('matches configured role by unique role id and handles whitespace', async () => {
+        let childRunDeveloperPrompt: string | undefined
+
+        const host = new SubAgentHost({
+            generateId: () => 'sub-role-id-agent',
+            now: () => 1000,
+            run: (request) => {
+                childRunDeveloperPrompt = request.developerPrompt
+                return scriptedRun(request, ['Done'])
+            },
+        })
+
+        const prepared = preparedRun()
+        host.configure({
+            prepared,
+            codingTools: [readTool],
+            models: [model],
+            subagentsSettings: {
+                enabled: true,
+                concurrency: 10,
+                maxPerSession: 3,
+                maxDepth: 1,
+                roles: [
+                    {
+                        id: 'unique-reviewer-id',
+                        name: ' Reviewer With Spaces ',
+                        description: 'Special instructions for unique reviewer.',
+                        modelId: 'parent-model',
+                        reasoningEffort: 'medium',
+                    },
+                ],
+            },
+        })
+        host.setParentContext({ sessionId: 'session-root', runId: 'run-1' })
+
+        // Match by exact ID
+        await host.spawn('Task', { name: 'Bot', role: 'unique-reviewer-id' })
+        expect(childRunDeveloperPrompt).toContain('Special instructions for unique reviewer.')
+
+        // Match by trimmed name
+        await host.spawn('Task 2', { name: 'Bot2', role: 'Reviewer With Spaces' })
+        expect(childRunDeveloperPrompt).toContain('Special instructions for unique reviewer.')
+    })
 })

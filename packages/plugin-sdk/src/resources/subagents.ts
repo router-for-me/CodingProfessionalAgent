@@ -32,12 +32,16 @@ export function formatSubagentRolesForPrompt(
     ]
 
     for (const role of roles) {
+        const id = (role.id || '').trim()
         const name = (role.name || '').trim()
         const description = (role.description || '').trim()
         const model = (role.modelId || '').trim()
         const reasoningEffort = (role.reasoningEffort || 'default').trim()
 
         lines.push('  <role>')
+        if (id) {
+            lines.push(`    <id>${escapeXml(id)}</id>`)
+        }
         lines.push(`    <name>${escapeXml(name)}</name>`)
         if (description) {
             lines.push(`    <description>${escapeXml(description)}</description>`)

@@ -446,10 +446,10 @@ export class SubAgentHost {
         const trimmed = query.trim().toLowerCase()
         if (!trimmed) return undefined
         const roles = this.config?.subagentsSettings?.roles ?? []
-        return roles.find(
-            (r) =>
-                (r.id && r.id.toLowerCase() === trimmed) ||
-                (r.name && r.name.toLowerCase() === trimmed),
+        // Prioritize exact ID match first, then name match (with whitespace trimming)
+        return (
+            roles.find((r) => r.id && r.id.trim().toLowerCase() === trimmed) ??
+            roles.find((r) => r.name && r.name.trim().toLowerCase() === trimmed)
         )
     }
 
