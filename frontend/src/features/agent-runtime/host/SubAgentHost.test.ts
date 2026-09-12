@@ -1172,7 +1172,7 @@ describe('SubAgentHost', () => {
         })
         const prepared = preparedRun()
 
-        // Test 1: maxDepth = 1 (default) -> spawned child (depth 1) must NOT receive spawn_agent
+        // Test 1: maxDepth = 1 (default) -> spawned child (depth 1) must NOT receive spawn_agent and must NOT see subagent roles
         host.configure({
             prepared,
             codingTools: [readTool],
@@ -1183,6 +1183,15 @@ describe('SubAgentHost', () => {
                 concurrency: 10,
                 maxPerSession: 3,
                 maxDepth: 1,
+                roles: [
+                    {
+                        id: 'leaf-role',
+                        name: 'Leaf Role',
+                        description: 'Some role prompt.',
+                        modelId: 'parent-model',
+                        reasoningEffort: 'medium',
+                    },
+                ],
             },
         })
         host.setParentContext({ sessionId: 'session-root', runId: 'run-1' })
@@ -1190,6 +1199,8 @@ describe('SubAgentHost', () => {
         await host.spawn('Run task', { name: 'ChildOne' })
         expect(childRunTools.some((t) => t.name === 'spawn_agent')).toBe(false)
         expect(childRunSystemPrompt).toContain('Do not spawn other agents.')
+        expect(childRunSystemPrompt).not.toContain('<available_roles>')
+        expect(childRunSystemPrompt).not.toContain('<id>leaf-role</id>')
 
         // Test 2: maxDepth = 2 -> spawned child (depth 1) MUST receive spawn_agent
         childRunTools = []

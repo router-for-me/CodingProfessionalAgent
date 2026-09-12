@@ -205,9 +205,10 @@ export function buildSubAgentSystemPrompt(
         : systemPrompt
 
     const hasSpawnAgent = codingTools.some((tool) => tool.name === 'spawn_agent')
-    const roles = options?.roles ?? prepared?.subagentsSettings?.roles
+    const canDelegate = Boolean(options?.allowSubagents) && hasSpawnAgent
+    const roles = canDelegate ? (options?.roles ?? prepared?.subagentsSettings?.roles) : undefined
     const rolesSection =
-        (options?.allowSubagents || hasSpawnAgent) && roles && roles.length > 0
+        canDelegate && roles && roles.length > 0
             ? formatSubagentRolesForPrompt(roles)
             : ''
 
@@ -1398,7 +1399,7 @@ export class SubAgentHost {
                 {
                     extensionRegistry: config.extensionRegistry,
                     allowSubagents: canSpawnChildren,
-                    roles: config.subagentsSettings?.roles,
+                    roles: canSpawnChildren ? config.subagentsSettings?.roles : undefined,
                 },
             ),
             developerPrompt: developerPrompt || undefined,
