@@ -3212,6 +3212,42 @@ describe('SessionDatabaseService', () => {
       })
     })
 
+    it('persists and restores subagent role metadata (roleId, roleName, rolePrompt)', async () => {
+      const parentId = 'session-parent-role-test'
+      const subAgentId = 'subagent-role-test-1'
+
+      await service.set(parentId, {
+        id: parentId,
+        version: 2,
+        entries: [],
+        subAgents: [
+          {
+            id: subAgentId,
+            sessionId: subAgentId,
+            parentSessionId: parentId,
+            name: 'ReviewerBot',
+            modelId: 'gpt-5.5',
+            reasoningEffort: 'high',
+            status: 'completed',
+            roleId: 'reviewer-id',
+            roleName: '代码审查员',
+            rolePrompt: '负责严格的代码规范审查与安全审计指令。',
+            createdAt: 1000,
+            updatedAt: 1000,
+          },
+        ],
+      })
+
+      const loaded = await service.get(parentId)
+      expect(loaded?.subAgents).toHaveLength(1)
+      expect(loaded?.subAgents?.[0]).toMatchObject({
+        id: subAgentId,
+        roleId: 'reviewer-id',
+        roleName: '代码审查员',
+        rolePrompt: '负责严格的代码规范审查与安全审计指令。',
+      })
+    })
+
     it('searches sessions by title (prioritized) and content snippet', async () => {
       const now = Date.now()
       // Session 1: title matches "shell"

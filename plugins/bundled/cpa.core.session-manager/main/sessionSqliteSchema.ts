@@ -122,6 +122,9 @@ CREATE TABLE IF NOT EXISTS subagents (
     error_message TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
+    role_id TEXT,
+    role_name TEXT,
+    role_prompt TEXT,
     FOREIGN KEY (parent_session_id) REFERENCES sessions(id) ON DELETE CASCADE
 );
 `
@@ -347,6 +350,9 @@ export function applySessionSchemaAndMigrations(db: DatabaseType): void {
     'icon TEXT',
     'last_message TEXT',
     'error_message TEXT',
+    'role_id TEXT',
+    'role_name TEXT',
+    'role_prompt TEXT',
   ]
   for (const col of subagentColumns) {
     try {

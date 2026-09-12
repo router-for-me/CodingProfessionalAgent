@@ -1334,4 +1334,53 @@ describe('SubAgentHost', () => {
         await host.spawn('Task 2', { name: 'Bot2', role: 'Reviewer With Spaces' })
         expect(childRunDeveloperPrompt).toContain('Special instructions for unique reviewer.')
     })
+
+    it('preserves role developer prompt on resumed subagent and follow-up turns', async () => {
+        let lastDeveloperPrompt: string | undefined
+
+        const host = new SubAgentHost({
+            generateId: () => 'sub-turn-agent',
+            now: () => 1000,
+            run: (request) => {
+                lastDeveloperPrompt = request.developerPrompt
+                return scriptedRun(request, ['Turn done'])
+            },
+        })
+
+        const prepared = preparedRun()
+        host.configure({
+            prepared,
+            codingTools: [readTool],
+            models: [model],
+            subagentsSettings: {
+                enabled: true,
+                concurrency: 10,
+                maxPerSession: 3,
+                maxDepth: 1,
+                roles: [
+                    {
+                        id: 'role-turn-id',
+                        name: 'Tester Role',
+                        description: 'Instructions for testing turns.',
+                        modelId: 'parent-model',
+                        reasoningEffort: 'medium',
+                    },
+                ],
+            },
+        })
+        host.setParentContext({ sessionId: 'session-root', runId: 'run-1' })
+
+        await host.spawn('Initial prompt', {
+            name: 'TurnBot',
+            role: 'role-turn-id',
+        })
+        expect(lastDeveloperPrompt).toContain('Instructions for testing turns.')
+
+        const subAgentId = host.list()[0]?.id!
+        lastDeveloperPrompt = undefined
+
+        // Send follow up message
+        await host.sendMessage(subAgentId, 'Follow up prompt')
+        expect(lastDeveloperPrompt).toContain('Instructions for testing turns.')
+    })
 })

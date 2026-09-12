@@ -1360,9 +1360,16 @@ export class SubAgentHost {
             ? (config.allTools && config.allTools.length > 0 ? config.allTools : config.codingTools)
             : codingToolsOnly(config.codingTools)
 
+        const effectiveRolePrompt =
+            record.rolePrompt ||
+            this.findMatchingRole(record.roleId || record.name)?.description
+        const effectiveRoleName =
+            record.roleName ||
+            this.findMatchingRole(record.roleId || record.name)?.name
+
         const developerPrompt = buildSubAgentDeveloperPrompt(
-            record.roleName,
-            record.rolePrompt,
+            effectiveRoleName,
+            effectiveRolePrompt,
         )
         const request: SubAgentRunRequest = {
             agentId,
