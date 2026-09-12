@@ -68,6 +68,11 @@ export const existingIpcChannelSnapshot = [
     'plugins:rollback',
     'plugins:commitGeneration',
     'plugins:rollbackGeneration',
+    'update:check',
+    'update:download',
+    'update:cancel',
+    'update:apply',
+    'update:getState',
 ]
 
 export const existingRpcMethodSnapshot = [
@@ -184,6 +189,21 @@ export const existingRpcMethodSnapshot = [
     'PluginsCommitGeneration',
     'plugins:rollbackGeneration',
     'PluginsRollbackGeneration',
+    'update:check',
+    'CheckForUpdates',
+    'UpdateCheck',
+    'update:download',
+    'DownloadUpdate',
+    'UpdateDownload',
+    'update:cancel',
+    'CancelUpdate',
+    'UpdateCancel',
+    'update:apply',
+    'QuitAndInstallUpdate',
+    'UpdateApply',
+    'update:getState',
+    'GetUpdateState',
+    'UpdateGetState',
 ]
 
 describe('MainContributionRegistry & Descriptors', () => {

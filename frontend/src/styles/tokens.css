@@ -18,6 +18,7 @@
   --accent-purple: #b197fc;
   --accent-green: #63e6be;
   --accent-orange: #ff922b;
+  --accent-red: #ff6b6b;
   --radius-card: 14px;
   --radius-composer: 20px;
   --sidebar-width: 272px;
@@ -52,6 +53,7 @@
   --accent-purple: #b197fc;
   --accent-green: #63e6be;
   --accent-orange: #ff922b;
+  --accent-red: #fa5252;
   --radius-card: 14px;
   --radius-composer: 20px;
   --sidebar-width: 272px;
@@ -79,6 +81,7 @@
   --color-accent-purple: var(--accent-purple);
   --color-accent-green: var(--accent-green);
   --color-accent-orange: var(--accent-orange);
+  --color-accent-red: var(--accent-red);
   --radius-card: 14px;
   --radius-composer: 20px;
   --spacing-sidebar: 272px;

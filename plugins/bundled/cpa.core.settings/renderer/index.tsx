@@ -25,6 +25,8 @@ import { ConnectionsSection } from './components/ConnectionsSection.js'
 import { PluginsSection } from './components/PluginsSection.js'
 import { GitSection } from './components/GitSection.js'
 import { EnvironmentsSection } from './components/EnvironmentsSection.js'
+import { UpdateSection } from './components/UpdateSection.js'
+import { setSettingsCapabilityClient } from './utils/capability.js'
 
 export {
     GeneralSection,
@@ -35,11 +37,14 @@ export {
     PluginsSection,
     GitSection,
     EnvironmentsSection,
+    UpdateSection,
 }
 
 export const settingsRendererEntry = definePluginEntry({
     runtime: 'renderer',
     activate(context: PluginContext) {
+        setSettingsCapabilityClient(context.capabilityClient)
+
         // 1. Register Settings Groups
         const groups: SettingsGroupContribution[] = [
             {
@@ -557,6 +562,9 @@ export const settingsRendererEntry = definePluginEntry({
                 value: action,
             })
         }
+    },
+    deactivate() {
+        setSettingsCapabilityClient(null)
     },
 })
 

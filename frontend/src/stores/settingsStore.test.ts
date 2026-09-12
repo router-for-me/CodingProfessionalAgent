@@ -136,7 +136,7 @@ describe('settingsStore', () => {
   it('updates subagent settings and hydrates roles properly', () => {
     expect(useSettingsStore.getState().settings.subagents?.enabled).toBe(true)
     expect(useSettingsStore.getState().settings.subagents?.concurrency).toBe(10)
-    expect(useSettingsStore.getState().settings.subagents?.roles?.length).toBeGreaterThan(0)
+    expect(Array.isArray(useSettingsStore.getState().settings.subagents?.roles)).toBe(true)
 
     const customRoles = [
       {

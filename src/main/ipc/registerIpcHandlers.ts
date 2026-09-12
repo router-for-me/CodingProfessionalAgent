@@ -21,6 +21,7 @@ import { BinaryService } from '../services/binaryService.js'
 import { EnvironmentWatcherService } from '../services/environmentWatcherService.js'
 import { ProfilingService } from '../services/profilingService.js'
 import { PowerSaveService } from '../services/powerSaveService.js'
+import { UpdateService } from '../services/update/updateService.js'
 import { PluginResourceService } from '../plugins/resources/PluginResourceService.js'
 import { MainContributionRegistry } from '../plugins/contributions/MainContributionRegistry.js'
 import { createPlatformServiceDescriptors } from '../plugins/contributions/serviceDescriptors.js'
@@ -47,6 +48,7 @@ export interface CreateServicesOptions {
   pluginActivationCoordinator?: MainPluginActivationCoordinator
   pluginResourceService?: PluginResourceService
   pluginGraphManagementService?: PluginGraphManagementService
+  updateService?: UpdateService
 }
 
 export interface AppServices {
@@ -67,6 +69,7 @@ export interface AppServices {
   environmentWatcherService: EnvironmentWatcherService
   profilingService: ProfilingService
   powerSaveService: PowerSaveService
+  updateService: UpdateService
   registry: MainContributionRegistry
   pluginRuntimeHost?: MainPluginRuntimeHost
   pluginActivationCoordinator?: MainPluginActivationCoordinator
@@ -114,6 +117,14 @@ export function createServices(
       sendNativeEventToWindow(getMainWindow(), event)
     }
     options?.pluginRuntimeHost?.capabilityBroker?.emit('native-event', event)
+    if (event.kind === 'update:status-changed') {
+      try {
+        const payload = typeof event.data === 'string' ? JSON.parse(event.data) : event.data
+        options?.pluginRuntimeHost?.capabilityBroker?.emit('update:status-changed', payload)
+      } catch {
+        options?.pluginRuntimeHost?.capabilityBroker?.emit('update:status-changed', event.data)
+      }
+    }
     if (registry.hasService('webServerService')) {
       const webServer = registry.getService<WebServerService>('webServerService')
       webServer.broadcastEvent(event, event.sourceClientId)
@@ -185,6 +196,7 @@ export function createServices(
     pluginActivationCoordinator: options?.pluginActivationCoordinator,
     pluginResourceService: options?.pluginResourceService,
     pluginGraphManagementService: options?.pluginGraphManagementService,
+    updateService: options?.updateService,
   })
 
   for (const descriptor of serviceDescriptors) {
@@ -325,6 +337,7 @@ export function createServices(
     environmentWatcherService: registry.getService<EnvironmentWatcherService>('environmentWatcherService'),
     profilingService: registry.getService<ProfilingService>('profilingService'),
     powerSaveService: registry.getService<PowerSaveService>('powerSaveService'),
+    updateService: registry.getService<UpdateService>('updateService'),
     registry,
     pluginRuntimeHost: options?.pluginRuntimeHost,
     pluginActivationCoordinator: options?.pluginActivationCoordinator,

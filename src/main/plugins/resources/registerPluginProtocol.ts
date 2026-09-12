@@ -1,27 +1,34 @@
 import { protocol } from 'electron'
 import type { PluginResourceService } from './PluginResourceService.js'
 
+let schemesRegistered = false
+
 /**
  * Register the cpa-plugin custom scheme as privileged.
  * Must be called before Electron app is ready.
  */
 export function registerPluginSchemesAsPrivileged(): void {
-    if (!protocol?.registerSchemesAsPrivileged) {
+    if (schemesRegistered || !protocol?.registerSchemesAsPrivileged) {
         return
     }
-    protocol.registerSchemesAsPrivileged([
-        {
-            scheme: 'cpa-plugin',
-            privileges: {
-                standard: true,
-                secure: true,
-                allowServiceWorkers: false,
-                supportFetchAPI: true,
-                corsEnabled: true,
-                stream: true,
+    try {
+        protocol.registerSchemesAsPrivileged([
+            {
+                scheme: 'cpa-plugin',
+                privileges: {
+                    standard: true,
+                    secure: true,
+                    allowServiceWorkers: false,
+                    supportFetchAPI: true,
+                    corsEnabled: true,
+                    stream: true,
+                },
             },
-        },
-    ])
+        ])
+        schemesRegistered = true
+    } catch {
+        // Scheme may have already been registered by bootstrapper
+    }
 }
 
 /**

@@ -121,6 +121,13 @@ export const RENDERER_CAPABILITY_DESCRIPTORS: readonly RendererCapabilityDescrip
     { name: 'PluginsRollback', method: 'plugins:rollback', capability: 'plugins.manage' },
     { name: 'PluginsCommitGeneration', method: 'plugins:commitGeneration', capability: 'plugins.manage' },
     { name: 'PluginsRollbackGeneration', method: 'plugins:rollbackGeneration', capability: 'plugins.manage' },
+
+    // Update
+    { name: 'UpdateCheck', method: 'update:check', capability: 'system.update' },
+    { name: 'UpdateDownload', method: 'update:download', capability: 'system.update' },
+    { name: 'UpdateCancel', method: 'update:cancel', capability: 'system.update' },
+    { name: 'UpdateApply', method: 'update:apply', capability: 'system.update' },
+    { name: 'UpdateGetState', method: 'update:getState', capability: 'system.update' },
 ])
 
 export const rendererFacingDescriptorNames: readonly string[] = Object.freeze(

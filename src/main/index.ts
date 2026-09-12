@@ -1,7 +1,8 @@
 import { app, BrowserWindow, nativeImage, screen, shell } from 'electron'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { resolveMainEntry } from './bootstrapper.js'
 import {
   createServices,
   registerIpcHandlers,
@@ -20,9 +21,6 @@ import { bootstrapPluginGraph } from './plugins/catalog/bootstrapPluginGraph.js'
 import { MainPluginRuntimeHost } from './plugins/runtime/MainPluginRuntimeHost.js'
 import { MainPluginActivationCoordinator } from './plugins/runtime/MainPluginActivationCoordinator.js'
 import { rotateNativeImage45 } from './utils/imageRotate.js'
-
-// Register privileged schemes before app ready
-registerPluginSchemesAsPrivileged()
 
 // Prevent unhandled EPIPE errors when stdout/stderr or IPC pipes close abruptly
 process.stdout?.on?.('error', (err: NodeJS.ErrnoException) => {
@@ -47,6 +45,14 @@ let mainWindow: BrowserWindow | null = null
 let services: AppServices | null = null
 let pluginRuntimeHost: MainPluginRuntimeHost | null = null
 let isQuitting = false
+let healthCheckTimer: NodeJS.Timeout | null = null
+
+function clearHealthTimer(): void {
+  if (healthCheckTimer) {
+    clearTimeout(healthCheckTimer)
+    healthCheckTimer = null
+  }
+}
 
 const isDev = !app.isPackaged || process.env.NODE_ENV === 'development'
 if (isDev) {
@@ -189,17 +195,36 @@ function createWindow(services: AppServices): BrowserWindow {
   })
 
   win.on('closed', () => {
+    clearHealthTimer()
     mainWindow = null
   })
 
   return win
 }
 
-const gotTheLock = app.requestSingleInstanceLock()
+async function bootstrap(): Promise<void> {
+  if (app.isPackaged) {
+    const activeEntry = resolveMainEntry(import.meta.url)
+    if (activeEntry && path.resolve(activeEntry) !== path.resolve(__filename)) {
+      try {
+        await import(pathToFileURL(activeEntry).href)
+        return
+      } catch (err) {
+        console.error('[Bootstrapper] Failed to load active updated asar entry, falling back to base entry:', err)
+      }
+    }
+  }
 
-if (!gotTheLock) {
-  app.quit()
-} else {
+  // Register privileged schemes before app ready
+  registerPluginSchemesAsPrivileged()
+
+  const gotTheLock = app.requestSingleInstanceLock()
+
+  if (!gotTheLock) {
+    app.quit()
+    return
+  }
+
   app.on('second-instance', () => {
     if (process.platform === 'darwin' && app.dock) {
       app.dock.show()
@@ -272,6 +297,18 @@ if (!gotTheLock) {
 
     mainWindow = createWindow(services)
 
+    // Schedule 5-second health confirmation heartbeat
+    clearHealthTimer()
+    healthCheckTimer = setTimeout(() => {
+      healthCheckTimer = null
+      try {
+        services?.updateService?.confirmHealthy()
+      } catch (err) {
+        console.warn('[Main] Failed to confirm update health:', err)
+      }
+    }, 5000)
+    healthCheckTimer.unref?.()
+
     // Auto-start Web Server after Main generation is committed (or immediately if active)
     const initWebServer = async () => {
       if (!services) return
@@ -319,11 +356,22 @@ if (!gotTheLock) {
         mainWindow.focus()
       } else if (services) {
         mainWindow = createWindow(services)
+        clearHealthTimer()
+        healthCheckTimer = setTimeout(() => {
+          healthCheckTimer = null
+          try {
+            services?.updateService?.confirmHealthy()
+          } catch (err) {
+            console.warn('[Main] Failed to confirm update health:', err)
+          }
+        }, 5000)
+        healthCheckTimer.unref?.()
       }
     })
   })
 
   app.on('window-all-closed', () => {
+    clearHealthTimer()
     if (services) {
       void services.disposeAll()
     }
@@ -335,6 +383,7 @@ if (!gotTheLock) {
 
   app.on('before-quit', () => {
     isQuitting = true
+    clearHealthTimer()
     if (services) {
       void services.disposeAll()
     }
@@ -343,3 +392,5 @@ if (!gotTheLock) {
     }
   })
 }
+
+void bootstrap()

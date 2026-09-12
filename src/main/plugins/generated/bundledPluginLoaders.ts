@@ -221,7 +221,8 @@ export const bundledManifests: Readonly<Record<string, PluginManifest>> = Object
                 "webserver.*",
                 "plugins.read",
                 "plugins.manage",
-                "plugins.install"
+                "plugins.install",
+                "system.update"
         ],
         "contributes": {
                 "service": [

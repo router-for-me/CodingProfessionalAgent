@@ -25,6 +25,7 @@ import {
     SettingsSelect,
     ToggleSwitch,
 } from './SettingsControls.js'
+import { UpdateSection } from './UpdateSection.js'
 
 const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
     showContextUsage: true,
@@ -369,6 +370,8 @@ export function GeneralSection() {
                     />
                 </SettingsCard>
             </SettingsSection>
+
+            <UpdateSection />
         </div>
     )
 }

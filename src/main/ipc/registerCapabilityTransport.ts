@@ -332,6 +332,7 @@ const STANDARD_CAPABILITY_EVENTS: ReadonlyArray<{ event: string; capability: str
     { event: 'schedule:triggered', capability: 'schedule.read' },
     // Operational native stream used by PTY/process/websocket capability clients.
     { event: 'native-event', capability: 'pty.spawn' },
+    { event: 'update:status-changed', capability: 'system.update' },
 ])
 
 /**
