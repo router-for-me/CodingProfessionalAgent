@@ -20,6 +20,33 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 describe('createHostServices', () => {
+    it('routes memory filesystem operations to registered native RPCs and normalizes entries', async () => {
+        const capabilityClient = { invoke: vi.fn().mockResolvedValue(undefined) }
+        const fileSystem = createHostServices({ capabilityClient }).fileSystem!
+        capabilityClient.invoke.mockResolvedValueOnce([{ name: 'link', isDir: false, isSymbolicLink: true }])
+        expect(await fileSystem.readDir!('/memories')).toEqual([
+            { name: 'link', isDirectory: false, isFile: false, isSymbolicLink: true, path: '/memories/link' },
+        ])
+        expect(capabilityClient.invoke).toHaveBeenLastCalledWith('native:readDir', ['/memories'])
+        await fileSystem.stat!('/memories')
+        expect(capabilityClient.invoke).toHaveBeenLastCalledWith('native:stat', ['/memories'])
+        await fileSystem.removeFile!('/memories/note.md')
+        expect(capabilityClient.invoke).toHaveBeenLastCalledWith('native:removeFile', ['/memories/note.md'])
+        await fileSystem.mkdirAll!('/memories')
+        expect(capabilityClient.invoke).toHaveBeenLastCalledWith('native:mkdirAll', ['/memories'])
+        capabilityClient.invoke.mockResolvedValueOnce({ homeDir: '/home/test' })
+        await fileSystem.getRuntimeInfo!()
+        expect(capabilityClient.invoke).toHaveBeenLastCalledWith('native:runtimeInfo')
+    })
+
+    it('propagates filesystem transport failures', async () => {
+        const capabilityClient = { invoke: vi.fn().mockRejectedValue(new Error('denied')) }
+        const fileSystem = createHostServices({ capabilityClient }).fileSystem!
+        await expect(fileSystem.removeFile!('/memories/note.md')).rejects.toThrow('denied')
+        await expect(fileSystem.readDir!('/memories')).rejects.toThrow('denied')
+        await expect(fileSystem.stat!('/memories')).rejects.toThrow('denied')
+    })
+
     it('creates hook io through the injected HookService', async () => {
         const capabilityClient = {
             invoke: vi.fn().mockResolvedValue(undefined),

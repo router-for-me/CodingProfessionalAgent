@@ -321,6 +321,7 @@ export interface FileStat {
 export interface DirEntry {
   name: string
   isDir: boolean
+  isSymbolicLink?: boolean
 }
 
 export interface ScannedPlugin {

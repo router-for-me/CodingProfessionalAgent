@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
     LocalMemoriesBackend,
     type ElectronBridgeLike,
@@ -750,14 +750,48 @@ describe('LocalMemoriesBackend', () => {
             ).rejects.toThrow(/was not found/)
         })
 
-        it('does not follow or remove symlinks escaping root during deletion', async () => {
+        it('unlinks symlinks without touching their external targets', async () => {
             const backend = LocalMemoriesBackend.fromMemoryRoot(memoryRoot, mockBridge)
             mockBridge.addFile('MEMORY.md', 'Index')
             mockBridge.addSymlink('outside_symlink', '/outside/secret.txt')
+            mockBridge.files.set('/outside/secret.txt', 'secret')
 
             await backend.deleteLocalMemory()
 
             expect(mockBridge.files.has('/test-memories/MEMORY.md')).toBe(false)
+            expect(mockBridge.symlinks.size).toBe(0)
+            expect(mockBridge.files.get('/outside/secret.txt')).toBe('secret')
+        })
+
+        it.each(['Stat', 'ReadDir', 'RemoveFile'] as const)('rejects missing %s capability', async (method) => {
+            Object.defineProperty(mockBridge, method, { value: undefined })
+            await expect(deleteLocalMemory({ memoryRoot, bridge: mockBridge })).rejects.toThrow(`${method} is unavailable`)
+        })
+
+        it.each(['Stat', 'ReadDir', 'RemoveFile'] as const)('propagates %s permission failures', async (method) => {
+            mockBridge.addFile('MEMORY.md', 'Keep me')
+            vi.spyOn(mockBridge, method).mockRejectedValue(new Error('EACCES: permission denied'))
+            await expect(deleteLocalMemory({ memoryRoot, bridge: mockBridge })).rejects.toThrow('EACCES')
+            expect(mockBridge.files.size).toBe(1)
+        })
+
+        it('rejects a no-op remover instead of reporting success', async () => {
+            mockBridge.addFile('MEMORY.md', 'Keep me')
+            vi.spyOn(mockBridge, 'RemoveFile').mockResolvedValue(undefined)
+            await expect(deleteLocalMemory({ memoryRoot, bridge: mockBridge })).rejects.toThrow('incomplete')
+        })
+
+        it('propagates root creation failure', async () => {
+            mockBridge.dirs.clear()
+            vi.spyOn(mockBridge, 'MkdirAll').mockRejectedValue(new Error('EROFS'))
+            await expect(deleteLocalMemory({ memoryRoot, bridge: mockBridge })).rejects.toThrow('EROFS')
+        })
+
+        it('does not guess a root when runtime lookup fails', async () => {
+            vi.spyOn(mockBridge, 'RuntimeInfo').mockRejectedValue(new Error('disconnected'))
+            const remove = vi.spyOn(mockBridge, 'RemoveFile')
+            await expect(deleteLocalMemory({ bridge: mockBridge })).rejects.toThrow('disconnected')
+            expect(remove).not.toHaveBeenCalled()
         })
 
         it('creates memory root if it did not exist initially', async () => {

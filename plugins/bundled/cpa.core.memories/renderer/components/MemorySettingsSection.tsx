@@ -57,32 +57,27 @@ export function MemorySettingsSection({ backendOptions }: MemorySettingsSectionP
         const fileSystemService = services?.fileSystem
         if (!fileSystemService) return undefined
         return {
-            RuntimeInfo: () =>
-                fileSystemService.getRuntimeInfo
-                    ? fileSystemService.getRuntimeInfo()
-                    : Promise.resolve({ homeDir: '/home/user', platform: 'darwin' }),
+            RuntimeInfo: fileSystemService.getRuntimeInfo?.bind(fileSystemService),
             ReadFile: (p: string) => fileSystemService.readFile(p),
             ReadFileIfExists: (p: string) =>
                 fileSystemService.readFileIfExists
                     ? fileSystemService.readFileIfExists(p)
                     : Promise.resolve(null),
             WriteFile: (p: string, d: string) => fileSystemService.writeFile(p, d),
-            MkdirAll: (p: string) =>
-                fileSystemService.mkdirAll ? fileSystemService.mkdirAll(p) : Promise.resolve(),
-            Stat: (p: string) =>
-                fileSystemService.stat ? fileSystemService.stat(p) : Promise.resolve(null as any),
-            ReadDir: async (p: string) => {
-                if (!fileSystemService.readDir) return []
-                const list = await fileSystemService.readDir(p)
-                return (list || []).map((e) => ({ name: e.name, isDir: e.isDirectory }))
-            },
+            MkdirAll: fileSystemService.mkdirAll?.bind(fileSystemService),
+            RemoveFile: fileSystemService.removeFile?.bind(fileSystemService),
+            Stat: fileSystemService.stat?.bind(fileSystemService),
+            ReadDir: fileSystemService.readDir ? async (p: string) => {
+                const list = await fileSystemService.readDir!(p)
+                return list.map((e) => ({ name: e.name, isDir: e.isDirectory, isSymbolicLink: e.isSymbolicLink }))
+            } : undefined,
         }
     }, [services?.fileSystem])
 
     const pushToast = useCallback(
-        (msg: string) => {
+        (msg: string, type: 'info' | 'error' = 'info') => {
             if (services?.notifications?.show) {
-                services.notifications.show({ title: msg, message: msg, type: 'info' })
+                services.notifications.show({ title: msg, message: msg, type })
             }
         },
         [services?.notifications],
@@ -92,8 +87,8 @@ export function MemorySettingsSection({ backendOptions }: MemorySettingsSectionP
         setDeleting(true)
         try {
             await deleteLocalMemory({
-                bridge: backendOptions?.bridge ?? adaptedBridge,
                 ...backendOptions,
+                bridge: backendOptions?.bridge ?? adaptedBridge,
             })
             pushToast(t('settings.personalization.memoryDeleted', { defaultValue: 'Local memory deleted' }))
         } catch {
@@ -101,6 +96,7 @@ export function MemorySettingsSection({ backendOptions }: MemorySettingsSectionP
                 t('settings.personalization.deleteMemoryFailed', {
                     defaultValue: 'Failed to delete local memory',
                 }),
+                'error',
             )
         } finally {
             setDeleting(false)

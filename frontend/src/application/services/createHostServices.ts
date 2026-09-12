@@ -1339,30 +1339,41 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
         },
         async mkdirAll(path: string): Promise<void> {
             if (capabilityClient) {
-                await capabilityClient.invoke('filesystem.mkdirAll', [path])
+                await capabilityClient.invoke('native:mkdirAll', [path])
                 return
             }
             const bridge = getHostBridge()
             if (bridge?.MkdirAll) {
                 await bridge.MkdirAll(path)
+                return
             }
+            throw new Error('MkdirAll is unavailable')
         },
-        async readDir(path: string): Promise<{ name: string; isDirectory: boolean; isFile: boolean; path: string }[]> {
+        async readDir(path: string): Promise<{ name: string; isDirectory: boolean; isFile: boolean; path: string; isSymbolicLink?: boolean }[]> {
             if (capabilityClient) {
-                const res = await capabilityClient.invoke('filesystem.readDir', [path])
-                return (res ?? []) as any[]
+                const res = await capabilityClient.invoke('native:readDir', [path]) as Array<{ name: string; isDir: boolean; isSymbolicLink?: boolean }> | null
+                if (!res) throw new Error(`Unable to read directory '${path}'`)
+                return res.map((item) => ({
+                    name: item.name,
+                    isDirectory: item.isDir,
+                    isFile: !item.isDir && !item.isSymbolicLink,
+                    isSymbolicLink: item.isSymbolicLink,
+                    path: `${path}/${item.name}`,
+                }))
             }
             const bridge = getHostBridge()
             if (bridge?.ReadDir) {
                 const list = await bridge.ReadDir(path)
-                return (list || []).map((item) => ({
+                if (!list) throw new Error(`Unable to read directory '${path}'`)
+                return list.map((item) => ({
                     name: item.name,
                     isDirectory: item.isDir,
-                    isFile: !item.isDir,
+                    isFile: !item.isDir && !item.isSymbolicLink,
+                    isSymbolicLink: item.isSymbolicLink,
                     path: `${path}/${item.name}`,
                 }))
             }
-            return []
+            throw new Error('ReadDir is unavailable')
         },
         async selectFilesAndFolders(title?: string): Promise<Array<{ name: string; path: string; isDirectory: boolean }>> {
             if (capabilityClient) {
@@ -1387,13 +1398,13 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
         },
         async stat(path: string): Promise<any> {
             if (capabilityClient) {
-                return capabilityClient.invoke('filesystem.stat', [path])
+                return capabilityClient.invoke('native:stat', [path])
             }
             const bridge = getHostBridge()
             if (bridge?.Stat) {
                 return bridge.Stat(path)
             }
-            return null
+            throw new Error('Stat is unavailable')
         },
         async removeDir(dirPath: string): Promise<void> {
             if (capabilityClient) {
@@ -1407,29 +1418,26 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
         },
         async removeFile(filePath: string): Promise<void> {
             if (capabilityClient) {
-                await capabilityClient.invoke('filesystem.removeFile', [filePath])
+                await capabilityClient.invoke('native:removeFile', [filePath])
                 return
             }
             const bridge = getHostBridge()
             if (bridge?.RemoveFile) {
                 await bridge.RemoveFile(filePath)
+                return
             }
+            throw new Error('RemoveFile is unavailable')
         },
         async getRuntimeInfo(): Promise<{ platform: string; homeDir: string; userConfigDir: string; tempDir: string }> {
             if (capabilityClient) {
-                const res = await capabilityClient.invoke('native.runtimeInfo')
+                const res = await capabilityClient.invoke('native:runtimeInfo')
                 if (res) return res as any
             }
             const bridge = getHostBridge()
             if (bridge?.RuntimeInfo) {
                 return bridge.RuntimeInfo()
             }
-            return {
-                platform: typeof navigator !== 'undefined' && /mac/i.test(navigator.userAgent) ? 'darwin' : 'linux',
-                homeDir: '/home/user',
-                userConfigDir: '/home/user/.config',
-                tempDir: '/tmp',
-            }
+            throw new Error('RuntimeInfo is unavailable')
         },
     }
 

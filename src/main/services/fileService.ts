@@ -112,6 +112,7 @@ export class FileService {
       return entries.map((entry) => ({
         name: entry.name,
         isDir: entry.isDirectory(),
+        isSymbolicLink: entry.isSymbolicLink(),
       }))
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {

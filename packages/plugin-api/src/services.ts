@@ -694,7 +694,7 @@ export interface FileSystemService {
     readFileIfExists?(path: string): Promise<{ dataBase64: string } | null>
     writeFile(path: string, dataBase64: string): Promise<void>
     mkdirAll?(path: string): Promise<void>
-    readDir?(path: string): Promise<{ name: string; isDirectory: boolean; isFile: boolean; path: string }[]>
+    readDir?(path: string): Promise<{ name: string; isDirectory: boolean; isFile: boolean; path: string; isSymbolicLink?: boolean }[]>
     stat?(path: string): Promise<any>
     removeDir?(path: string): Promise<void>
     removeFile?(path: string): Promise<void>

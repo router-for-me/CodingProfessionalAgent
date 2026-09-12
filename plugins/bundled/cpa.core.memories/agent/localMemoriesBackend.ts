@@ -927,56 +927,66 @@ export async function addAdHocNote(
  * Delete all local memories under memory root and ensure empty root exists.
  */
 export async function deleteLocalMemory(options?: LocalMemoriesBackendOptions): Promise<void> {
-    const { root, bridge } = await resolveBackendContext(options)
-    const stat = await metadataOrNull(bridge, root)
-    const mkdirFn = bridge.MkdirAll ? bridge.MkdirAll.bind(bridge) : (bridge as { mkdirAll?: (p: string) => Promise<void> }).mkdirAll?.bind(bridge)
-    if (!stat) {
-        if (mkdirFn) {
-            await mkdirFn(root)
-        }
-        return
+    // Destructive operations must not guess a home after runtime lookup fails.
+    if (!options?.memoryRoot) {
+        const info = await options?.bridge?.RuntimeInfo?.()
+        if (!info?.homeDir) throw new Error('Memory home directory is unavailable')
+        const dirName = (info as any).appConfigDirName || getAppConfigDirName((info as any).isDebug)
+        options = { ...options, memoryRoot: joinPath(info.homeDir, dirName, 'memories') }
     }
+    const { root, bridge } = await resolveBackendContext(options)
+    if (!bridge.Stat) throw new Error('Stat is unavailable')
+    let stat: Awaited<ReturnType<NonNullable<ElectronBridgeLike['Stat']>>>
+    try {
+        stat = await bridge.Stat(root)
+        if (!stat) throw new Error('Memory root metadata is unavailable')
+    } catch (error) {
+        // IPC may preserve only the message, not the Node error code.
+        if ((error as { code?: string })?.code !== 'ENOENT' && !/\bENOENT\b/.test(String(error))) throw error
+        if (!bridge.MkdirAll) throw new Error('MkdirAll is unavailable')
+        await bridge.MkdirAll(root)
+        stat = await bridge.Stat(root)
+    }
+    if (!stat?.isDir || stat.isSymbolicLink) throw new Error('Memory root must be a directory')
 
     const canonicalRoot = await getCanonicalPath(bridge, root)
     const removeFileFn = bridge.RemoveFile ? bridge.RemoveFile.bind(bridge) : (bridge as { removeFile?: (p: string) => Promise<void> }).removeFile?.bind(bridge)
     const readDirFn = bridge.ReadDir ? bridge.ReadDir.bind(bridge) : (bridge as { readDir?: (p: string) => Promise<Array<{ name: string; isDir: boolean; isSymbolicLink?: boolean }> | null> }).readDir?.bind(bridge)
 
-    async function removeFileSafe(filePath: string): Promise<void> {
-        if (removeFileFn) {
-            await removeFileFn(filePath).catch(() => {})
-        }
-    }
+    if (!removeFileFn) throw new Error('RemoveFile is unavailable')
+    if (!readDirFn) throw new Error('ReadDir is unavailable')
 
-    async function clearDirectory(dirPath: string): Promise<void> {
-        if (!readDirFn) return
-        const entries = (await readDirFn(dirPath)) || []
+    async function clearDirectory(dirPath: string, verifyOnly = false): Promise<void> {
+        const entries = await readDirFn!(dirPath)
+        if (!entries) throw new Error(`Unable to read memory directory '${dirPath}'`)
         for (const entry of entries) {
-            const entryPath = joinPath(dirPath, entry.name)
-            const canonicalEntry = await getCanonicalPath(bridge, entryPath)
-            if (!isPathContained(canonicalRoot, canonicalEntry)) {
-                // Do not follow or delete symlinks pointing outside root
-                continue
+            if (!entry.name || entry.name === '.' || entry.name === '..' || /[/\\\\]/.test(entry.name)) {
+                throw new Error('Invalid memory directory entry')
             }
-
-            const entryStat = await metadataOrNull(bridge, entryPath)
-            const isSymlink =
-                entryStat?.isSymbolicLink ||
-                (entryStat?.mode && (entryStat.mode & 0o170000) === 0o120000) ||
-                entry.isSymbolicLink
-            const isDir = entryStat ? entryStat.isDir : entry.isDir
-
-            if (isDir && !isSymlink) {
-                await clearDirectory(entryPath)
+            const entryPath = joinPath(dirPath, entry.name)
+            // Unlink links themselves, never traverse their targets (including broken links).
+            const entryStat = entry.isSymbolicLink ? undefined : await bridge.Stat!(entryPath)
+            if (!entry.isSymbolicLink && !entryStat) throw new Error(`Metadata unavailable for '${entryPath}'`)
+            const isSymlink = entry.isSymbolicLink || entryStat?.isSymbolicLink ||
+                (entryStat?.mode && (entryStat.mode & 0o170000) === 0o120000)
+            if (!isSymlink) {
+                const canonicalEntry = await getCanonicalPath(bridge, entryPath)
+                if (!isPathContained(canonicalRoot, canonicalEntry)) {
+                    throw new Error(`Memory path '${entryPath}' escapes the memories root`)
+                }
+            }
+            if (entryStat?.isDir && !isSymlink) {
+                await clearDirectory(entryPath, verifyOnly)
             } else {
-                await removeFileSafe(entryPath)
+                if (verifyOnly) throw new Error(`Memory deletion incomplete: '${entryPath}' remains`)
+                await removeFileFn!(entryPath)
             }
         }
     }
 
     await clearDirectory(root)
-    if (mkdirFn) {
-        await mkdirFn(root).catch(() => {})
-    }
+    // Detect no-op adapters and concurrent writes. Retain empty directories for reuse.
+    await clearDirectory(root, true)
 }
 
 /**

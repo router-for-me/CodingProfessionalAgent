@@ -38,6 +38,10 @@ describe('MemorySettingsSection', () => {
         mockFileSystemService = {
             readFile: vi.fn(),
             writeFile: vi.fn(),
+            getRuntimeInfo: vi.fn().mockResolvedValue({ homeDir: '/test/home', appConfigDirName: '.cpa-test' }),
+            stat: vi.fn().mockImplementation(async (path: string) => ({ isDir: !path.endsWith('.md'), mode: 0 })),
+            mkdirAll: vi.fn(),
+            removeFile: vi.fn(),
             readDir: vi.fn().mockResolvedValue([]),
         } as unknown as FileSystemService
     })
@@ -87,14 +91,31 @@ describe('MemorySettingsSection', () => {
         })
     })
 
-    it('deletes memory and shows toast notification', async () => {
-        renderWithServices(<MemorySettingsSection />)
-
-        const deleteButton = screen.getByRole('button', { name: 'Delete' })
-        fireEvent.click(deleteButton)
-
+    it('actually deletes memory through host services before showing success', async () => {
+        vi.mocked(mockFileSystemService.readDir!).mockResolvedValueOnce([
+            { name: 'MEMORY.md', isDirectory: false, isFile: true, path: '' },
+        ])
+        renderWithServices(<MemorySettingsSection backendOptions={{ bridge: undefined }} />)
+        fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
         await waitFor(() => {
-            expect(mockNotificationService.show).toHaveBeenCalled()
+            expect(mockNotificationService.show).toHaveBeenCalledWith(expect.objectContaining({ title: 'Local memory deleted', type: 'info' }))
         })
+        expect(mockFileSystemService.removeFile).toHaveBeenCalledWith('/test/home/.cpa-test/memories/MEMORY.md')
+        expect(mockFileSystemService.readDir).toHaveBeenCalledTimes(2)
+    })
+
+    it.each(['missing', 'rejected', 'no-op'] as const)('shows only failure when deletion is %s', async (failure) => {
+        vi.mocked(mockFileSystemService.readDir!).mockResolvedValue([
+            { name: 'MEMORY.md', isDirectory: false, isFile: true, path: '' },
+        ])
+        if (failure === 'missing') mockFileSystemService.removeFile = undefined
+        if (failure === 'rejected') vi.mocked(mockFileSystemService.removeFile!).mockRejectedValue(new Error('EACCES'))
+        renderWithServices(<MemorySettingsSection />)
+        fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+        await waitFor(() => {
+            expect(mockNotificationService.show).toHaveBeenCalledWith(expect.objectContaining({ title: 'Failed to delete local memory', type: 'error' }))
+        })
+        expect(mockNotificationService.show).toHaveBeenCalledTimes(1)
+        expect(screen.getByRole('button', { name: 'Delete' })).toBeEnabled()
     })
 })

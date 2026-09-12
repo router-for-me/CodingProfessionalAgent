@@ -3,6 +3,7 @@ import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import * as os from 'node:os'
 import { FileService } from '../src/main/services/fileService.js'
+import { deleteLocalMemory } from '../plugins/bundled/cpa.core.memories/agent/localMemoriesBackend.js'
 
 describe('FileService', () => {
   let service: FileService
@@ -97,6 +98,34 @@ describe('FileService', () => {
     const nestedDir = path.join(tempDir, 'sub')
     await service.removeDir(nestedDir)
     expect(await service.readDir(nestedDir)).toBeNull()
+  })
+
+  it('deletes real memory files without traversing directory or broken symlinks', async () => {
+    const root = path.join(tempDir, 'memories')
+    const outside = path.join(tempDir, 'outside')
+    await fs.mkdir(path.join(root, 'nested'), { recursive: true })
+    await fs.mkdir(outside)
+    await fs.writeFile(path.join(root, 'nested', 'note.md'), 'memory')
+    await fs.writeFile(path.join(root, '.hidden'), 'hidden memory')
+    await fs.writeFile(path.join(outside, 'keep.md'), 'keep')
+    await fs.symlink(outside, path.join(root, 'external'), 'dir')
+    await fs.symlink(root, path.join(root, 'cycle'), 'dir')
+    await fs.symlink(path.join(tempDir, 'missing'), path.join(root, 'broken'))
+
+    const options = {
+      memoryRoot: root,
+      bridge: {
+        Stat: service.stat.bind(service),
+        ReadDir: service.readDir.bind(service),
+        RemoveFile: service.removeFile.bind(service),
+        MkdirAll: service.mkdirAll.bind(service),
+      },
+    }
+    await deleteLocalMemory(options)
+    await deleteLocalMemory(options)
+    expect(await fs.readdir(root)).toEqual(['nested'])
+    expect(await fs.readdir(path.join(root, 'nested'))).toEqual([])
+    expect(await fs.readFile(path.join(outside, 'keep.md'), 'utf8')).toBe('keep')
   })
 
   it('realPath resolves symlinks', async () => {
