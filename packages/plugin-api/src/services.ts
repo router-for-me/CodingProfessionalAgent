@@ -913,6 +913,9 @@ export interface SubAgentRecord {
     pausedMs?: number
     depth?: number
     parentAgentId?: string
+    roleId?: string
+    roleName?: string
+    rolePrompt?: string
 }
 
 export interface SubAgentService {

@@ -1250,6 +1250,7 @@ export class CLIProxyAPIAgentService implements AgentService {
                     localMemoryEnabled: input.localMemoryEnabled,
                     extensionRegistry: this.extensionRegistry,
                     worktreePolicy,
+                    subagentsSettings,
                 }),
                 signal,
             )

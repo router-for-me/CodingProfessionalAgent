@@ -9,6 +9,7 @@ import type {
     ResourceKind,
     ResourceProvider,
     ResourceProviderInput,
+    SubagentsSettings,
 } from '@cpa/plugin-api'
 import type { PersonalityTone } from '@/types/models'
 import {
@@ -29,6 +30,7 @@ import {
     expandPromptTemplate,
     expandSkillCommand,
     formatSkillsForPrompt,
+    formatSubagentRolesForPrompt,
     isAbsolutePath,
 } from '@cpa/plugin-sdk'
 import {
@@ -103,6 +105,8 @@ export interface LoadResourceSnapshotInput {
     agentTarget?: AgentTarget
     /** Optional session ID. */
     sessionId?: string
+    /** Optional subagents settings containing pre-configured roles. */
+    subagentsSettings?: SubagentsSettings
 }
 
 export interface ContextProviderItem {
@@ -364,7 +368,14 @@ export async function loadResourcesFromProviders(
     })
 
     const skillsSection = formatSkillsForPrompt(skills, hasReadTool)
-    let systemPrompt = basePrompt + skillsSection
+    const hasSpawnAgentTool = tools.some((tool) => tool.name === 'spawn_agent')
+    const subagentRoles =
+        hasSpawnAgentTool && input.subagentsSettings?.enabled !== false
+            ? (input.subagentsSettings?.roles ?? [])
+            : []
+    const rolesSection = formatSubagentRolesForPrompt(subagentRoles)
+
+    let systemPrompt = basePrompt + skillsSection + rolesSection
     if (effectiveCwd) {
         systemPrompt += `\nCurrent working directory: ${normalizePromptPath(effectiveCwd)}`
     }
@@ -413,6 +424,12 @@ export async function loadResourcesFromProviders(
         addSystemPromptPart({
             id: 'skills',
             content: skillsSection,
+        })
+    }
+    if (rolesSection.length > 0) {
+        addSystemPromptPart({
+            id: 'subagent-roles',
+            content: rolesSection,
         })
     }
     if (effectiveCwd) {

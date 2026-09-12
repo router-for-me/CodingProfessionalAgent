@@ -12,6 +12,7 @@ import {
     type SubAgentIconId,
     type SubAgentRecord,
     type SubAgentStatus,
+    type SubagentRole,
     type SubagentsSettings,
     type UserEntry,
 } from '@cpa/plugin-api'
@@ -124,6 +125,17 @@ export function isLinkedSubAgent(
     return keepToolCallIds.has(normalizeToolCallId(id))
 }
 
+export function buildSubAgentDeveloperPrompt(
+    roleName?: string,
+    rolePrompt?: string,
+): string {
+    const trimmed = (rolePrompt || '').trim()
+    if (!trimmed) return ''
+    return roleName
+        ? `<developer_instructions>\nRole: ${roleName}\nYou must strictly act according to the following role prompt instructions:\n${trimmed}\n</developer_instructions>`
+        : `<developer_instructions>\nYou must strictly act according to the following role prompt instructions:\n${trimmed}\n</developer_instructions>`
+}
+
 export function buildSubAgentSystemPrompt(
     prepared: any,
     codingTools: readonly AgentTool[],
@@ -132,6 +144,8 @@ export function buildSubAgentSystemPrompt(
         extensionRegistry?: any
         promptGuidelines?: readonly string[]
         allowSubagents?: boolean
+        rolePrompt?: string
+        roleName?: string
     },
 ): string {
     const registry = options?.extensionRegistry
@@ -184,9 +198,33 @@ export function buildSubAgentSystemPrompt(
         personality: prepared?.personality,
     })
 
-    return prepared?.worktreePolicy
+    const withWorktree = prepared?.worktreePolicy
         ? `${systemPrompt}\n${formatWorktreeModePrompt(prepared.worktreePolicy)}`
         : systemPrompt
+
+    let effectiveRolePrompt = (options?.rolePrompt || '').trim()
+    let effectiveRoleName = options?.roleName
+    if (!effectiveRolePrompt && prepared?.subagentsSettings?.roles) {
+        const matched = prepared.subagentsSettings.roles.find(
+            (r: any) =>
+                r.name?.toLowerCase() === agentName.toLowerCase() ||
+                r.id?.toLowerCase() === agentName.toLowerCase(),
+        )
+        if (matched?.description?.trim()) {
+            effectiveRolePrompt = matched.description.trim()
+            effectiveRoleName = matched.name
+        }
+    }
+
+    const developerBlock = buildSubAgentDeveloperPrompt(
+        effectiveRoleName,
+        effectiveRolePrompt,
+    )
+    if (developerBlock) {
+        return `${developerBlock}\n\n${withWorktree}`
+    }
+
+    return withWorktree
 }
 
 export function isSubAgentToolName(name?: string): boolean {
@@ -225,6 +263,7 @@ export interface SubAgentRunRequest {
     reasoningEffort?: string
     speed?: 'standard' | 'fast' | string
     systemPrompt: string
+    developerPrompt?: string
     tools: readonly AgentTool[]
     signal: AbortSignal
     getRuntimeSettings?: () => {
@@ -414,6 +453,18 @@ export class SubAgentHost {
         this.runChild = deps.run
     }
 
+    private findMatchingRole(query?: string): SubagentRole | undefined {
+        if (!query) return undefined
+        const trimmed = query.trim().toLowerCase()
+        if (!trimmed) return undefined
+        const roles = this.config?.subagentsSettings?.roles ?? []
+        return roles.find(
+            (r) =>
+                (r.id && r.id.toLowerCase() === trimmed) ||
+                (r.name && r.name.toLowerCase() === trimmed),
+        )
+    }
+
     private getLimits(): {
         enabled: boolean
         maxGlobal: number
@@ -586,6 +637,7 @@ export class SubAgentHost {
         prompt: string,
         options: {
             name?: string
+            role?: string
             toolCallId?: string
             parentSessionId?: string
             callerAgentId?: string
@@ -708,9 +760,23 @@ export class SubAgentHost {
         const name = makeUniqueAgentName(requestedName, usedNames)
         const appearance = pickSubAgentAppearance(usedNames.size)
         const id = this.generateId()
-        const { modelId: parsedModelId, reasoningEffort: parsedEffort } = parseModelSpec(options.modelId)
-        const explicitEffort = options.reasoningEffort ?? parsedEffort
-        const model = this.resolveModel(parsedModelId || options.modelId)
+
+        const matchedRole =
+            this.findMatchingRole(options.role) ??
+            this.findMatchingRole(requestedName)
+
+        const roleId = matchedRole?.id
+        const roleName = matchedRole?.name
+        const rolePrompt = matchedRole?.description
+
+        // Prioritize role's configured model, falling back to explicitly supplied modelId
+        const effectiveModelId = matchedRole?.modelId || options.modelId
+        const { modelId: parsedModelId, reasoningEffort: parsedEffort } = parseModelSpec(effectiveModelId)
+        const explicitEffort =
+            (matchedRole?.reasoningEffort && matchedRole.reasoningEffort !== 'default')
+                ? matchedRole.reasoningEffort
+                : (options.reasoningEffort ?? parsedEffort)
+        const model = this.resolveModel(parsedModelId || effectiveModelId)
         const dynamicParentEffort = resolveDynamicReasoningEffort(
             prepared.reasoningEffort,
             prepared.model,
@@ -743,6 +809,9 @@ export class SubAgentHost {
             createdAt: this.now(),
             updatedAt: this.now(),
             parentToolCallId: options.toolCallId,
+            roleId,
+            roleName,
+            rolePrompt,
         }
         this.agents.set(id, record)
         this.emitState()
@@ -1303,6 +1372,10 @@ export class SubAgentHost {
             ? (config.allTools && config.allTools.length > 0 ? config.allTools : config.codingTools)
             : codingToolsOnly(config.codingTools)
 
+        const developerPrompt = buildSubAgentDeveloperPrompt(
+            record.roleName,
+            record.rolePrompt,
+        )
         const request: SubAgentRunRequest = {
             agentId,
             sessionId: record.sessionId,
@@ -1319,8 +1392,11 @@ export class SubAgentHost {
                 {
                     extensionRegistry: config.extensionRegistry,
                     allowSubagents: canSpawnChildren,
+                    rolePrompt: record.rolePrompt,
+                    roleName: record.roleName,
                 },
             ),
+            developerPrompt: developerPrompt || undefined,
             tools: effectiveTools,
             signal: runtime.controller.signal,
             // Sub-agents are strictly controlled by the parent agent's parameters,

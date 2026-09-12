@@ -1222,4 +1222,75 @@ describe('SubAgentHost', () => {
         expect(childRunSystemPrompt).not.toContain('Do not spawn other agents.')
         expect(childRunSystemPrompt).toContain('You may spawn child subagents if necessary.')
     })
+
+    it('injects developer-level prompt at the head when spawning with a matching configured role and prioritizes role model/effort', async () => {
+        let childRunSystemPrompt = ''
+        let childRunDeveloperPrompt: string | undefined
+        let childModel: ModelCatalogEntry | undefined
+        let childReasoningEffort: string | undefined
+
+        const roleModel: ModelCatalogEntry = {
+            ...model,
+            id: 'gpt-5.5',
+            label: 'GPT 5.5',
+            reasoningLevels: [{ id: 'high', requestValue: 'high' }],
+        }
+
+        const host = new SubAgentHost({
+            generateId: () => 'sub-role-agent',
+            now: () => 1000,
+            run: (request) => {
+                childRunSystemPrompt = request.systemPrompt
+                childRunDeveloperPrompt = request.developerPrompt
+                childModel = request.model
+                childReasoningEffort = request.reasoningEffort
+                return scriptedRun(request, ['Role task completed'])
+            },
+        })
+
+        const prepared = preparedRun()
+        host.configure({
+            prepared,
+            codingTools: [readTool],
+            models: [model, roleModel],
+            subagentsSettings: {
+                enabled: true,
+                concurrency: 10,
+                maxPerSession: 3,
+                maxDepth: 1,
+                roles: [
+                    {
+                        id: 'reviewer-id',
+                        name: '代码审查员',
+                        description: '负责严格的代码规范审查与安全审计指令。',
+                        modelId: 'gpt-5.5',
+                        reasoningEffort: 'high',
+                    },
+                ],
+            },
+        })
+        host.setParentContext({ sessionId: 'session-root', runId: 'run-1' })
+
+        // Even if the caller passed parent-model, role-configured model should take precedence
+        await host.spawn('请审查这个提交', {
+            name: 'ReviewerBot',
+            role: '代码审查员',
+            modelId: 'parent-model',
+        })
+
+        // Verify developer prompt injected at the head of system prompt
+        expect(childRunSystemPrompt.startsWith('<developer_instructions>')).toBe(true)
+        expect(childRunSystemPrompt).toContain('Role: 代码审查员')
+        expect(childRunSystemPrompt).toContain('负责严格的代码规范审查与安全审计指令。')
+        expect(childRunSystemPrompt).toContain('</developer_instructions>')
+
+        // Verify developerPrompt property on request
+        expect(childRunDeveloperPrompt).toBeDefined()
+        expect(childRunDeveloperPrompt).toContain('Role: 代码审查员')
+        expect(childRunDeveloperPrompt).toContain('负责严格的代码规范审查与安全审计指令。')
+
+        // Verify role's configured model and reasoning effort take priority
+        expect(childModel?.id).toBe('gpt-5.5')
+        expect(childReasoningEffort).toBe('high')
+    })
 })
