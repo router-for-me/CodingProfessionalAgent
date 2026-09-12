@@ -37,16 +37,13 @@ export const ATTACH_MENU_ITEMS: {
     },
 ]
 
-function getProviderIcon(id: string, customIcon?: any): ReactElement {
+function getProviderIcon(_id: string, customIcon?: any): ReactElement {
     if (customIcon) {
         if (typeof customIcon === 'function') {
             const CustomIcon = customIcon
             return <CustomIcon className="size-4 shrink-0 text-[var(--text-muted)]" aria-hidden />
         }
         return customIcon
-    }
-    if (id === 'files') {
-        return <Paperclip className="size-4 shrink-0 text-[var(--text-muted)]" aria-hidden />
     }
     return <Paperclip className="size-4 shrink-0 text-[var(--text-muted)]" aria-hidden />
 }

@@ -1094,8 +1094,6 @@
   "shortcuts.item.sendMessage.desc": "Send message in current editor",
   "shortcuts.item.toggleFastMode.title": "Toggle fast mode",
   "shortcuts.item.toggleFastMode.desc": "Toggle fast mode in current editor",
-  "shortcuts.item.togglePlanMode.title": "Toggle plan mode",
-  "shortcuts.item.togglePlanMode.desc": "Toggle plan mode in current editor",
   "shortcuts.item.toggleCloudLocal.title": "Toggle cloud/local",
   "shortcuts.item.toggleCloudLocal.desc": "Toggle cloud and local execution for CPA Work",
   "shortcuts.item.toggleLocalWorktree.title": "Toggle local/worktree",

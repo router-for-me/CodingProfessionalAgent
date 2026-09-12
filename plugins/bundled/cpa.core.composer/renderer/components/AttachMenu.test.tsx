@@ -8,7 +8,7 @@ describe('AttachMenu', () => {
         await i18n.changeLanguage('en')
     })
 
-    it('renders the files and folders menu item', () => {
+    it('renders header and menu items with labels and descriptions', () => {
         render(
             <AttachMenu
                 activeIndex={0}
@@ -21,19 +21,40 @@ describe('AttachMenu', () => {
         expect(screen.getByText('Add')).toBeInTheDocument()
         expect(screen.getByText('Files & folders')).toBeInTheDocument()
         expect(screen.getAllByRole('option')).toHaveLength(1)
+        expect(screen.queryByText('Goal')).not.toBeInTheDocument()
+        expect(screen.queryByText('Plan mode')).not.toBeInTheDocument()
     })
 
     it('highlights active item based on activeIndex', () => {
-        render(
+        const customProviders = [
+            { id: 'files', label: 'Files & folders' },
+            { id: 'custom', label: 'Custom item' },
+        ]
+        const { rerender } = render(
+            <AttachMenu
+                activeIndex={0}
+                onActiveIndexChange={() => undefined}
+                onSelect={() => undefined}
+                onClose={() => undefined}
+                providers={customProviders}
+            />,
+        )
+
+        const options = screen.getAllByRole('option')
+        expect(options[0]).toHaveAttribute('aria-selected', 'true')
+        expect(options[1]).toHaveAttribute('aria-selected', 'false')
+
+        rerender(
             <AttachMenu
                 activeIndex={1}
                 onActiveIndexChange={() => undefined}
                 onSelect={() => undefined}
                 onClose={() => undefined}
+                providers={customProviders}
             />,
         )
-
-        expect(screen.getByRole('option')).toHaveAttribute('aria-selected', 'true')
+        expect(options[0]).toHaveAttribute('aria-selected', 'false')
+        expect(options[1]).toHaveAttribute('aria-selected', 'true')
     })
 
     it('triggers onSelect when an option is clicked', async () => {
@@ -54,17 +75,23 @@ describe('AttachMenu', () => {
 
     it('triggers onActiveIndexChange on mouse enter', () => {
         const onActiveIndexChange = vi.fn()
+        const customProviders = [
+            { id: 'files', label: 'Files & folders' },
+            { id: 'custom', label: 'Custom item' },
+        ]
         render(
             <AttachMenu
                 activeIndex={0}
                 onActiveIndexChange={onActiveIndexChange}
                 onSelect={() => undefined}
                 onClose={() => undefined}
+                providers={customProviders}
             />,
         )
 
-        fireEvent.mouseEnter(screen.getByRole('option'))
-        expect(onActiveIndexChange).toHaveBeenCalledWith(0)
+        const options = screen.getAllByRole('option')
+        fireEvent.mouseEnter(options[1]!)
+        expect(onActiveIndexChange).toHaveBeenCalledWith(1)
     })
 
     it('closes when clicking outside of composer', async () => {

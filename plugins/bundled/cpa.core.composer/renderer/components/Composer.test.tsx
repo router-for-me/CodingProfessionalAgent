@@ -1309,6 +1309,33 @@ describe('Composer attachments', () => {
             expect(screen.getByText('Folder')).toBeInTheDocument()
         })
     })
+
+    it('does not trigger web file input click when user cancels native selectFilesAndFolders dialog', async () => {
+        const user = userEvent.setup()
+        const selectFilesAndFoldersMock = vi.fn(async () => [])
+        setDefaultHostServices({
+            ...mockServices,
+            fileSystem: {
+                selectFilesAndFolders: selectFilesAndFoldersMock,
+                readFile: vi.fn(async () => ({ dataBase64: '' })),
+            },
+        })
+
+        const clickSpy = vi.spyOn(HTMLInputElement.prototype, 'click')
+
+        render(<Composer onSend={() => undefined} />)
+
+        await user.click(screen.getByRole('button', { name: /Attach/i }))
+        const filesItem = screen.getByText('Files & folders').closest('button')!
+        await user.click(filesItem)
+
+        await waitFor(() => {
+            expect(selectFilesAndFoldersMock).toHaveBeenCalled()
+        })
+
+        expect(clickSpy).not.toHaveBeenCalled()
+        clickSpy.mockRestore()
+    })
 })
 
 describe('Composer run control lock', () => {

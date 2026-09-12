@@ -1094,8 +1094,6 @@
   "shortcuts.item.sendMessage.desc": "发送当前编辑器中的消息",
   "shortcuts.item.toggleFastMode.title": "切换快速模式",
   "shortcuts.item.toggleFastMode.desc": "在当前编辑器中开启或关闭快速模式",
-  "shortcuts.item.togglePlanMode.title": "切换规划模式",
-  "shortcuts.item.togglePlanMode.desc": "在当前编辑器中开启或关闭方案模式",
   "shortcuts.item.toggleCloudLocal.title": "切换云端/本地",
   "shortcuts.item.toggleCloudLocal.desc": "切换 CPA Work 的云端和本地执行",
   "shortcuts.item.toggleLocalWorktree.title": "切换本地/工作树",

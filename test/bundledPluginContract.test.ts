@@ -369,8 +369,6 @@ describe('bundledPluginContract baseline', () => {
                 'context-usage-ring',
                 'model-select',
                 'files',
-                'goal',
-                'plan-mode',
                 'prompt-preprocessor',
                 'skill-preprocessor',
             ]),

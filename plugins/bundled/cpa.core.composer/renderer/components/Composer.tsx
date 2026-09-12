@@ -543,9 +543,8 @@ const BaseComposer = memo(function BaseComposer({
                     const selected = await hostServices.fileSystem.selectFilesAndFolders(title)
                     if (selected && selected.length > 0) {
                         void processSelectedNativeItems(selected)
-                        return
                     }
-                    fileInputRef.current?.click()
+                    return
                 } catch {
                     fileInputRef.current?.click()
                 }
