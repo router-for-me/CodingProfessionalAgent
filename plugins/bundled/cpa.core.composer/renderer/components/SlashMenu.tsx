@@ -213,7 +213,7 @@ export function SlashMenu({
             aria-activedescendant={active.id}
             onKeyDown={handleKeyDown}
             className={cn(
-                'absolute bottom-full left-0 right-0 z-30 mb-2 max-h-64 overflow-y-auto',
+                'absolute bottom-full left-0 right-0 z-[60] mb-2 max-h-64 overflow-y-auto',
                 'rounded-[var(--radius-card)] border border-[var(--border-subtle)]',
                 'bg-[var(--bg-elevated)] py-1 shadow-lg',
                 className,

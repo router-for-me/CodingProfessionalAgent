@@ -1,7 +1,8 @@
 import i18n from '@/i18n'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { AttachMenu } from './AttachMenu.js'
+import { createRef } from 'react'
+import { AttachMenu, computeAttachMenuPosition } from './AttachMenu.js'
 
 describe('AttachMenu', () => {
     beforeEach(async () => {
@@ -110,5 +111,58 @@ describe('AttachMenu', () => {
 
         fireEvent.pointerDown(screen.getByTestId('outside-area'))
         expect(onClose).toHaveBeenCalled()
+    })
+
+    it('computes position correctly above anchor', () => {
+        const sampleRect = {
+            top: 600,
+            left: 200,
+            bottom: 680,
+            right: 800,
+            width: 600,
+            height: 80,
+            x: 200,
+            y: 600,
+            toJSON: () => {},
+        } as DOMRect
+        const pos = computeAttachMenuPosition(sampleRect)
+        expect(pos.bottom).toBe(window.innerHeight - 600 + 8)
+        expect(pos.left).toBe(200)
+    })
+
+    it('renders inside a portal with fixed z-[70] when anchorRef is provided to prevent being covered', () => {
+        const anchorEl = document.createElement('div')
+        anchorEl.getBoundingClientRect = () =>
+            ({
+                top: 500,
+                left: 150,
+                bottom: 580,
+                right: 750,
+                width: 600,
+                height: 80,
+                x: 150,
+                y: 500,
+                toJSON: () => {},
+            }) as DOMRect
+        document.body.appendChild(anchorEl)
+
+        const anchorRef = createRef<HTMLDivElement>()
+        ;(anchorRef as any).current = anchorEl
+
+        render(
+            <AttachMenu
+                anchorRef={anchorRef}
+                activeIndex={0}
+                onActiveIndexChange={() => undefined}
+                onSelect={() => undefined}
+                onClose={() => undefined}
+            />,
+        )
+
+        const menu = screen.getByRole('listbox')
+        expect(menu).toHaveAttribute('data-attach-menu-portal')
+        expect(menu).toHaveClass('fixed', 'z-[70]')
+        expect(menu.style.bottom).toBe(`${window.innerHeight - 500 + 8}px`)
+        expect(menu.style.left).toBe('150px')
     })
 })

@@ -77,7 +77,7 @@ export function QuickModelPicker({
             tabIndex={-1}
             aria-label={t('shortcuts.item.openModelSelector.title', { defaultValue: 'Quick model selector' })}
             className={cn(
-                'absolute bottom-full left-0 right-0 z-30 mb-2.5 max-h-80 overflow-y-auto',
+                'absolute bottom-full left-0 right-0 z-[60] mb-2.5 max-h-80 overflow-y-auto',
                 'rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/95',
                 'p-1.5 shadow-2xl backdrop-blur-xl',
                 className,

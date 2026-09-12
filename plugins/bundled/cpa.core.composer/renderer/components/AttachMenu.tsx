@@ -1,4 +1,13 @@
-import { useEffect, useRef, type ReactElement } from 'react'
+import {
+    useCallback,
+    useEffect,
+    useLayoutEffect,
+    useRef,
+    useState,
+    type ReactElement,
+    type RefObject,
+} from 'react'
+import { createPortal } from 'react-dom'
 import { Paperclip, cn, useTranslation } from '@cpa/plugin-ui'
 import type { AttachmentProvider } from '@cpa/plugin-api'
 
@@ -19,9 +28,19 @@ export interface AttachMenuProps {
     id?: string
     className?: string
     providers?: readonly AttachmentProvider[]
+    anchorRef?: RefObject<HTMLElement | null>
 }
 
 export const ATTACH_MENU_ID = 'composer-attach-menu'
+
+export function computeAttachMenuPosition(anchorRect: DOMRect): { bottom: number; left: number } {
+    const bottom = Math.max(0, window.innerHeight - anchorRect.top + 8)
+    let left = anchorRect.left
+    if (typeof window !== 'undefined' && left + 288 > window.innerWidth - 8) {
+        left = Math.max(8, window.innerWidth - 288 - 8)
+    }
+    return { bottom, left: Math.max(8, left) }
+}
 
 export const ATTACH_MENU_ITEMS: {
     id: AttachMenuItemId
@@ -56,9 +75,35 @@ export function AttachMenu({
     id = ATTACH_MENU_ID,
     className,
     providers = [],
+    anchorRef,
 }: AttachMenuProps) {
     const { t } = useTranslation()
     const listRef = useRef<HTMLDivElement>(null)
+
+    const [position, setPosition] = useState<{ bottom: number; left: number } | null>(() => {
+        if (!anchorRef?.current || typeof window === 'undefined') return null
+        return computeAttachMenuPosition(anchorRef.current.getBoundingClientRect())
+    })
+
+    const updatePosition = useCallback(() => {
+        if (!anchorRef?.current || typeof window === 'undefined') return
+        setPosition(computeAttachMenuPosition(anchorRef.current.getBoundingClientRect()))
+    }, [anchorRef])
+
+    useLayoutEffect(() => {
+        updatePosition()
+    }, [updatePosition])
+
+    useEffect(() => {
+        if (!anchorRef?.current) return
+        const onReposition = () => updatePosition()
+        window.addEventListener('resize', onReposition)
+        window.addEventListener('scroll', onReposition, true)
+        return () => {
+            window.removeEventListener('resize', onReposition)
+            window.removeEventListener('scroll', onReposition, true)
+        }
+    }, [anchorRef, updatePosition])
 
     const items: AttachMenuItem[] =
         providers.length > 0
@@ -107,14 +152,26 @@ export function AttachMenu({
         }
     }, [onClose])
 
-    return (
+    const menuContent = (
         <div
             id={id}
             ref={listRef}
             role="listbox"
+            data-attach-menu-portal={position ? '' : undefined}
             aria-label={t('composer.attachMenu.title', { defaultValue: 'Attach' })}
+            style={
+                position
+                    ? {
+                          bottom: `${position.bottom}px`,
+                          left: `${position.left}px`,
+                      }
+                    : undefined
+            }
             className={cn(
-                'absolute bottom-full left-0 z-40 mb-2 w-72 rounded-[var(--radius-card)]',
+                position
+                    ? 'fixed z-[70]'
+                    : 'absolute bottom-full left-0 z-[70] mb-2',
+                'w-72 rounded-[var(--radius-card)]',
                 'border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-1.5 shadow-xl backdrop-blur-md',
                 'animate-in fade-in-0 zoom-in-95',
                 className,
@@ -163,4 +220,10 @@ export function AttachMenu({
             </div>
         </div>
     )
+
+    if (position && typeof document !== 'undefined') {
+        return createPortal(menuContent, document.body)
+    }
+
+    return menuContent
 }

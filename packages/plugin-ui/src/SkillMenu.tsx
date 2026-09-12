@@ -474,7 +474,7 @@ export function SkillMenu({
             onKeyDown={handleKeyDown}
             style={{ maxHeight }}
             className={cn(
-                'absolute left-0 right-0 z-30 overflow-y-auto',
+                'absolute left-0 right-0 z-[60] overflow-y-auto',
                 placement === 'above'
                     ? 'bottom-full mb-2'
                     : 'top-full mt-2',

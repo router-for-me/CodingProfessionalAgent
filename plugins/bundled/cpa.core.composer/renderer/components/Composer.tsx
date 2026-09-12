@@ -393,6 +393,7 @@ const BaseComposer = memo(function BaseComposer({
 
     const fileInputRef = useRef<HTMLInputElement>(null)
     const textareaRef = useRef<HTMLDivElement>(null)
+    const composerCardRef = useRef<HTMLDivElement>(null)
     const mountedRef = useRef(true)
     const processChainRef = useRef(Promise.resolve())
     const processorRef = useRef<ImageProcessor>(
@@ -1408,10 +1409,17 @@ const BaseComposer = memo(function BaseComposer({
         setAttachments((prev) => prev.filter((item) => item.id !== id))
     }
 
+    const hasAnyMenuOpen =
+        attachMenuOpen ||
+        showSlashMenu ||
+        showSkillMenu ||
+        quickModelPickerOpen
+
     return (
         <div
             className={cn(
-                'pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center px-6 pb-6',
+                'pointer-events-none absolute inset-x-0 bottom-0 flex justify-center px-6 pb-6',
+                hasAnyMenuOpen ? 'z-[60]' : 'z-20',
                 className,
             )}
         >
@@ -1469,8 +1477,10 @@ const BaseComposer = memo(function BaseComposer({
                 </div>
 
                 <div
+                    ref={composerCardRef}
                     className={cn(
-                        'relative z-20 w-full transform-gpu',
+                        'w-full transform-gpu',
+                        hasAnyMenuOpen ? 'relative z-[60]' : 'relative z-20',
                         'rounded-[var(--radius-composer)] border border-[var(--border-composer)]',
                         'bg-[var(--bg-composer)] shadow-[0_12px_40px_rgba(0,0,0,0.35)] backdrop-blur-md',
                     )}
@@ -1492,6 +1502,7 @@ const BaseComposer = memo(function BaseComposer({
 
                     {attachMenuOpen ? (
                         <AttachMenu
+                            anchorRef={composerCardRef}
                             activeIndex={attachMenuActiveIndex}
                             onActiveIndexChange={setAttachMenuActiveIndex}
                             onSelect={handleSelectAttachMenuItem}
@@ -1583,7 +1594,7 @@ const BaseComposer = memo(function BaseComposer({
                                                         attachment.id,
                                                     )
                                                 }
-                                                disabled={controlsLocked}
+                                                disabled={sending}
                                             >
                                                 <X className="size-3 stroke-[2.5]" />
                                             </button>
@@ -1658,7 +1669,7 @@ const BaseComposer = memo(function BaseComposer({
                                             onClick={() =>
                                                 removeAttachment(attachment.id)
                                             }
-                                            disabled={controlsLocked}
+                                            disabled={sending}
                                         >
                                             <X className="size-3 stroke-[2.5]" />
                                         </button>
@@ -1787,13 +1798,15 @@ const BaseComposer = memo(function BaseComposer({
 
                         {toolbarLeftControls.map((ctrl) => {
                             const ControlComponent = ctrl.component
+                            const isAttach = ctrl.id === 'composer-attach'
                             return (
                                 <ControlErrorBoundary key={ctrl.id} id={ctrl.id}>
                                     <ControlComponent
                                         sessionId={effectiveSessionId}
                                         disabled={
-                                            controlsLocked ||
-                                            (ctrl.id === 'composer-attach' && isProcessingAttachments)
+                                            isAttach
+                                                ? false
+                                                : controlsLocked
                                         }
                                         onToggleAttachMenu={() => {
                                             setAttachMenuOpen((prev) => {

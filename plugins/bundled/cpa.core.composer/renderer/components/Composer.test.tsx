@@ -1339,7 +1339,7 @@ describe('Composer attachments', () => {
 })
 
 describe('Composer run control lock', () => {
-    it('keeps textarea unlocked while active, disables image/project/model and keeps Stop enabled', () => {
+    it('keeps textarea and attach button unlocked while active, and keeps Stop enabled', () => {
         render(
             <Composer
                 onSend={() => undefined}
@@ -1353,7 +1353,24 @@ describe('Composer run control lock', () => {
         expect(textarea).toHaveAttribute('contenteditable', 'true')
 
         expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument()
-        expect(screen.getByRole('button', { name: /Attach/i })).toBeDisabled()
+        expect(screen.getByRole('button', { name: /Attach/i })).not.toBeDisabled()
+    })
+
+    it('allows clicking attach button and opening attach menu while session is active', async () => {
+        const user = userEvent.setup()
+        render(
+            <Composer
+                onSend={() => undefined}
+                runStatus="streaming"
+                isStreaming={true}
+            />,
+        )
+
+        const attachBtn = screen.getByRole('button', { name: /Attach/i })
+        expect(attachBtn).toBeEnabled()
+        await user.click(attachBtn)
+        expect(screen.getByRole('listbox', { name: 'Add' })).toBeInTheDocument()
+        expect(screen.getByText('Files & folders')).toBeInTheDocument()
     })
 
     it('also renders Stop button and keeps textarea unlocked when isStreaming is true', () => {
