@@ -24,7 +24,7 @@ import {
 } from './useAgentStream'
 import { SubAgentHost } from '@/features/agent-runtime/host/SubAgentHost'
 import { getHostServices } from '@/application/services/createHostServices'
-import type { SubAgentRecord } from '@cpa/plugin-api'
+import type { SubAgentRecord, SubagentRole } from '@cpa/plugin-api'
 import { useMessageStore } from '@/stores/messageStore'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useSettingsStore } from '@/stores/settingsStore'
@@ -1273,6 +1273,33 @@ describe('useAgentStream', () => {
         })
 
         expect(service.prepareInputs[0]?.language).toBe('zh-CN')
+    })
+
+    it('passes configured subagents settings to prepare on send', async () => {
+        const customRoles: SubagentRole[] = [
+            {
+                id: 'role-reviewer',
+                name: 'Code Reviewer',
+                description: 'Custom review role',
+                modelId: 'gpt-6-astra',
+                reasoningEffort: 'low',
+            },
+        ]
+        useSettingsStore.getState().setSubagentSettings({
+            enabled: true,
+            concurrency: 5,
+            roles: customRoles,
+        })
+        const { result } = renderHook(() => useAgentStream(), {
+            wrapper: wrapperFor(service),
+        })
+
+        await act(async () => {
+            await result.current.send('Hello')
+        })
+
+        expect(service.prepareInputs[0]?.subagentsSettings?.roles).toEqual(customRoles)
+        expect(service.prepareInputs[0]?.subagentsSettings?.concurrency).toBe(5)
     })
 
     it('events stay on original session when currentSession changes mid-stream', async () => {

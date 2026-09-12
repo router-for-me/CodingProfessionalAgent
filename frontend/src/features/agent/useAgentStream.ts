@@ -2124,6 +2124,7 @@ export function useAgentStream(
                         localMemoryEnabled: settings.localMemoryEnabled,
                         scheduleId: payload.scheduleId ?? targetSession?.scheduleId ?? null,
                         sessionId: targetSessionId ?? null,
+                        subagentsSettings: settings.subagents,
                         getEntries: async (sid: string) => {
                             await ensureSessionLoaded(sid)
                             return useMessageStore.getState().getEntries(sid)
