@@ -1406,4 +1406,87 @@ describe('SubAgentHost', () => {
         await host.sendMessage(subAgentId, 'Follow up prompt')
         expect(lastDeveloperPrompt).toContain('Instructions for testing turns.')
     })
+
+    it('restores depth accurately and blocks roles/tools when restored subagent reaches maxDepth', async () => {
+        let childRunTools: AgentTool[] = []
+        let childRunSystemPrompt = ''
+        let childRunDeveloperPrompt: string | undefined
+
+        const spawnTool: AgentTool = {
+            name: 'spawn_agent',
+            label: 'spawn_agent',
+            description: 'Spawn a subagent',
+            parameters: { type: 'object', properties: {} },
+            validate: (input) => (input ?? {}) as Record<string, unknown>,
+            execute: async () => ({ content: [{ type: 'text', text: 'ok' }] }),
+        }
+
+        const host = new SubAgentHost({
+            generateId: () => 'sub-restored-turn',
+            now: () => 1000,
+            run: (request) => {
+                childRunTools = [...request.tools]
+                childRunSystemPrompt = request.systemPrompt
+                childRunDeveloperPrompt = request.developerPrompt
+                return scriptedRun(request, ['Nested task finished'])
+            },
+        })
+
+        const prepared = preparedRun()
+        host.configure({
+            prepared,
+            codingTools: [readTool],
+            allTools: [readTool, spawnTool],
+            models: [model],
+            subagentsSettings: {
+                enabled: true,
+                concurrency: 10,
+                maxPerSession: 3,
+                maxDepth: 2,
+                roles: [
+                    {
+                        id: 'nested-role-id',
+                        name: 'Nested Specialist',
+                        description: 'Specialist prompt for nested tasks.',
+                        modelId: 'parent-model',
+                        reasoningEffort: 'medium',
+                    },
+                ],
+            },
+        })
+        host.setParentContext({ sessionId: 'session-root', runId: 'run-1' })
+
+        // Hydrate a restored depth-2 subagent (at maxDepth = 2, so cannot spawn child subagents)
+        host.hydrate([
+            {
+                id: 'child-depth-2',
+                name: 'NestedChild',
+                color: '#3dd68c',
+                icon: 'atom',
+                parentSessionId: 'session-root',
+                sessionId: 'child-depth-2',
+                modelId: 'parent-model',
+                status: 'completed',
+                depth: 2,
+                parentAgentId: 'parent-agent-id',
+                roleId: 'nested-role-id',
+                roleName: 'Nested Specialist',
+                rolePrompt: 'Specialist prompt for nested tasks.',
+                createdAt: 1000,
+                updatedAt: 1000,
+            },
+        ])
+
+        // Resume / send message to the restored depth-2 subagent
+        await host.sendMessage('child-depth-2', 'Continue work')
+
+        // Verify: It cannot spawn child agents because depth 2 >= maxDepth 2
+        expect(childRunTools.some((t) => t.name === 'spawn_agent')).toBe(false)
+        expect(childRunSystemPrompt).toContain('Do not spawn other agents.')
+        expect(childRunSystemPrompt).not.toContain('<available_roles>')
+        expect(childRunSystemPrompt).not.toContain('<id>nested-role-id</id>')
+
+        // Verify: Developer prompt is still injected properly
+        expect(childRunDeveloperPrompt).toContain('Specialist prompt for nested tasks.')
+    })
 })

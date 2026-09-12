@@ -605,6 +605,7 @@ export class SubAgentHost {
             }
             this.agents.set(record.id, {
                 ...record,
+                depth: typeof record.depth === 'number' ? record.depth : (record.parentAgentId ? 2 : 1),
                 status: record.status,
             })
         }

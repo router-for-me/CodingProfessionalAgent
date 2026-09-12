@@ -3232,6 +3232,8 @@ describe('SessionDatabaseService', () => {
             roleId: 'reviewer-id',
             roleName: '代码审查员',
             rolePrompt: '负责严格的代码规范审查与安全审计指令。',
+            depth: 2,
+            parentAgentId: 'agent-parent-1',
             createdAt: 1000,
             updatedAt: 1000,
           },
@@ -3245,6 +3247,8 @@ describe('SessionDatabaseService', () => {
         roleId: 'reviewer-id',
         roleName: '代码审查员',
         rolePrompt: '负责严格的代码规范审查与安全审计指令。',
+        depth: 2,
+        parentAgentId: 'agent-parent-1',
       })
     })
 
