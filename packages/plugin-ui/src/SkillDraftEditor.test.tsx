@@ -431,4 +431,26 @@ describe('SkillDraftEditor', () => {
         // Second line must have trailing ZWSP so caret is displayed on line 2
         expect(input.textContent).toBe('Line 1\n\u200b')
     })
+
+    it('scrolls to the end position when content height exceeds maxHeight on multiline input', () => {
+        const handleChange = vi.fn()
+        render(
+            <SkillDraftEditor
+                value={'Line 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6\nLine 7\nLine 8\nLine 9'}
+                maxHeight={100}
+                onChange={handleChange}
+            />,
+        )
+
+        const input = screen.getByTestId('composer-input')
+        // Mock scroll dimensions where scrollHeight exceeds clientHeight
+        Object.defineProperty(input, 'scrollHeight', { value: 300, configurable: true })
+        Object.defineProperty(input, 'clientHeight', { value: 100, configurable: true })
+
+        // Trigger input event
+        fireEvent.input(input)
+
+        // Verifies scrollTop was adjusted to show the end position
+        expect(input.scrollTop).toBe(300)
+    })
 })

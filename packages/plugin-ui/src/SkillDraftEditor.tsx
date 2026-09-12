@@ -200,6 +200,7 @@ export function SkillDraftEditor({
         writeDraftDom(root, parts)
         setDraftCaret(root, nextCursor)
         resize()
+        scrollToActivePosition(root)
 
         lastEmittedRef.current = nextText
         onChangeRef.current(nextText, Math.min(nextCursor, nextText.length))
@@ -212,11 +213,13 @@ export function SkillDraftEditor({
         if (isApplyingHistoryRef.current) {
             isApplyingHistoryRef.current = false
             resize()
+            scrollToActivePosition(root)
             return
         }
 
         if (value === lastEmittedRef.current && root.childNodes.length > 0) {
             resize()
+            scrollToActivePosition(root)
             return
         }
 
@@ -226,6 +229,7 @@ export function SkillDraftEditor({
         writeDraftDom(root, parseSkillDraft(value, skillsRef.current))
         setDraftCaret(root, nextCaret)
         resize()
+        scrollToActivePosition(root)
 
         const currentEntry = historyRef.current[historyIndexRef.current]
         if (!currentEntry || currentEntry.value !== value) {
@@ -302,6 +306,7 @@ export function SkillDraftEditor({
             )}
             onInput={() => {
                 resize()
+                scrollToActivePosition(rootRef.current)
                 if (composingRef.current) return
                 emitFromDom()
             }}
@@ -312,11 +317,13 @@ export function SkillDraftEditor({
             }}
             onCompositionUpdate={() => {
                 resize()
+                scrollToActivePosition(rootRef.current)
             }}
             onCompositionEnd={() => {
                 composingRef.current = false
                 setIsComposing(false)
                 resize()
+                scrollToActivePosition(rootRef.current)
                 emitFromDom(true)
             }}
             onKeyUp={() => {
@@ -403,6 +410,7 @@ export function SkillDraftEditor({
                 writeDraftDom(root, parts)
                 setDraftCaret(root, nextCursor)
                 resize()
+                scrollToActivePosition(root)
 
                 lastEmittedRef.current = nextText
                 onChangeRef.current(nextText, Math.min(nextCursor, nextText.length))
@@ -441,6 +449,48 @@ function adjustEditorHeight(
     const next = Math.min(Math.max(measured, minCap), maxHeight)
     root.style.height = `${next}px`
     root.style.overflowY = measured > maxHeight ? 'auto' : 'hidden'
+}
+
+function scrollToActivePosition(root: HTMLElement | null): void {
+    if (!root) return
+    const doScroll = () => {
+        if (!root) return
+        if (root.scrollHeight <= root.clientHeight) return
+
+        try {
+            const selection = window.getSelection()
+            if (selection && selection.rangeCount > 0) {
+                const range = selection.getRangeAt(0)
+                if (root.contains(range.commonAncestorContainer)) {
+                    const rects = range.getClientRects()
+                    const rect = rects.length > 0 ? rects[0] : range.getBoundingClientRect()
+                    const rootRect = root.getBoundingClientRect()
+                    if (rect && rootRect && rect.height > 0) {
+                        if (rect.bottom > rootRect.bottom) {
+                            root.scrollTop += (rect.bottom - rootRect.bottom) + 8
+                            return
+                        } else if (rect.top < rootRect.top) {
+                            root.scrollTop -= (rootRect.top - rect.top) + 8
+                            return
+                        }
+                    }
+                }
+            }
+
+            const { end } = getSelectionOffsets(root)
+            const currentText = readDraftDom(root).text
+            if (end >= currentText.length - 1) {
+                root.scrollTop = root.scrollHeight
+            }
+        } catch {
+            root.scrollTop = root.scrollHeight
+        }
+    }
+
+    doScroll()
+    if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(doScroll)
+    }
 }
 
 function partsChanged(

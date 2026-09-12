@@ -22,9 +22,22 @@ import { SubAgentTabHeaders } from './components/SubAgentTabHeaders.js'
 import { SubAgentPills } from './components/SubAgentPills.js'
 import { PinnedSubAgentsSection } from './components/PinnedSubAgentsSection.js'
 import { SubagentsSection } from './components/SubagentsSection.js'
+import {
+    SubagentRolesSection,
+    getDefaultSubagentRoles,
+    type SubagentRole,
+} from './components/SubagentRolesSection.js'
 
-export { SubAgentPanelContent, SubAgentTabHeaders, SubAgentPills, PinnedSubAgentsSection, SubagentsSection }
-export type { SubAgentPanelContentProps }
+export {
+    SubAgentPanelContent,
+    SubAgentTabHeaders,
+    SubAgentPills,
+    PinnedSubAgentsSection,
+    SubagentsSection,
+    SubagentRolesSection,
+    getDefaultSubagentRoles,
+}
+export type { SubAgentPanelContentProps, SubagentRole }
 
 function isSpawnAgentName(name?: string): boolean {
     return name === 'spawn_agent' || name === 'delegate_agent' || name === 'subagent'
@@ -205,6 +218,12 @@ export const subagentRendererEntry = definePluginEntry({
                         labelKey: 'settings.subagents.maxDepth',
                         descriptionKey: 'settings.subagents.maxDepthDesc',
                         keywords: ['max level', 'max depth'],
+                    },
+                    {
+                        id: 'subagentRoles',
+                        labelKey: 'settings.subagents.roles.title',
+                        descriptionKey: 'settings.subagents.roles.subtitle',
+                        keywords: ['role', 'roles', 'character', 'model', 'reasoning'],
                     },
                 ],
             },

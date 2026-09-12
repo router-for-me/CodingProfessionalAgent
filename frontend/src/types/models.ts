@@ -56,6 +56,7 @@ export type {
   ShortcutsConfig,
   ShortcutsMap,
   Speed,
+  SubagentRole,
   SubagentsSettings,
   TerminalPosition,
   ThemeMode,

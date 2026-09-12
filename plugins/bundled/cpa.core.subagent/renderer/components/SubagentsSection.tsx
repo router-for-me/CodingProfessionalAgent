@@ -7,12 +7,20 @@ import {
     useHostServices,
     useTranslation,
 } from '@cpa/plugin-ui'
+import {
+    SubagentRolesSection,
+    getDefaultSubagentRoles,
+    type SubagentRole,
+} from './SubagentRolesSection.js'
+
+export type { SubagentRole }
 
 export interface SubagentsSettings {
     enabled: boolean
     concurrency: number
     maxPerSession: number
     maxDepth: number
+    roles?: SubagentRole[]
 }
 
 const STORAGE_KEY = 'cpa.settings.subagents'
@@ -22,9 +30,10 @@ export const DEFAULT_SUBAGENT_SETTINGS: SubagentsSettings = {
     concurrency: 10,
     maxPerSession: 3,
     maxDepth: 1,
+    roles: getDefaultSubagentRoles(),
 }
 
-function loadInitialSettings(): SubagentsSettings {
+function loadInitialSettings(t?: any): SubagentsSettings {
     try {
         if (typeof window !== 'undefined' && window.localStorage) {
             const raw = window.localStorage.getItem(STORAGE_KEY)
@@ -35,13 +44,17 @@ function loadInitialSettings(): SubagentsSettings {
                     concurrency: typeof parsed.concurrency === 'number' ? parsed.concurrency : DEFAULT_SUBAGENT_SETTINGS.concurrency,
                     maxPerSession: typeof parsed.maxPerSession === 'number' ? parsed.maxPerSession : DEFAULT_SUBAGENT_SETTINGS.maxPerSession,
                     maxDepth: typeof parsed.maxDepth === 'number' ? parsed.maxDepth : DEFAULT_SUBAGENT_SETTINGS.maxDepth,
+                    roles: Array.isArray(parsed.roles) ? parsed.roles : getDefaultSubagentRoles(t),
                 }
             }
         }
     } catch {
         // Fallback to default if reading storage fails
     }
-    return DEFAULT_SUBAGENT_SETTINGS
+    return {
+        ...DEFAULT_SUBAGENT_SETTINGS,
+        roles: getDefaultSubagentRoles(t),
+    }
 }
 
 function saveSettings(settings: SubagentsSettings): void {
@@ -149,9 +162,10 @@ export function SubagentsSection() {
                 concurrency: typeof fromHost.concurrency === 'number' ? fromHost.concurrency : DEFAULT_SUBAGENT_SETTINGS.concurrency,
                 maxPerSession: typeof fromHost.maxPerSession === 'number' ? fromHost.maxPerSession : DEFAULT_SUBAGENT_SETTINGS.maxPerSession,
                 maxDepth: typeof fromHost.maxDepth === 'number' ? fromHost.maxDepth : DEFAULT_SUBAGENT_SETTINGS.maxDepth,
+                roles: Array.isArray(fromHost.roles) ? fromHost.roles : (loadInitialSettings(t).roles ?? getDefaultSubagentRoles(t)),
             }
         }
-        return loadInitialSettings()
+        return loadInitialSettings(t)
     })
 
     useEffect(() => {
@@ -293,6 +307,11 @@ export function SubagentsSection() {
                             </>
                         ) : null}
                     </SettingsCard>
+
+                    <SubagentRolesSection
+                        roles={settings.roles ?? []}
+                        onChange={(roles) => updateSettings({ roles })}
+                    />
                 </div>
             </div>
         </div>

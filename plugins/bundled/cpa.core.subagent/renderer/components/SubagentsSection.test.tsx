@@ -165,4 +165,92 @@ describe('SubagentsSection', () => {
         fireEvent.keyDown(maxDepthInput, { key: 'ArrowDown' })
         expect(maxDepthInput).toHaveValue(1)
     })
+
+    it('renders Roles section with title, subtitle, and default roles', () => {
+        render(<SubagentsSection />)
+
+        expect(screen.getByText('Subagent Roles')).toBeInTheDocument()
+        expect(
+            screen.getByText(
+                'Configure specialized subagent roles with dedicated prompts, models, and reasoning depth.'
+            )
+        ).toBeInTheDocument()
+
+        const addRoleButton = screen.getByRole('button', { name: 'Add Role' })
+        expect(addRoleButton).toBeInTheDocument()
+
+        // Verify default roles are rendered
+        expect(screen.getByDisplayValue('Code Reviewer')).toBeInTheDocument()
+        expect(screen.getByDisplayValue('Debugger')).toBeInTheDocument()
+        expect(screen.getByDisplayValue('Architect')).toBeInTheDocument()
+
+        // Strict UI constraint: Never use native <select> element
+        expect(document.querySelector('select')).toBeNull()
+    })
+
+    it('allows adding a new role to the list', () => {
+        render(<SubagentsSection />)
+
+        const addRoleButton = screen.getByRole('button', { name: 'Add Role' })
+        const initialCards = screen.getAllByTestId(/^role-card-/)
+        expect(initialCards).toHaveLength(3)
+
+        fireEvent.click(addRoleButton)
+
+        const cardsAfter = screen.getAllByTestId(/^role-card-/)
+        expect(cardsAfter).toHaveLength(4)
+
+        const stored = JSON.parse(window.localStorage.getItem('cpa.settings.subagents') || '{}')
+        expect(stored.roles).toHaveLength(4)
+    })
+
+    it('allows editing role name and description and saves to localStorage', () => {
+        render(<SubagentsSection />)
+
+        const nameInput = screen.getByDisplayValue('Code Reviewer')
+        fireEvent.change(nameInput, { target: { value: 'Senior Security Auditor' } })
+        expect(nameInput).toHaveValue('Senior Security Auditor')
+
+        const descTextarea = screen.getByDisplayValue(
+            'Reviews code changes for security, logic defects, edge cases, and best practices.'
+        )
+        fireEvent.change(descTextarea, {
+            target: { value: 'Audits vulnerabilities, tokens, and compliance.' },
+        })
+        expect(descTextarea).toHaveValue('Audits vulnerabilities, tokens, and compliance.')
+
+        const stored = JSON.parse(window.localStorage.getItem('cpa.settings.subagents') || '{}')
+        expect(stored.roles[0].name).toBe('Senior Security Auditor')
+        expect(stored.roles[0].description).toBe(
+            'Audits vulnerabilities, tokens, and compliance.'
+        )
+    })
+
+    it('allows deleting roles and shows empty state when all roles are removed', () => {
+        render(<SubagentsSection />)
+
+        let deleteButtons = screen.getAllByRole('button', { name: 'Delete Role' })
+        expect(deleteButtons).toHaveLength(3)
+
+        // Delete all 3 roles
+        fireEvent.click(deleteButtons[0])
+        deleteButtons = screen.getAllByRole('button', { name: 'Delete Role' })
+        expect(deleteButtons).toHaveLength(2)
+
+        fireEvent.click(deleteButtons[0])
+        deleteButtons = screen.getAllByRole('button', { name: 'Delete Role' })
+        expect(deleteButtons).toHaveLength(1)
+
+        fireEvent.click(deleteButtons[0])
+
+        // Empty state should be visible
+        expect(screen.getByTestId('roles-empty-state')).toBeInTheDocument()
+        expect(screen.getByText('No Roles Configured')).toBeInTheDocument()
+
+        const addRoleButton = screen.getByRole('button', { name: 'Add Role' })
+        fireEvent.click(addRoleButton)
+
+        expect(screen.queryByTestId('roles-empty-state')).toBeNull()
+        expect(screen.getAllByTestId(/^role-card-/)).toHaveLength(1)
+    })
 })

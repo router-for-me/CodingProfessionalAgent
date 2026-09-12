@@ -254,11 +254,20 @@ export interface WorktreeSettings {
   deleteLimit: number
 }
 
+export interface SubagentRole {
+  id: string
+  name: string
+  description: string
+  modelId: string
+  reasoningEffort: string
+}
+
 export interface SubagentsSettings {
   enabled: boolean
   concurrency: number
   maxPerSession: number
   maxDepth: number
+  roles?: SubagentRole[]
 }
 
 export type EditorSendShortcut = 'enter' | 'cmdEnter'
