@@ -15,6 +15,7 @@ import type { WebSocketService } from '../../services/websocketService.js'
 import type { HttpService } from '../../services/httpService.js'
 import type { DialogService } from '../../services/dialogService.js'
 import type { TrayService, TrayLocale } from '../../services/trayService.js'
+import type { PowerSaveService } from '../../services/powerSaveService.js'
 import type { WebServerService } from '../../services/webServerService.js'
 import type { EnvironmentWatcherService } from '../../services/environmentWatcherService.js'
 import type { ProfilingService } from '../../services/profilingService.js'
@@ -436,6 +437,27 @@ export function createPlatformRpcDescriptors(
             capability: 'tray.manage',
             invoke: async (context, args) =>
                 getService<TrayService>('trayService', context).setLocale(args[0] as TrayLocale),
+        },
+
+        // Power / Sleep
+        {
+            method: 'power:setPreventSleep',
+            aliases: ['SetPreventSleep'],
+            ipcChannel: 'power:setPreventSleep',
+            capability: 'power.manage',
+            invoke: async (context, args) => {
+                const raw = args[0]
+                const enabled = typeof raw === 'boolean' ? raw : raw !== 'false' && Boolean(raw)
+                getService<PowerSaveService>('powerSaveService', context).setPreventSleepEnabled(enabled)
+            },
+        },
+        {
+            method: 'power:getPreventSleep',
+            aliases: ['GetPreventSleep'],
+            ipcChannel: 'power:getPreventSleep',
+            capability: 'power.read',
+            invoke: async (context) =>
+                getService<PowerSaveService>('powerSaveService', context).isPreventSleepEnabled(),
         },
 
         // WebServer

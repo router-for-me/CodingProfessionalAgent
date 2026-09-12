@@ -97,6 +97,10 @@ export const RENDERER_CAPABILITY_DESCRIPTORS: readonly RendererCapabilityDescrip
     { name: 'SetTrayEnabled', method: 'tray:setEnabled', capability: 'tray.manage' },
     { name: 'SetTrayLocale', method: 'tray:setLocale', capability: 'tray.manage' },
 
+    // Power / Sleep
+    { name: 'SetPreventSleep', method: 'power:setPreventSleep', capability: 'power.manage' },
+    { name: 'GetPreventSleep', method: 'power:getPreventSleep', capability: 'power.read' },
+
     // Web Server
     { name: 'WebServerStart', method: 'webserver:start', capability: 'webserver.manage' },
     { name: 'WebServerStop', method: 'webserver:stop', capability: 'webserver.manage' },

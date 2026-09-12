@@ -20,6 +20,7 @@ import { WebServerService } from '../services/webServerService.js'
 import { BinaryService } from '../services/binaryService.js'
 import { EnvironmentWatcherService } from '../services/environmentWatcherService.js'
 import { ProfilingService } from '../services/profilingService.js'
+import { PowerSaveService } from '../services/powerSaveService.js'
 import { PluginResourceService } from '../plugins/resources/PluginResourceService.js'
 import { MainContributionRegistry } from '../plugins/contributions/MainContributionRegistry.js'
 import { createPlatformServiceDescriptors } from '../plugins/contributions/serviceDescriptors.js'
@@ -65,6 +66,7 @@ export interface AppServices {
   binaryService: BinaryService
   environmentWatcherService: EnvironmentWatcherService
   profilingService: ProfilingService
+  powerSaveService: PowerSaveService
   registry: MainContributionRegistry
   pluginRuntimeHost?: MainPluginRuntimeHost
   pluginActivationCoordinator?: MainPluginActivationCoordinator
@@ -115,6 +117,31 @@ export function createServices(
     if (registry.hasService('webServerService')) {
       const webServer = registry.getService<WebServerService>('webServerService')
       webServer.broadcastEvent(event, event.sourceClientId)
+    }
+    if (event.kind === 'session:run-status' && event.data) {
+      try {
+        const payload = typeof event.data === 'string' ? JSON.parse(event.data) : event.data
+        if (payload?.sessionId && payload?.status && registry.hasService('powerSaveService')) {
+          registry.getService<PowerSaveService>('powerSaveService').handleRunStatus(
+            payload.sessionId,
+            payload.status,
+            payload.clientId,
+          )
+        }
+      } catch {}
+    }
+    if (event.kind === 'session:subagent-state' && event.data) {
+      try {
+        const payload = typeof event.data === 'string' ? JSON.parse(event.data) : event.data
+        if (Array.isArray(payload?.agents) && registry.hasService('powerSaveService')) {
+          const powerService = registry.getService<PowerSaveService>('powerSaveService')
+          for (const agent of payload.agents) {
+            if (agent?.id && agent?.status) {
+              powerService.handleSubAgentStatus(agent.id, agent.status)
+            }
+          }
+        }
+      } catch {}
     }
   }
 
@@ -254,6 +281,9 @@ export function createServices(
       if (registry.hasService('sessionRunRegistry')) {
         registry.getService<any>('sessionRunRegistry')?.cleanupClientRuns?.(clientId)
       }
+      if (registry.hasService('powerSaveService')) {
+        registry.getService<PowerSaveService>('powerSaveService')?.cleanupClient?.(clientId)
+      }
     } catch {
       // Session run registry may be unavailable during early startup/shutdown.
     }
@@ -294,6 +324,7 @@ export function createServices(
     binaryService: registry.getService<BinaryService>('binaryService'),
     environmentWatcherService: registry.getService<EnvironmentWatcherService>('environmentWatcherService'),
     profilingService: registry.getService<ProfilingService>('profilingService'),
+    powerSaveService: registry.getService<PowerSaveService>('powerSaveService'),
     registry,
     pluginRuntimeHost: options?.pluginRuntimeHost,
     pluginActivationCoordinator: options?.pluginActivationCoordinator,
@@ -330,6 +361,7 @@ export function attachMainWindowListeners(win: BrowserWindow, services: AppServi
       if (runRegistry && typeof runRegistry.cleanupClientRuns === 'function') {
         runRegistry.cleanupClientRuns('desktop-main')
       }
+      services.powerSaveService?.cleanupClient?.('desktop-main')
     } catch (err) {
       console.warn('Warning: failed to cleanup client runs:', err)
     }

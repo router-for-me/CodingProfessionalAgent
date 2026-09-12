@@ -280,6 +280,7 @@ export interface AppSettings {
   compactionThresholdPercent: number
   fastContextCompaction: boolean
   resumeUnfinishedConversations?: boolean
+  preventSleep?: boolean
   showInMenuBar: boolean
   showBottomPanel: boolean
   terminalPosition: TerminalPosition
@@ -595,6 +596,7 @@ export interface SettingsService {
     setCompactionThresholdPercent?(percent: number): void
     setFastContextCompaction?(enabled: boolean): void
     setResumeUnfinishedConversations?(enabled: boolean): void
+    setPreventSleep?(enabled: boolean): void
     setShowInMenuBar?(enabled: boolean): void
     setShowBottomPanel?(enabled: boolean): void
     setTerminalPosition?(position: TerminalPosition): void

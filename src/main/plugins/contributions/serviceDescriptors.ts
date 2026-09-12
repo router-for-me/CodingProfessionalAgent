@@ -14,6 +14,7 @@ import { WebServerService } from '../../services/webServerService.js'
 import { BinaryService } from '../../services/binaryService.js'
 import { EnvironmentWatcherService } from '../../services/environmentWatcherService.js'
 import { ProfilingService } from '../../services/profilingService.js'
+import { PowerSaveService } from '../../services/powerSaveService.js'
 import { PluginResourceService } from '../resources/PluginResourceService.js'
 import { PluginGraphManagementService } from '../management/PluginGraphManagementService.js'
 
@@ -226,6 +227,14 @@ export function createPlatformServiceDescriptors(
                 return server
             },
             dispose: (service: WebServerService) => {
+                service.dispose()
+            },
+        },
+        {
+            id: 'powerSaveService',
+            dependencies: [],
+            create: () => new PowerSaveService(),
+            dispose: (service: PowerSaveService) => {
                 service.dispose()
             },
         },

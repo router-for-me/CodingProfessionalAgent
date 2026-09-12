@@ -16,7 +16,7 @@ import { HostServicesProvider } from '@/application/services/HostServicesContext
 import { CLIProxyAPIAgentService } from '@/features/agent-runtime/CLIProxyAPIAgentService'
 import { ElectronNativeBridge } from '@/features/agent-runtime/native/electronNativeBridge'
 import { useSettingsStore } from '@/stores/settingsStore'
-import { getHostBridge } from '@/application/services/hostTransport'
+import { getHostBridge, onHostReconnect } from '@/application/services/hostTransport'
 
 interface AppProvidersProps {
     children: ReactNode
@@ -59,6 +59,40 @@ function useTraySyncEffect() {
             // Tray sync must never crash the renderer.
         })
     }, [showInMenuBar, locale])
+}
+
+/**
+ * Syncs the prevent sleep while running toggle to the main process.
+ * Keeps system awake during active runs when enabled.
+ */
+function usePreventSleepSyncEffect() {
+    const preventSleep = useSettingsStore((state) => state.settings.preventSleep ?? true)
+
+    useEffect(() => {
+        let isCancelled = false
+        const sync = () => {
+            const bridge = getHostBridge()
+            if (!bridge?.SetPreventSleep) {
+                return
+            }
+            const currentSetting = useSettingsStore.getState().settings.preventSleep ?? true
+            void bridge.SetPreventSleep(currentSetting).catch((err) => {
+                if (!isCancelled) {
+                    console.warn('[PowerSave] Failed to sync preventSleep setting to host:', err)
+                }
+            })
+        }
+
+        sync()
+        const unsub = onHostReconnect?.(() => {
+            sync()
+        })
+
+        return () => {
+            isCancelled = true
+            unsub?.()
+        }
+    }, [preventSleep])
 }
 
 export type ProductionAgentRuntime = {
@@ -235,6 +269,7 @@ function useProductionAgentService(): AgentService | null {
 export function AppProviders({ children }: AppProvidersProps) {
     useThemeEffect()
     useTraySyncEffect()
+    usePreventSleepSyncEffect()
     useModelCatalogBootstrap()
     const agentService = useProductionAgentService()
 

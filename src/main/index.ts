@@ -278,6 +278,9 @@ if (!gotTheLock) {
       try {
         const kv = services.kvStoreService
         const appState = kv ? await kv.get('app-state') : undefined
+        if (appState?.settings && typeof appState.settings.preventSleep === 'boolean') {
+          services.powerSaveService.setPreventSleepEnabled(appState.settings.preventSleep, true)
+        }
         const plan = resolveWebServerStartupPlan(appState, isDev)
         if (plan.configureConfig) {
           services.webServerService.configure(plan.configureConfig)

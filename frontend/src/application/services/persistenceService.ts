@@ -435,6 +435,10 @@ function normalizeSettings(
       typeof next.resumeUnfinishedConversations === 'boolean'
         ? next.resumeUnfinishedConversations
         : DEFAULT_SETTINGS.resumeUnfinishedConversations,
+    preventSleep:
+      typeof next.preventSleep === 'boolean'
+        ? next.preventSleep
+        : DEFAULT_SETTINGS.preventSleep,
     showInMenuBar:
       typeof next.showInMenuBar === 'boolean'
         ? next.showInMenuBar

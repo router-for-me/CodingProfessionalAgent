@@ -676,6 +676,10 @@ export interface ElectronBridgeApi {
   SetTrayEnabled(enabled: boolean, locale?: 'zh-CN' | 'en'): Promise<void>
   SetTrayLocale(locale: 'zh-CN' | 'en'): Promise<void>
 
+  // Power / Sleep
+  SetPreventSleep(enabled: boolean): Promise<void>
+  GetPreventSleep(): Promise<boolean>
+
   // Web Server
   WebServerStart(config?: {
     host?: string

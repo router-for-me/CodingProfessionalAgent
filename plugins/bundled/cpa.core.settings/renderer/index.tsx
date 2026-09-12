@@ -96,12 +96,6 @@ export const settingsRendererEntry = definePluginEntry({
                         keywords: ['full access'],
                     },
                     {
-                        id: 'fileOpenTarget',
-                        labelKey: 'settings.general.fileOpenTarget',
-                        descriptionKey: 'settings.general.fileOpenTarget.desc',
-                        keywords: ['file', 'goland', 'vscode', 'finder'],
-                    },
-                    {
                         id: 'language',
                         labelKey: 'settings.language',
                         descriptionKey: 'settings.general.language.desc',
@@ -154,12 +148,6 @@ export const settingsRendererEntry = definePluginEntry({
                         labelKey: 'settings.general.speed',
                         descriptionKey: 'settings.general.speed.desc',
                         keywords: ['speed'],
-                    },
-                    {
-                        id: 'promptSuggestions',
-                        labelKey: 'settings.general.promptSuggestions',
-                        descriptionKey: 'settings.general.promptSuggestions.desc',
-                        keywords: ['prompt suggestions'],
                     },
                     {
                         id: 'editor',

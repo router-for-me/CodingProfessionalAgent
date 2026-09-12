@@ -495,6 +495,9 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
         setResumeUnfinishedConversations(enabled) {
             useSettingsStore.getState().setResumeUnfinishedConversations(enabled)
         },
+        setPreventSleep(enabled) {
+            useSettingsStore.getState().setPreventSleep(enabled)
+        },
         setShowInMenuBar(enabled) {
             useSettingsStore.getState().setShowInMenuBar(enabled)
         },

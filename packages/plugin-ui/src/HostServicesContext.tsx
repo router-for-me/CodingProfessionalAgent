@@ -103,6 +103,7 @@ const DEFAULT_FALLBACK_SETTINGS: AppSettings = Object.freeze({
     compactionThresholdPercent: 80,
     fastContextCompaction: true,
     resumeUnfinishedConversations: true,
+    preventSleep: true,
     showInMenuBar: true,
     showBottomPanel: true,
     terminalPosition: 'bottom',

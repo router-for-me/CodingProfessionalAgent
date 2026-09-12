@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import {
     useHostService,
     useSettings,
@@ -25,8 +25,6 @@ import {
     SettingsSelect,
     ToggleSwitch,
 } from './SettingsControls.js'
-
-type FileOpenTarget = 'goland' | 'vscode' | 'finder'
 
 const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
     showContextUsage: true,
@@ -58,6 +56,10 @@ export function GeneralSection() {
     const resumeUnfinishedConversations = settings.resumeUnfinishedConversations ?? true
     const setResumeUnfinishedConversations = (val: boolean) =>
         settingsService?.setResumeUnfinishedConversations?.(val)
+
+    const preventSleep = settings.preventSleep ?? true
+    const setPreventSleep = (val: boolean) =>
+        settingsService?.setPreventSleep?.(val)
 
     const showInMenuBar = settings.showInMenuBar ?? true
     const setShowInMenuBar = (val: boolean) =>
@@ -127,10 +129,6 @@ export function GeneralSection() {
               'Queue follow-up messages while CPA is running, or steer the current run. Press Shift+Ctrl+Enter for the opposite on a single message',
           )
 
-    const [fileOpenTarget, setFileOpenTarget] = useState<FileOpenTarget>('goland')
-    const [preventSleep, setPreventSleep] = useState(true)
-    const [promptSuggestions, setPromptSuggestions] = useState(false)
-
     const pushToast = (msg: string) => uiService?.pushToast(msg)
     const learnMore = () => pushToast(t('toast.comingSoon'))
 
@@ -180,32 +178,6 @@ export function GeneralSection() {
 
             <SettingsSection title={t('settings.general.section')}>
                 <SettingsCard>
-                    <SettingsRow
-                        id="setting-fileOpenTarget"
-                        title={t('settings.general.fileOpenTarget')}
-                        description={t('settings.general.fileOpenTarget.desc')}
-                        control={
-                            <SettingsSelect
-                                ariaLabel={t('settings.general.fileOpenTarget')}
-                                value={fileOpenTarget}
-                                options={[
-                                    {
-                                        value: 'goland',
-                                        label: t('settings.general.fileOpenTarget.goland'),
-                                    },
-                                    {
-                                        value: 'vscode',
-                                        label: t('settings.general.fileOpenTarget.vscode'),
-                                    },
-                                    {
-                                        value: 'finder',
-                                        label: t('settings.general.fileOpenTarget.finder'),
-                                    },
-                                ]}
-                                onChange={setFileOpenTarget}
-                            />
-                        }
-                    />
                     <SettingsRow
                         id="setting-language"
                         title={t('settings.language')}
@@ -345,18 +317,6 @@ export function GeneralSection() {
                                     },
                                 ]}
                                 onChange={setSpeed}
-                            />
-                        }
-                    />
-                    <SettingsRow
-                        id="setting-promptSuggestions"
-                        title={t('settings.general.promptSuggestions')}
-                        description={t('settings.general.promptSuggestions.desc')}
-                        control={
-                            <ToggleSwitch
-                                checked={promptSuggestions}
-                                label={t('settings.general.promptSuggestions')}
-                                onChange={setPromptSuggestions}
                             />
                         }
                         last

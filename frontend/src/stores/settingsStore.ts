@@ -37,6 +37,7 @@ interface SettingsState {
   setCompactionThresholdPercent: (percent: number) => void
   setFastContextCompaction: (enabled: boolean) => void
   setResumeUnfinishedConversations: (enabled: boolean) => void
+  setPreventSleep: (enabled: boolean) => void
   setShowInMenuBar: (enabled: boolean) => void
   setShowBottomPanel: (enabled: boolean) => void
   setTerminalPosition: (position: TerminalPosition) => void
@@ -135,6 +136,14 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       settings: {
         ...state.settings,
         resumeUnfinishedConversations: enabled,
+      },
+    })),
+
+  setPreventSleep: (enabled) =>
+    set((state) => ({
+      settings: {
+        ...state.settings,
+        preventSleep: enabled,
       },
     })),
 
@@ -437,6 +446,10 @@ export const useSettingsStore = create<SettingsState>((set) => ({
         typeof settings.resumeUnfinishedConversations === 'boolean'
           ? settings.resumeUnfinishedConversations
           : DEFAULT_SETTINGS.resumeUnfinishedConversations
+      settings.preventSleep =
+        typeof settings.preventSleep === 'boolean'
+          ? settings.preventSleep
+          : DEFAULT_SETTINGS.preventSleep
       settings.showInMenuBar =
         typeof settings.showInMenuBar === 'boolean'
           ? settings.showInMenuBar

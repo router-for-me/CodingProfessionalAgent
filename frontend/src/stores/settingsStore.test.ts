@@ -15,6 +15,22 @@ describe('settingsStore', () => {
     expect(useSettingsStore.getState().settings.resumeUnfinishedConversations).toBe(true)
   })
 
+  it('toggles preventSleep', () => {
+    expect(useSettingsStore.getState().settings.preventSleep).toBe(true)
+    useSettingsStore.getState().setPreventSleep(false)
+    expect(useSettingsStore.getState().settings.preventSleep).toBe(false)
+    useSettingsStore.getState().setPreventSleep(true)
+    expect(useSettingsStore.getState().settings.preventSleep).toBe(true)
+  })
+
+  it('hydrates preventSleep properly', () => {
+    useSettingsStore.getState().hydrate({ preventSleep: false })
+    expect(useSettingsStore.getState().settings.preventSleep).toBe(false)
+
+    useSettingsStore.getState().hydrate({ preventSleep: true })
+    expect(useSettingsStore.getState().settings.preventSleep).toBe(true)
+  })
+
   it('hydrates resumeUnfinishedConversations properly', () => {
     useSettingsStore.getState().hydrate({ resumeUnfinishedConversations: false })
     expect(useSettingsStore.getState().settings.resumeUnfinishedConversations).toBe(false)

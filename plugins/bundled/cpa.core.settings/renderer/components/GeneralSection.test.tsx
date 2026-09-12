@@ -142,6 +142,15 @@ describe('GeneralSection', () => {
         expect(screen.queryByRole('switch', { name: 'Auto approval' })).not.toBeInTheDocument()
     })
 
+    it('does not render file open target or prompt suggestions settings rows', () => {
+        render(<GeneralSection />)
+
+        expect(screen.queryByText('Default file open target')).not.toBeInTheDocument()
+        expect(screen.queryByRole('combobox', { name: 'Default file open target' })).not.toBeInTheDocument()
+        expect(screen.queryByText('Prompt suggestions')).not.toBeInTheDocument()
+        expect(screen.queryByRole('switch', { name: 'Prompt suggestions' })).not.toBeInTheDocument()
+    })
+
     it('syncs full access switch with requestApproval in store', async () => {
         const user = userEvent.setup()
         // When requestApproval is false, full access is checked (true)
@@ -181,6 +190,23 @@ describe('GeneralSection', () => {
         await user.click(switchEl)
         expect(switchEl).toHaveAttribute('aria-checked', 'false')
         expect(useSettingsStore.getState().settings.resumeUnfinishedConversations).toBe(false)
+    })
+
+    it('renders preventSleep switch with name Prevent sleep while running and toggles store', async () => {
+        const user = userEvent.setup()
+        useSettingsStore.setState({
+            settings: { ...DEFAULT_SETTINGS, preventSleep: true },
+        })
+        render(<GeneralSection />)
+
+        const switchEl = screen.getByRole('switch', { name: 'Prevent sleep while running' })
+        expect(switchEl).toBeInTheDocument()
+        expect(switchEl).toHaveAttribute('aria-checked', 'true')
+        expect(useSettingsStore.getState().settings.preventSleep).toBe(true)
+
+        await user.click(switchEl)
+        expect(switchEl).toHaveAttribute('aria-checked', 'false')
+        expect(useSettingsStore.getState().settings.preventSleep).toBe(false)
     })
 
     it('renders editor section and toggles showContextUsage without plainText', async () => {

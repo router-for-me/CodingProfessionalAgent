@@ -456,6 +456,7 @@ export function registerCapabilityTransport(options: RegisterCapabilityTransport
                 'network.*',
                 'storage.*',
                 'tray.*',
+                'power.*',
                 'plugins.*',
                 'window.*',
                 'git.*',

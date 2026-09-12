@@ -168,6 +168,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   compactionThresholdPercent: DEFAULT_COMPACTION_THRESHOLD_PERCENT,
   fastContextCompaction: true,
   resumeUnfinishedConversations: true,
+  preventSleep: true,
   showInMenuBar: true,
   showBottomPanel: true,
   terminalPosition: 'bottom',
