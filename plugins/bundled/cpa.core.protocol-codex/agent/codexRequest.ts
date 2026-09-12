@@ -73,19 +73,23 @@ export function buildCodexRequest(input: BuildCodexRequestInput): CodexResponseC
         maxOutputTokens,
     } = input
 
-    const rawInstructions = systemPrompt || 'You are a helpful assistant.'
-    const effectiveInstructions =
-        developerPrompt && !rawInstructions.includes(developerPrompt)
-            ? `${developerPrompt}\n\n${rawInstructions}`
-            : rawInstructions
+    const codexInput = convertConversationToCodexInput(entries, model)
+
+    if (developerPrompt && developerPrompt.trim().length > 0) {
+        codexInput.unshift({
+            type: 'message',
+            role: 'developer',
+            content: [{ type: 'input_text', text: developerPrompt.trim() }],
+        })
+    }
 
     const body: CodexResponseCreate = {
         type: 'response.create',
         model: model.id,
         store: false,
         stream: true,
-        instructions: effectiveInstructions,
-        input: convertConversationToCodexInput(entries, model),
+        instructions: systemPrompt || 'You are a helpful assistant.',
+        input: codexInput,
         text: { verbosity: 'low' },
         include: ['reasoning.encrypted_content'],
         prompt_cache_key: sessionId,

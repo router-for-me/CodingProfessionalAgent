@@ -132,8 +132,8 @@ export function buildSubAgentDeveloperPrompt(
     const trimmed = (rolePrompt || '').trim()
     if (!trimmed) return ''
     return roleName
-        ? `<developer_instructions>\nRole: ${roleName}\nYou must strictly act according to the following role prompt instructions:\n${trimmed}\n</developer_instructions>`
-        : `<developer_instructions>\nYou must strictly act according to the following role prompt instructions:\n${trimmed}\n</developer_instructions>`
+        ? `Role: ${roleName}\nYou must strictly act according to the following role prompt instructions:\n${trimmed}`
+        : `You must strictly act according to the following role prompt instructions:\n${trimmed}`
 }
 
 export function buildSubAgentSystemPrompt(
@@ -202,26 +202,14 @@ export function buildSubAgentSystemPrompt(
         ? `${systemPrompt}\n${formatWorktreeModePrompt(prepared.worktreePolicy)}`
         : systemPrompt
 
-    let effectiveRolePrompt = (options?.rolePrompt || '').trim()
-    let effectiveRoleName = options?.roleName
-    if (!effectiveRolePrompt && prepared?.subagentsSettings?.roles) {
-        const matched = prepared.subagentsSettings.roles.find(
-            (r: any) =>
-                r.name?.toLowerCase() === agentName.toLowerCase() ||
-                r.id?.toLowerCase() === agentName.toLowerCase(),
+    if (options?.rolePrompt && options.rolePrompt.trim().length > 0) {
+        const developerBlock = buildSubAgentDeveloperPrompt(
+            options.roleName,
+            options.rolePrompt,
         )
-        if (matched?.description?.trim()) {
-            effectiveRolePrompt = matched.description.trim()
-            effectiveRoleName = matched.name
+        if (developerBlock) {
+            return `<developer_instructions>\n${developerBlock}\n</developer_instructions>\n\n${withWorktree}`
         }
-    }
-
-    const developerBlock = buildSubAgentDeveloperPrompt(
-        effectiveRoleName,
-        effectiveRolePrompt,
-    )
-    if (developerBlock) {
-        return `${developerBlock}\n\n${withWorktree}`
     }
 
     return withWorktree
@@ -1392,8 +1380,6 @@ export class SubAgentHost {
                 {
                     extensionRegistry: config.extensionRegistry,
                     allowSubagents: canSpawnChildren,
-                    rolePrompt: record.rolePrompt,
-                    roleName: record.roleName,
                 },
             ),
             developerPrompt: developerPrompt || undefined,

@@ -1278,16 +1278,13 @@ describe('SubAgentHost', () => {
             modelId: 'parent-model',
         })
 
-        // Verify developer prompt injected at the head of system prompt
-        expect(childRunSystemPrompt.startsWith('<developer_instructions>')).toBe(true)
-        expect(childRunSystemPrompt).toContain('Role: 代码审查员')
-        expect(childRunSystemPrompt).toContain('负责严格的代码规范审查与安全审计指令。')
-        expect(childRunSystemPrompt).toContain('</developer_instructions>')
-
-        // Verify developerPrompt property on request
+        // Verify developerPrompt property on request is populated as developer-level instructions
         expect(childRunDeveloperPrompt).toBeDefined()
         expect(childRunDeveloperPrompt).toContain('Role: 代码审查员')
         expect(childRunDeveloperPrompt).toContain('负责严格的代码规范审查与安全审计指令。')
+
+        // Verify base system prompt is generated cleanly
+        expect(childRunSystemPrompt).toContain('You are a sub-agent named ReviewerBot')
 
         // Verify role's configured model and reasoning effort take priority
         expect(childModel?.id).toBe('gpt-5.5')
