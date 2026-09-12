@@ -26,7 +26,7 @@ export function formatSubagentRolesForPrompt(
 
     const lines = [
         '\n\nThe following subagent roles provide pre-configured specifications for delegating specialized tasks.',
-        '如果遇到和角色定义相同的需要派发子代理的场景，优先使用用户定义的子代理角色去执行，而不要自行判断使用的模型、提示词。 (When encountering scenarios matching any of these defined roles when dispatching a sub-agent, prioritize using the user-defined subagent role rather than deciding the model, reasoning effort, or prompt on your own.)',
+        'When encountering scenarios matching any of these defined roles when dispatching a sub-agent, prioritize using the user-defined subagent role rather than deciding the model, reasoning effort, or prompt on your own.',
         '',
         '<available_roles>',
     ]

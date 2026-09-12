@@ -19,7 +19,9 @@ describe('formatSubagentRolesForPrompt', () => {
         ])
 
         expect(result).toContain('<available_roles>')
-        expect(result).toContain('如果遇到和角色定义相同的需要派发子代理的场景，优先使用用户定义的子代理角色去执行，而不要自行判断使用的模型、提示词。')
+        expect(result).toContain(
+            'When encountering scenarios matching any of these defined roles when dispatching a sub-agent, prioritize using the user-defined subagent role rather than deciding the model, reasoning effort, or prompt on your own.'
+        )
         expect(result).toContain('<id>role-1</id>')
         expect(result).toContain('<name>代码审查员</name>')
         expect(result).toContain('<description>负责代码审查与缺陷定位</description>')

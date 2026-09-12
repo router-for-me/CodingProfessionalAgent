@@ -1781,6 +1781,7 @@ describe('useAgentStream', () => {
             modelId: 'model-1',
             parentToolCallId: 'spawn-restored',
             status: 'running',
+            depth: 1,
             createdAt: 101,
             updatedAt: 101,
         }

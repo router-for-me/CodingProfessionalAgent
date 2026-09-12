@@ -132,4 +132,52 @@ describe('settingsStore', () => {
       followUpMode: 'queue',
     })
   })
+
+  it('updates subagent settings and hydrates roles properly', () => {
+    expect(useSettingsStore.getState().settings.subagents?.enabled).toBe(true)
+    expect(useSettingsStore.getState().settings.subagents?.concurrency).toBe(10)
+    expect(useSettingsStore.getState().settings.subagents?.roles?.length).toBeGreaterThan(0)
+
+    const customRoles = [
+      {
+        id: 'tester-1',
+        name: 'QA Specialist',
+        description: 'Performs automated and manual testing verification.',
+        modelId: 'gpt-5.5',
+        reasoningEffort: 'high',
+      },
+    ]
+
+    useSettingsStore.getState().setSubagentSettings({
+      concurrency: 15,
+      roles: customRoles,
+    })
+
+    expect(useSettingsStore.getState().settings.subagents?.concurrency).toBe(15)
+    expect(useSettingsStore.getState().settings.subagents?.roles).toEqual(customRoles)
+
+    // Hydrating partial subagents without roles preserves existing roles
+    useSettingsStore.getState().hydrate({
+      subagents: {
+        enabled: true,
+        concurrency: 20,
+        maxPerSession: 5,
+        maxDepth: 3,
+      },
+    })
+    expect(useSettingsStore.getState().settings.subagents?.concurrency).toBe(20)
+    expect(useSettingsStore.getState().settings.subagents?.roles).toEqual(customRoles)
+
+    // Hydrating with explicit empty roles list preserves empty list
+    useSettingsStore.getState().hydrate({
+      subagents: {
+        enabled: true,
+        concurrency: 20,
+        maxPerSession: 5,
+        maxDepth: 3,
+        roles: [],
+      },
+    })
+    expect(useSettingsStore.getState().settings.subagents?.roles).toEqual([])
+  })
 })

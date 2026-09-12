@@ -8,7 +8,11 @@ import {
     useHostServices,
     useTranslation,
 } from '@cpa/plugin-ui'
-import type { ModelCatalogEntry, SubagentRole } from '@cpa/plugin-api'
+import {
+    DEFAULT_SUBAGENT_ROLES,
+    type ModelCatalogEntry,
+    type SubagentRole,
+} from '@cpa/plugin-api'
 
 export type { SubagentRole }
 
@@ -21,40 +25,8 @@ export const DEFAULT_FALLBACK_MODELS: CustomSelectOption<string>[] = [
     { value: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro' },
 ]
 
-export function getDefaultSubagentRoles(t?: any): SubagentRole[] {
-    const tr = (key: string, fb: string) => (t ? t(key, fb) : fb)
-    return [
-        {
-            id: 'role-reviewer',
-            name: tr('settings.subagents.roles.defaultReviewerName', 'Code Reviewer'),
-            description: tr(
-                'settings.subagents.roles.defaultReviewerDesc',
-                'Reviews code changes for security, logic defects, edge cases, and best practices.'
-            ),
-            modelId: 'claude-sonnet-4-6',
-            reasoningEffort: 'high',
-        },
-        {
-            id: 'role-debugger',
-            name: tr('settings.subagents.roles.defaultDebuggerName', 'Debugger'),
-            description: tr(
-                'settings.subagents.roles.defaultDebuggerDesc',
-                'Analyzes error logs, investigates call stacks, and isolates root causes.'
-            ),
-            modelId: 'gpt-5.5',
-            reasoningEffort: 'medium',
-        },
-        {
-            id: 'role-architect',
-            name: tr('settings.subagents.roles.defaultArchitectName', 'Architect'),
-            description: tr(
-                'settings.subagents.roles.defaultArchitectDesc',
-                'Focuses on high-level system design, modular boundaries, technology selection, and interface contracts.'
-            ),
-            modelId: 'gemini-3.7-flash',
-            reasoningEffort: 'low',
-        },
-    ]
+export function getDefaultSubagentRoles(_t?: any): SubagentRole[] {
+    return DEFAULT_SUBAGENT_ROLES.map((role) => ({ ...role }))
 }
 
 export function getReasoningOptionsForModel(

@@ -30,7 +30,7 @@ import {
   type WorktreeSessionSetup,
 } from '@/types/models'
 import type { ConversationEntry } from '@/features/agent-runtime/session/types'
-import type { SubAgentRecord, SubAgentIconId } from '@cpa/plugin-api'
+import type { SubAgentRecord, SubAgentIconId, SubagentRole } from '@cpa/plugin-api'
 import {
   generateSavedShortcutsConfig,
   extractShortcutsOverrides,
@@ -354,9 +354,39 @@ function sanitizeWorktreeSettings(value: unknown): WorktreeSettings {
   }
 }
 
+export function sanitizeSubagentRoles(value: unknown): SubagentRole[] {
+  if (!Array.isArray(value)) {
+    return Array.isArray(DEFAULT_SUBAGENT_SETTINGS.roles)
+      ? [...DEFAULT_SUBAGENT_SETTINGS.roles]
+      : []
+  }
+  const roles: SubagentRole[] = []
+  for (const item of value) {
+    if (!isPlainObject(item)) continue
+    const id = typeof item.id === 'string' && item.id.trim().length > 0 ? item.id.trim() : createId()
+    const name = typeof item.name === 'string' ? item.name.trim() : ''
+    const description = typeof item.description === 'string' ? item.description : ''
+    const modelId = typeof item.modelId === 'string' ? item.modelId.trim() : ''
+    const reasoningEffort = typeof item.reasoningEffort === 'string' ? item.reasoningEffort.trim() : 'default'
+    roles.push({
+      id,
+      name,
+      description,
+      modelId,
+      reasoningEffort,
+    })
+  }
+  return roles
+}
+
 function sanitizeSubagentsSettings(raw: any): SubagentsSettings {
   if (!raw || typeof raw !== 'object') {
-    return { ...DEFAULT_SUBAGENT_SETTINGS }
+    return {
+      ...DEFAULT_SUBAGENT_SETTINGS,
+      roles: Array.isArray(DEFAULT_SUBAGENT_SETTINGS.roles)
+        ? [...DEFAULT_SUBAGENT_SETTINGS.roles]
+        : [],
+    }
   }
   return {
     enabled: typeof raw.enabled === 'boolean' ? raw.enabled : DEFAULT_SUBAGENT_SETTINGS.enabled,
@@ -372,6 +402,7 @@ function sanitizeSubagentsSettings(raw: any): SubagentsSettings {
       typeof raw.maxDepth === 'number' && raw.maxDepth > 0
         ? Math.round(raw.maxDepth)
         : DEFAULT_SUBAGENT_SETTINGS.maxDepth,
+    roles: sanitizeSubagentRoles(raw.roles),
   }
 }
 

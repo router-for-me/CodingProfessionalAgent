@@ -378,7 +378,9 @@ describe('ResourceProvider', () => {
         })
 
         expect(snapshot.systemPrompt).toContain('<available_roles>')
-        expect(snapshot.systemPrompt).toContain('如果遇到和角色定义相同的需要派发子代理的场景，优先使用用户定义的子代理角色去执行，而不要自行判断使用的模型、提示词。')
+        expect(snapshot.systemPrompt).toContain(
+            'When encountering scenarios matching any of these defined roles when dispatching a sub-agent, prioritize using the user-defined subagent role rather than deciding the model, reasoning effort, or prompt on your own.'
+        )
         expect(snapshot.systemPrompt).toContain('<id>role-1</id>')
         expect(snapshot.systemPrompt).toContain('<name>代码审查员</name>')
         expect(snapshot.systemPrompt).toContain('<description>负责代码质量与安全审计</description>')

@@ -33,7 +33,7 @@ export const DEFAULT_SUBAGENT_SETTINGS: SubagentsSettings = {
     roles: getDefaultSubagentRoles(),
 }
 
-function loadInitialSettings(t?: any): SubagentsSettings {
+function loadInitialSettings(): SubagentsSettings {
     try {
         if (typeof window !== 'undefined' && window.localStorage) {
             const raw = window.localStorage.getItem(STORAGE_KEY)
@@ -44,7 +44,7 @@ function loadInitialSettings(t?: any): SubagentsSettings {
                     concurrency: typeof parsed.concurrency === 'number' ? parsed.concurrency : DEFAULT_SUBAGENT_SETTINGS.concurrency,
                     maxPerSession: typeof parsed.maxPerSession === 'number' ? parsed.maxPerSession : DEFAULT_SUBAGENT_SETTINGS.maxPerSession,
                     maxDepth: typeof parsed.maxDepth === 'number' ? parsed.maxDepth : DEFAULT_SUBAGENT_SETTINGS.maxDepth,
-                    roles: Array.isArray(parsed.roles) ? parsed.roles : getDefaultSubagentRoles(t),
+                    roles: Array.isArray(parsed.roles) ? parsed.roles : getDefaultSubagentRoles(),
                 }
             }
         }
@@ -53,7 +53,7 @@ function loadInitialSettings(t?: any): SubagentsSettings {
     }
     return {
         ...DEFAULT_SUBAGENT_SETTINGS,
-        roles: getDefaultSubagentRoles(t),
+        roles: getDefaultSubagentRoles(),
     }
 }
 
@@ -162,19 +162,23 @@ export function SubagentsSection() {
                 concurrency: typeof fromHost.concurrency === 'number' ? fromHost.concurrency : DEFAULT_SUBAGENT_SETTINGS.concurrency,
                 maxPerSession: typeof fromHost.maxPerSession === 'number' ? fromHost.maxPerSession : DEFAULT_SUBAGENT_SETTINGS.maxPerSession,
                 maxDepth: typeof fromHost.maxDepth === 'number' ? fromHost.maxDepth : DEFAULT_SUBAGENT_SETTINGS.maxDepth,
-                roles: Array.isArray(fromHost.roles) ? fromHost.roles : (loadInitialSettings(t).roles ?? getDefaultSubagentRoles(t)),
+                roles: Array.isArray(fromHost.roles) ? fromHost.roles : getDefaultSubagentRoles(),
             }
         }
-        return loadInitialSettings(t)
+        return loadInitialSettings()
     })
 
     useEffect(() => {
         if (!services?.settings?.subscribe) return
         return services.settings.subscribe((appSettings) => {
-            if (appSettings?.subagents) {
+            const nextSubagents = appSettings?.subagents
+            if (nextSubagents) {
                 setSettings((prev) => ({
                     ...prev,
-                    ...appSettings.subagents,
+                    ...nextSubagents,
+                    roles: Array.isArray(nextSubagents.roles)
+                        ? nextSubagents.roles
+                        : prev.roles,
                 }))
             }
         })

@@ -1243,7 +1243,9 @@ describe('SubAgentHost', () => {
         expect(childRunSystemPrompt).toContain('You may spawn child subagents if necessary.')
         expect(childRunSystemPrompt).toContain('<available_roles>')
         expect(childRunSystemPrompt).toContain('<id>nested-role</id>')
-        expect(childRunSystemPrompt).toContain('如果遇到和角色定义相同的需要派发子代理的场景，优先使用用户定义的子代理角色去执行，而不要自行判断使用的模型、提示词。')
+        expect(childRunSystemPrompt).toContain(
+            'When encountering scenarios matching any of these defined roles when dispatching a sub-agent, prioritize using the user-defined subagent role rather than deciding the model, reasoning effort, or prompt on your own.'
+        )
     })
 
     it('injects developer-level prompt at the head when spawning with a matching configured role and prioritizes role model/effort', async () => {
