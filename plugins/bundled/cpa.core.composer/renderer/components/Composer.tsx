@@ -8,6 +8,7 @@ import {
     useRef,
     useState,
     type ChangeEvent,
+    type ClipboardEvent,
     type ErrorInfo,
     type KeyboardEvent,
     type ReactNode,
@@ -1229,7 +1230,28 @@ const BaseComposer = memo(function BaseComposer({
         if (!files || files.length === 0) return
         const list = Array.from(files)
         event.target.value = ''
+        enqueueFiles(list)
+    }
 
+    const handlePaste = (event: ClipboardEvent<HTMLDivElement>) => {
+        const clipboard = event.clipboardData
+        const files = Array.from(clipboard.files ?? [])
+            .filter((file) => file.type.startsWith('image/'))
+        if (files.length === 0) {
+            for (const item of Array.from(clipboard.items ?? [])) {
+                if (item.kind !== 'file' || !item.type.startsWith('image/')) continue
+                const file = item.getAsFile()
+                if (file) files.push(file)
+            }
+        }
+        if (files.length === 0) return
+        // Consume image pastes so clipboard HTML/text is not inserted as well.
+        event.preventDefault()
+        if (controlsLocked || isWorktreeBlocked || quickModelPickerOpen) return
+        enqueueFiles(files)
+    }
+
+    const enqueueFiles = (list: File[]) => {
         processChainRef.current = processChainRef.current
             .then(async () => {
                 if (!mountedRef.current) return
@@ -1730,6 +1752,7 @@ const BaseComposer = memo(function BaseComposer({
                                 }
                             }}
                             onKeyDown={handleKeyDown}
+                            onPaste={handlePaste}
                             ariaControls={
                                 showSlashMenu
                                     ? slashListboxId

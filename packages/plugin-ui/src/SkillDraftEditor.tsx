@@ -31,6 +31,7 @@ export interface SkillDraftEditorProps {
     role?: string
     onChange: (value: string, cursor: number) => void
     onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void
+    onPaste?: (event: ClipboardEvent<HTMLDivElement>) => void
     editorRef?: RefObject<HTMLDivElement | null>
     cursor?: number
     maxHeight?: number
@@ -71,6 +72,7 @@ export function SkillDraftEditor({
     role,
     onChange,
     onKeyDown,
+    onPaste,
     editorRef,
     cursor,
     maxHeight = DEFAULT_MAX_HEIGHT,
@@ -379,6 +381,8 @@ export function SkillDraftEditor({
             }}
             onPaste={(event) => {
                 if (disabled) return
+                onPaste?.(event)
+                if (event.defaultPrevented) return
                 const pasted = event.clipboardData?.getData('text/plain')
                 if (pasted == null) return
                 event.preventDefault()

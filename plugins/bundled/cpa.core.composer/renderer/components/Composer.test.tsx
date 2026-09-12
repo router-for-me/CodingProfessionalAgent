@@ -1025,6 +1025,38 @@ describe('Composer $ skill picker', () => {
 })
 
 describe('Composer attachments', () => {
+    it.each(['files', 'items'] as const)('pastes clipboard images via %s and sends them once', async (source) => {
+        const onSend = vi.fn()
+        render(<Composer onSend={onSend} />)
+        const file = jpegFile('clipboard.jpg')
+        await act(async () => {
+            fireEvent.paste(screen.getByTestId('composer-input'), {
+                clipboardData: {
+                    files: source === 'files' ? [file] : [],
+                    items: [{ kind: 'file', type: file.type, getAsFile: () => file }],
+                    getData: () => 'unwanted clipboard text',
+                },
+            })
+        })
+        await waitFor(() => {
+            expect(screen.getByRole('img', { name: 'clipboard.jpg' })).toBeInTheDocument()
+        })
+        expect(screen.getByTestId('composer-input')).not.toHaveTextContent('unwanted clipboard text')
+        await userEvent.setup().click(screen.getByRole('button', { name: 'Send' }))
+        expect(onSend.mock.calls[0]![0].images).toHaveLength(1)
+        expect(onSend.mock.calls[0]![0].images[0].mimeType).toBe('image/jpeg')
+    })
+
+    it('does not add pasted images while running', async () => {
+        render(<Composer onSend={() => undefined} isStreaming />)
+        await act(async () => {
+            fireEvent.paste(screen.getByTestId('composer-input'), {
+                clipboardData: { files: [jpegFile('locked.jpg')], getData: () => '' },
+            })
+        })
+        expect(screen.queryByRole('img', { name: 'locked.jpg' })).not.toBeInTheDocument()
+    })
+
     it('allows selecting files on the file input', async () => {
         render(<Composer onSend={() => undefined} />)
         const file = jpegFile()
