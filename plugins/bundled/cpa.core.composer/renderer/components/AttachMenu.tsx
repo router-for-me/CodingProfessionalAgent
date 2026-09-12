@@ -1,8 +1,8 @@
 import { useEffect, useRef, type ReactElement } from 'react'
-import { Lightbulb, Paperclip, Target, cn, useTranslation } from '@cpa/plugin-ui'
+import { Paperclip, cn, useTranslation } from '@cpa/plugin-ui'
 import type { AttachmentProvider } from '@cpa/plugin-api'
 
-export type AttachMenuItemId = 'files' | 'goal' | 'plan-mode' | (string & {})
+export type AttachMenuItemId = 'files' | (string & {})
 
 export interface AttachMenuItem {
     id: AttachMenuItemId
@@ -35,20 +35,6 @@ export const ATTACH_MENU_ITEMS: {
         labelKey: 'composer.attachMenu.filesAndFolders',
         defaultLabel: 'Files & Folders',
     },
-    {
-        id: 'goal',
-        labelKey: 'composer.attachMenu.goal',
-        descKey: 'composer.attachMenu.goalDesc',
-        defaultLabel: 'Goal',
-        defaultDesc: 'Set a continuous goal to pursue',
-    },
-    {
-        id: 'plan-mode',
-        labelKey: 'composer.attachMenu.planMode',
-        descKey: 'composer.attachMenu.planModeDesc',
-        defaultLabel: 'Plan Mode',
-        defaultDesc: 'Enable plan mode',
-    },
 ]
 
 function getProviderIcon(id: string, customIcon?: any): ReactElement {
@@ -61,12 +47,6 @@ function getProviderIcon(id: string, customIcon?: any): ReactElement {
     }
     if (id === 'files') {
         return <Paperclip className="size-4 shrink-0 text-[var(--text-muted)]" aria-hidden />
-    }
-    if (id === 'goal') {
-        return <Target className="size-4 shrink-0 text-[var(--text-muted)]" aria-hidden />
-    }
-    if (id === 'plan-mode') {
-        return <Lightbulb className="size-4 shrink-0 text-[var(--text-muted)]" aria-hidden />
     }
     return <Paperclip className="size-4 shrink-0 text-[var(--text-muted)]" aria-hidden />
 }
@@ -100,22 +80,6 @@ export function AttachMenu({
                       id: 'files',
                       label: t('composer.attachMenu.filesAndFolders', { defaultValue: 'Files & Folders' }),
                       icon: <Paperclip className="size-4 shrink-0 text-[var(--text-muted)]" aria-hidden />,
-                  },
-                  {
-                      id: 'goal',
-                      label: t('composer.attachMenu.goal', { defaultValue: 'Goal' }),
-                      description: t('composer.attachMenu.goalDesc', {
-                          defaultValue: 'Set a continuous goal to pursue',
-                      }),
-                      icon: <Target className="size-4 shrink-0 text-[var(--text-muted)]" aria-hidden />,
-                  },
-                  {
-                      id: 'plan-mode',
-                      label: t('composer.attachMenu.planMode', { defaultValue: 'Plan Mode' }),
-                      description: t('composer.attachMenu.planModeDesc', {
-                          defaultValue: 'Enable plan mode',
-                      }),
-                      icon: <Lightbulb className="size-4 shrink-0 text-[var(--text-muted)]" aria-hidden />,
                   },
               ]
 

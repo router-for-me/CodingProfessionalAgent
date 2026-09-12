@@ -331,8 +331,6 @@ export const bundledManifests: Readonly<Record<string, PluginManifest>> = Object
                         "context-usage-ring",
                         "model-select",
                         "files",
-                        "goal",
-                        "plan-mode",
                         "prompt-preprocessor",
                         "skill-preprocessor"
                 ],

@@ -576,11 +576,6 @@ const BaseComposer = memo(function BaseComposer({
                 console.error(`[Composer] Attachment provider "${id}" select error:`, err)
             }
         }
-        if (id === 'goal') {
-            textareaRef.current?.focus()
-        } else if (id === 'plan-mode') {
-            textareaRef.current?.focus()
-        }
     }
 
     const projectId = currentSession

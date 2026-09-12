@@ -8,7 +8,7 @@ describe('AttachMenu', () => {
         await i18n.changeLanguage('en')
     })
 
-    it('renders header and all three menu items with labels and descriptions', () => {
+    it('renders the files and folders menu item', () => {
         render(
             <AttachMenu
                 activeIndex={0}
@@ -20,14 +20,11 @@ describe('AttachMenu', () => {
 
         expect(screen.getByText('Add')).toBeInTheDocument()
         expect(screen.getByText('Files & folders')).toBeInTheDocument()
-        expect(screen.getByText('Goal')).toBeInTheDocument()
-        expect(screen.getByText('Set a goal to persistently pursue')).toBeInTheDocument()
-        expect(screen.getByText('Plan mode')).toBeInTheDocument()
-        expect(screen.getByText('Turn on plan mode')).toBeInTheDocument()
+        expect(screen.getAllByRole('option')).toHaveLength(1)
     })
 
     it('highlights active item based on activeIndex', () => {
-        const { rerender } = render(
+        render(
             <AttachMenu
                 activeIndex={1}
                 onActiveIndexChange={() => undefined}
@@ -36,20 +33,7 @@ describe('AttachMenu', () => {
             />,
         )
 
-        const options = screen.getAllByRole('option')
-        expect(options[0]).toHaveAttribute('aria-selected', 'false')
-        expect(options[1]).toHaveAttribute('aria-selected', 'true')
-        expect(options[2]).toHaveAttribute('aria-selected', 'false')
-
-        rerender(
-            <AttachMenu
-                activeIndex={2}
-                onActiveIndexChange={() => undefined}
-                onSelect={() => undefined}
-                onClose={() => undefined}
-            />,
-        )
-        expect(options[2]).toHaveAttribute('aria-selected', 'true')
+        expect(screen.getByRole('option')).toHaveAttribute('aria-selected', 'true')
     })
 
     it('triggers onSelect when an option is clicked', async () => {
@@ -66,14 +50,6 @@ describe('AttachMenu', () => {
         const filesOption = screen.getByText('Files & folders').closest('button')!
         fireEvent.mouseDown(filesOption)
         expect(onSelect).toHaveBeenCalledWith('files')
-
-        const goalOption = screen.getByText('Goal').closest('button')!
-        fireEvent.mouseDown(goalOption)
-        expect(onSelect).toHaveBeenCalledWith('goal')
-
-        const planOption = screen.getByText('Plan mode').closest('button')!
-        fireEvent.mouseDown(planOption)
-        expect(onSelect).toHaveBeenCalledWith('plan-mode')
     })
 
     it('triggers onActiveIndexChange on mouse enter', () => {
@@ -87,9 +63,8 @@ describe('AttachMenu', () => {
             />,
         )
 
-        const options = screen.getAllByRole('option')
-        fireEvent.mouseEnter(options[1]!)
-        expect(onActiveIndexChange).toHaveBeenCalledWith(1)
+        fireEvent.mouseEnter(screen.getByRole('option'))
+        expect(onActiveIndexChange).toHaveBeenCalledWith(0)
     })
 
     it('closes when clicking outside of composer', async () => {

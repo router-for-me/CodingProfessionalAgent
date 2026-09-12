@@ -109,34 +109,6 @@ export const composerRendererEntry = definePluginEntry({
             },
         })
 
-        context.register<AttachmentProvider>({
-            kind: 'composer',
-            id: 'goal',
-            target: 'attachment',
-            value: {
-                id: 'goal',
-                order: 20,
-                label: 'Goal',
-                labelKey: 'composer.attachMenu.goal',
-                description: 'Set a goal to persistently pursue',
-                descKey: 'composer.attachMenu.goalDesc',
-            },
-        })
-
-        context.register<AttachmentProvider>({
-            kind: 'composer',
-            id: 'plan-mode',
-            target: 'attachment',
-            value: {
-                id: 'plan-mode',
-                order: 30,
-                label: 'Plan mode',
-                labelKey: 'composer.attachMenu.planMode',
-                description: 'Turn on plan mode',
-                descKey: 'composer.attachMenu.planModeDesc',
-            },
-        })
-
         // 5. Register Submit Preprocessors
         context.register<ComposerSubmitPreprocessorContribution>({
             kind: 'composer',
