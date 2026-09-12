@@ -581,7 +581,7 @@ describe('persist pure helpers', () => {
 
     applyPersistedState(malformedState)
 
-    expect(useSettingsStore.getState().settings.git?.branchPrefix).toBe('codex/')
+    expect(useSettingsStore.getState().settings.git?.branchPrefix).toBe('cpa/')
     expect(useSettingsStore.getState().settings.git?.mergeMethod).toBe('merge')
     expect(useSettingsStore.getState().settings.git?.alwaysForcePush).toBe(false)
     expect(useSettingsStore.getState().settings.worktrees?.rootDir).toBe(

@@ -44,7 +44,7 @@ describe('worktreeManager', () => {
             expect(progressEvents).toContain('done')
 
             expect(result.worktreePath).toContain('/Users/test/.coding-professional-agent/worktrees/my-repo-')
-            expect(result.branch).toMatch(/^codex\/[0-9a-f]{8}$/)
+            expect(result.branch).toMatch(/^cpa\/[0-9a-f]{8}$/)
             expect(result.isNewBranch).toBe(true)
 
             // Should have called git fetch first, then git worktree add -b
@@ -121,23 +121,23 @@ describe('worktreeManager', () => {
                 if (args[1] === 'add' && args[2] === '-b' && args[3] === 'main') {
                     return { exitCode: 1, stdout: '', stderr: "fatal: A branch named 'main' already exists" }
                 }
-                // Third worktree add -b codex/xxxx <path> main succeeds
+                // Third worktree add -b cpa/xxxx <path> main succeeds
                 return { exitCode: 0, stdout: 'ok', stderr: '' }
             }
 
             const result = await createWorktreeForProject({
                 sourceTreePath: '/Users/test/projects/my-repo',
                 branch: 'main',
-                branchPrefix: 'codex/',
+                branchPrefix: 'cpa/',
                 worktreeRootDir: '/Users/test/.coding-professional-agent/worktrees',
                 fetchUpstream: false,
                 gitRunner: fakeGitRunner,
             })
 
-            expect(result.branch).toMatch(/^codex\/[0-9a-f]{8}$/)
+            expect(result.branch).toMatch(/^cpa\/[0-9a-f]{8}$/)
             expect(result.isNewBranch).toBe(true)
-            // Check that it was called with git worktree add -b codex/xxx <path> main
-            const prefixCall = gitCalls.find((c) => c.args[2] === '-b' && c.args[3]?.startsWith('codex/'))
+            // Check that it was called with git worktree add -b cpa/xxx <path> main
+            const prefixCall = gitCalls.find((c) => c.args[2] === '-b' && c.args[3]?.startsWith('cpa/'))
             expect(prefixCall).toBeDefined()
             expect(prefixCall?.args[5]).toBe('main')
         })

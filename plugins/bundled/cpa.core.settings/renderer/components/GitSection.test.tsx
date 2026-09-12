@@ -22,7 +22,7 @@ describe('GitSection', () => {
         // Check branch prefix input
         const branchInput = screen.getByLabelText('Branch prefix') as HTMLInputElement
         expect(branchInput).toBeInTheDocument()
-        expect(branchInput.value).toBe('codex/')
+        expect(branchInput.value).toBe('cpa/')
 
         // Check merge method radio buttons
         expect(screen.getByRole('radio', { name: 'Merge' })).toBeInTheDocument()

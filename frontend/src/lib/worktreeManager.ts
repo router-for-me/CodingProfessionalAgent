@@ -41,8 +41,8 @@ export function sanitizeFolderName(name: string): string {
 
 /** Normalize branch prefix ensuring it ends with a slash. */
 export function normalizeBranchPrefix(prefix?: string | null): string {
-    const trimmed = (prefix ?? 'codex/').trim()
-    if (!trimmed) return 'codex/'
+    const trimmed = (prefix ?? 'cpa/').trim()
+    if (!trimmed) return 'cpa/'
     return trimmed.endsWith('/') ? trimmed : `${trimmed}/`
 }
 
@@ -55,7 +55,7 @@ export async function createWorktreeForProject(
     const {
         sourceTreePath,
         branch: requestedBranch,
-        branchPrefix = 'codex/',
+        branchPrefix = 'cpa/',
         worktreeRootDir: configuredRootDir,
         fetchUpstream = true,
         gitRunner = runGitViaNativeBridge,

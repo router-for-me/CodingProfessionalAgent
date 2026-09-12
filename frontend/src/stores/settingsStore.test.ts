@@ -24,7 +24,7 @@ describe('settingsStore', () => {
   })
 
   it('updates git settings and hydrates properly', () => {
-    expect(useSettingsStore.getState().settings.git?.branchPrefix).toBe('codex/')
+    expect(useSettingsStore.getState().settings.git?.branchPrefix).toBe('cpa/')
     useSettingsStore.getState().setGitSettings({
       branchPrefix: 'feat/',
       mergeMethod: 'squash',

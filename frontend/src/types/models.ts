@@ -127,7 +127,7 @@ export const DEFAULT_MODEL_SETTINGS: ModelSettingsConfig = {
 }
 
 export const DEFAULT_GIT_SETTINGS: GitSettings = {
-  branchPrefix: 'codex/',
+  branchPrefix: 'cpa/',
   mergeMethod: 'merge',
   alwaysForcePush: false,
   createDraftPr: true,

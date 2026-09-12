@@ -86,7 +86,7 @@ export const useWorktreeSetupStore = create<WorktreeSetupState>((set, get) => ({
 
         const settings = useSettingsStore.getState().settings.worktrees
         const gitSettings = useSettingsStore.getState().settings.git
-        const branchPrefix = params.branchPrefix ?? gitSettings?.branchPrefix ?? 'codex/'
+        const branchPrefix = params.branchPrefix ?? gitSettings?.branchPrefix ?? 'cpa/'
         const worktreeRootDir = customRootDir ?? settings?.rootDir
         const fetchUpstream = customFetchUpstream ?? (settings?.fetchUpstream ?? true)
 
