@@ -262,29 +262,7 @@ export interface SubagentRole {
   reasoningEffort: string
 }
 
-export const DEFAULT_SUBAGENT_ROLES: readonly SubagentRole[] = Object.freeze([
-  {
-    id: 'role-reviewer',
-    name: 'Code Reviewer',
-    description: 'Reviews code changes for security, logic defects, edge cases, and best practices.',
-    modelId: 'claude-sonnet-4-6',
-    reasoningEffort: 'high',
-  },
-  {
-    id: 'role-debugger',
-    name: 'Debugger',
-    description: 'Analyzes error logs, investigates call stacks, and isolates root causes.',
-    modelId: 'gpt-5.5',
-    reasoningEffort: 'medium',
-  },
-  {
-    id: 'role-architect',
-    name: 'Architect',
-    description: 'Focuses on high-level system design, modular boundaries, technology selection, and interface contracts.',
-    modelId: 'gemini-3.7-flash',
-    reasoningEffort: 'low',
-  },
-])
+export const DEFAULT_SUBAGENT_ROLES: readonly SubagentRole[] = Object.freeze([])
 
 export interface SubagentsSettings {
   enabled: boolean

@@ -491,7 +491,7 @@ describe('persist pure helpers', () => {
     expect(restoredSettings?.roles).toEqual(customRoles)
   })
 
-  it('falls back to default subagent roles when roles are missing in legacy state', () => {
+  it('falls back to empty subagent roles when roles are missing in legacy state', () => {
     const legacyState = {
       version: 2,
       settings: {
@@ -515,8 +515,7 @@ describe('persist pure helpers', () => {
     const restored = useSettingsStore.getState().settings.subagents
     expect(restored?.concurrency).toBe(8)
     expect(Array.isArray(restored?.roles)).toBe(true)
-    expect(restored?.roles?.length).toBeGreaterThan(0)
-    expect(restored?.roles?.some((r) => r.id === 'role-reviewer')).toBe(true)
+    expect(restored?.roles).toEqual([])
   })
 
   it('preserves empty subagent roles list when explicitly configured by user', () => {

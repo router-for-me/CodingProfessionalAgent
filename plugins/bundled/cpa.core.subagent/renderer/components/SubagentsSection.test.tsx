@@ -166,7 +166,7 @@ describe('SubagentsSection', () => {
         expect(maxDepthInput).toHaveValue(1)
     })
 
-    it('renders Roles section with title, subtitle, and default roles', () => {
+    it('renders Roles section with title, subtitle, and empty state when no roles are configured', () => {
         render(<SubagentsSection />)
 
         expect(screen.getByText('Subagent Roles')).toBeInTheDocument()
@@ -179,10 +179,9 @@ describe('SubagentsSection', () => {
         const addRoleButton = screen.getByRole('button', { name: 'Add Role' })
         expect(addRoleButton).toBeInTheDocument()
 
-        // Verify default roles are rendered
-        expect(screen.getByDisplayValue('Code Reviewer')).toBeInTheDocument()
-        expect(screen.getByDisplayValue('Debugger')).toBeInTheDocument()
-        expect(screen.getByDisplayValue('Architect')).toBeInTheDocument()
+        // Verify empty state is displayed initially without preset roles
+        expect(screen.getByTestId('roles-empty-state')).toBeInTheDocument()
+        expect(screen.getByText('No Roles Configured')).toBeInTheDocument()
 
         // Strict UI constraint: Never use native <select> element
         expect(document.querySelector('select')).toBeNull()
@@ -192,27 +191,29 @@ describe('SubagentsSection', () => {
         render(<SubagentsSection />)
 
         const addRoleButton = screen.getByRole('button', { name: 'Add Role' })
-        const initialCards = screen.getAllByTestId(/^role-card-/)
-        expect(initialCards).toHaveLength(3)
+        expect(screen.queryAllByTestId(/^role-card-/)).toHaveLength(0)
 
         fireEvent.click(addRoleButton)
 
         const cardsAfter = screen.getAllByTestId(/^role-card-/)
-        expect(cardsAfter).toHaveLength(4)
+        expect(cardsAfter).toHaveLength(1)
 
         const stored = JSON.parse(window.localStorage.getItem('cpa.settings.subagents') || '{}')
-        expect(stored.roles).toHaveLength(4)
+        expect(stored.roles).toHaveLength(1)
     })
 
     it('allows editing role name and description and saves to localStorage', () => {
         render(<SubagentsSection />)
 
-        const nameInput = screen.getByDisplayValue('Code Reviewer')
+        const addRoleButton = screen.getByRole('button', { name: 'Add Role' })
+        fireEvent.click(addRoleButton)
+
+        const nameInput = screen.getByPlaceholderText('e.g. Code Reviewer')
         fireEvent.change(nameInput, { target: { value: 'Senior Security Auditor' } })
         expect(nameInput).toHaveValue('Senior Security Auditor')
 
-        const descTextarea = screen.getByDisplayValue(
-            'Reviews code changes for security, logic defects, edge cases, and best practices.'
+        const descTextarea = screen.getByPlaceholderText(
+            'Enter specialized prompt or instructions for this role...'
         )
         fireEvent.change(descTextarea, {
             target: { value: 'Audits vulnerabilities, tokens, and compliance.' },
@@ -229,25 +230,19 @@ describe('SubagentsSection', () => {
     it('allows deleting roles and shows empty state when all roles are removed', () => {
         render(<SubagentsSection />)
 
+        const addRoleButton = screen.getByRole('button', { name: 'Add Role' })
+        fireEvent.click(addRoleButton)
+
         let deleteButtons = screen.getAllByRole('button', { name: 'Delete Role' })
-        expect(deleteButtons).toHaveLength(3)
-
-        // Delete all 3 roles
-        fireEvent.click(deleteButtons[0])
-        deleteButtons = screen.getAllByRole('button', { name: 'Delete Role' })
-        expect(deleteButtons).toHaveLength(2)
-
-        fireEvent.click(deleteButtons[0])
-        deleteButtons = screen.getAllByRole('button', { name: 'Delete Role' })
         expect(deleteButtons).toHaveLength(1)
 
+        // Delete the role
         fireEvent.click(deleteButtons[0])
 
         // Empty state should be visible
         expect(screen.getByTestId('roles-empty-state')).toBeInTheDocument()
         expect(screen.getByText('No Roles Configured')).toBeInTheDocument()
 
-        const addRoleButton = screen.getByRole('button', { name: 'Add Role' })
         fireEvent.click(addRoleButton)
 
         expect(screen.queryByTestId('roles-empty-state')).toBeNull()
