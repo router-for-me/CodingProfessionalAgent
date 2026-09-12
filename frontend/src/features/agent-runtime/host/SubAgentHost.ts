@@ -16,6 +16,7 @@ import {
     type SubagentsSettings,
     type UserEntry,
 } from '@cpa/plugin-api'
+import { formatSubagentRolesForPrompt } from '@cpa/plugin-sdk'
 import { buildSystemPrompt } from '../context/systemPrompt'
 import { formatWorktreeModePrompt } from '../context/worktreeMode'
 import { HookProvider } from '../providers/HookProvider'
@@ -144,6 +145,7 @@ export function buildSubAgentSystemPrompt(
         extensionRegistry?: any
         promptGuidelines?: readonly string[]
         allowSubagents?: boolean
+        roles?: readonly SubagentRole[]
         rolePrompt?: string
         roleName?: string
     },
@@ -202,17 +204,26 @@ export function buildSubAgentSystemPrompt(
         ? `${systemPrompt}\n${formatWorktreeModePrompt(prepared.worktreePolicy)}`
         : systemPrompt
 
+    const hasSpawnAgent = codingTools.some((tool) => tool.name === 'spawn_agent')
+    const roles = options?.roles ?? prepared?.subagentsSettings?.roles
+    const rolesSection =
+        (options?.allowSubagents || hasSpawnAgent) && roles && roles.length > 0
+            ? formatSubagentRolesForPrompt(roles)
+            : ''
+
+    const withRoles = rolesSection ? `${withWorktree}${rolesSection}` : withWorktree
+
     if (options?.rolePrompt && options.rolePrompt.trim().length > 0) {
         const developerBlock = buildSubAgentDeveloperPrompt(
             options.roleName,
             options.rolePrompt,
         )
         if (developerBlock) {
-            return `<developer_instructions>\n${developerBlock}\n</developer_instructions>\n\n${withWorktree}`
+            return `<developer_instructions>\n${developerBlock}\n</developer_instructions>\n\n${withRoles}`
         }
     }
 
-    return withWorktree
+    return withRoles
 }
 
 export function isSubAgentToolName(name?: string): boolean {
@@ -1387,6 +1398,7 @@ export class SubAgentHost {
                 {
                     extensionRegistry: config.extensionRegistry,
                     allowSubagents: canSpawnChildren,
+                    roles: config.subagentsSettings?.roles,
                 },
             ),
             developerPrompt: developerPrompt || undefined,

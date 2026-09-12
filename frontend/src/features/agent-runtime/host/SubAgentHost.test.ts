@@ -1213,6 +1213,15 @@ describe('SubAgentHost', () => {
                 concurrency: 10,
                 maxPerSession: 3,
                 maxDepth: 2,
+                roles: [
+                    {
+                        id: 'nested-role',
+                        name: 'Nested Reviewer',
+                        description: 'Inspect nested code.',
+                        modelId: 'parent-model',
+                        reasoningEffort: 'medium',
+                    },
+                ],
             },
         })
         host2.setParentContext({ sessionId: 'session-root', runId: 'run-1' })
@@ -1221,6 +1230,9 @@ describe('SubAgentHost', () => {
         expect(childRunTools.some((t) => t.name === 'spawn_agent')).toBe(true)
         expect(childRunSystemPrompt).not.toContain('Do not spawn other agents.')
         expect(childRunSystemPrompt).toContain('You may spawn child subagents if necessary.')
+        expect(childRunSystemPrompt).toContain('<available_roles>')
+        expect(childRunSystemPrompt).toContain('<id>nested-role</id>')
+        expect(childRunSystemPrompt).toContain('如果遇到和角色定义相同的需要派发子代理的场景，优先使用用户定义的子代理角色去执行，而不要自行判断使用的模型、提示词。')
     })
 
     it('injects developer-level prompt at the head when spawning with a matching configured role and prioritizes role model/effort', async () => {
