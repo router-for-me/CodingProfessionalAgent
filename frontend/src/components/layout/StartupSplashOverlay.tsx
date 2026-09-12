@@ -1,11 +1,12 @@
 import { useEffect, useState, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
-import { AlertCircle, Check, Eye, EyeOff, Globe, Key, Loader2 } from 'lucide-react'
+import { AlertCircle, ArrowRight, Check, Eye, EyeOff, Globe, KeyRound, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { flushPendingPersistence } from '@/application/services/persistenceService'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useModelCatalogStore } from '@/stores/modelCatalogStore'
 import { refreshModelCatalog } from '@/features/models/modelCatalogService'
+import styles from './StartupConfigCard.module.css'
 
 export interface StartupSplashOverlayProps {
     /** Force display for testing purposes */
@@ -236,60 +237,65 @@ export function StartupSplashOverlay({
                     <form
                         onSubmit={handleSubmit}
                         data-testid="startup-config-form"
-                        className="flex flex-col gap-4 p-5 rounded-2xl bg-[#0b0e18]/80 backdrop-blur-xl border border-white/10 shadow-2xl text-left"
+                        className={styles.card}
+                        aria-busy={isSubmitting}
+                        aria-describedby={error ? 'startup-config-error' : undefined}
                     >
                         {/* Service Address */}
-                        <div className="flex flex-col gap-1.5">
-                            <label
-                                htmlFor="startup-base-url"
-                                className="text-xs font-medium text-slate-300 flex items-center gap-1.5"
-                            >
-                                <Globe className="size-3.5 text-sky-400" />
+                        <div className={styles.field}>
+                            <label htmlFor="startup-base-url" className={styles.label}>
                                 {t('startup.serviceAddress')}
                             </label>
-                            <input
-                                id="startup-base-url"
-                                data-testid="startup-base-url-input"
-                                type="text"
-                                autoComplete="url"
-                                value={baseUrl}
-                                onChange={(e) => handleBaseUrlChange(e.target.value)}
-                                placeholder="http://127.0.0.1:8317"
-                                className="h-9 px-3 text-xs bg-[#121727] border border-white/10 rounded-lg text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition-colors"
-                            />
+                            <div className={styles.inputWell}>
+                                <Globe className={styles.fieldIcon} aria-hidden="true" />
+                                <input
+                                    id="startup-base-url"
+                                    data-testid="startup-base-url-input"
+                                    type="text"
+                                    inputMode="url"
+                                    autoComplete="url"
+                                    autoCapitalize="none"
+                                    spellCheck={false}
+                                    value={baseUrl}
+                                    onChange={(e) => handleBaseUrlChange(e.target.value)}
+                                    placeholder="http://127.0.0.1:8317"
+                                    className={styles.input}
+                                />
+                            </div>
                         </div>
 
                         {/* API Key */}
-                        <div className="flex flex-col gap-1.5">
-                            <label
-                                htmlFor="startup-api-key"
-                                className="text-xs font-medium text-slate-300 flex items-center gap-1.5"
-                            >
-                                <Key className="size-3.5 text-sky-400" />
+                        <div className={styles.field}>
+                            <label htmlFor="startup-api-key" className={styles.label}>
                                 {t('startup.apiKey')}
                             </label>
-                            <div className="relative">
+                            <div className={styles.inputWell}>
+                                <KeyRound className={styles.fieldIcon} aria-hidden="true" />
                                 <input
                                     id="startup-api-key"
                                     data-testid="startup-api-key-input"
                                     ref={apiKeyInputRef}
                                     type={showPassword ? 'text' : 'password'}
                                     autoComplete="current-password"
+                                    autoCapitalize="none"
+                                    spellCheck={false}
                                     value={apiKey}
                                     onChange={(e) => handleApiKeyChange(e.target.value)}
                                     placeholder={t('settings.connections.apiKey.placeholder')}
-                                    className="h-9 w-full pl-3 pr-9 text-xs bg-[#121727] border border-white/10 rounded-lg text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition-colors"
+                                    className={styles.input}
                                 />
                                 <button
                                     type="button"
-                                    aria-label={showPassword ? 'Hide API key' : 'Show API key'}
+                                    aria-label={t(showPassword ? 'startup.hideApiKey' : 'startup.showApiKey')}
+                                    aria-controls="startup-api-key"
+                                    aria-pressed={showPassword}
                                     onClick={() => setShowPassword(!showPassword)}
-                                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 transition-colors"
+                                    className={styles.visibilityButton}
                                 >
                                     {showPassword ? (
-                                        <EyeOff className="size-4" />
+                                        <EyeOff aria-hidden="true" />
                                     ) : (
-                                        <Eye className="size-4" />
+                                        <Eye aria-hidden="true" />
                                     )}
                                 </button>
                             </div>
@@ -298,39 +304,40 @@ export function StartupSplashOverlay({
                         {/* Error Message Display */}
                         {error && (
                             <div
+                                id="startup-config-error"
+                                role="alert"
                                 data-testid="startup-error-banner"
-                                className="flex items-start gap-2 p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs leading-relaxed"
+                                className={styles.error}
                             >
-                                <AlertCircle className="size-4 shrink-0 mt-0.5 text-rose-400" />
-                                <span className="break-all">{error}</span>
+                                <AlertCircle aria-hidden="true" />
+                                <span>{error}</span>
                             </div>
                         )}
 
                         {/* Action Buttons */}
-                        <div className="mt-1 pt-2 border-t border-white/5">
+                        <div className={styles.actions}>
                             <button
                                 type="submit"
                                 data-testid="startup-save-connect-btn"
                                 disabled={isSubmitting || isSuccess}
-                                className={cn(
-                                    'h-9 w-full px-4 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5 transition-all shadow-md',
-                                    isSuccess
-                                        ? 'bg-emerald-600 text-white shadow-emerald-500/20'
-                                        : 'bg-sky-500 hover:bg-sky-400 active:bg-sky-600 text-white shadow-sky-500/25 disabled:opacity-60 disabled:cursor-not-allowed',
-                                )}
+                                className={styles.connectButton}
+                                data-success={isSuccess || undefined}
                             >
                                 {isSubmitting ? (
                                     <>
-                                        <Loader2 className="size-3.5 animate-spin" />
+                                        <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
                                         <span>{t('startup.connecting')}</span>
                                     </>
                                 ) : isSuccess ? (
                                     <>
-                                        <Check className="size-3.5" />
+                                        <Check className="size-3.5" aria-hidden="true" />
                                         <span>{t('startup.connected')}</span>
                                     </>
                                 ) : (
-                                    <span>{t('startup.saveAndConnect')}</span>
+                                    <>
+                                        <span>{t('startup.saveAndConnect')}</span>
+                                        <ArrowRight className="size-3.5" aria-hidden="true" />
+                                    </>
                                 )}
                             </button>
                         </div>

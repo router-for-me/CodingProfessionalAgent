@@ -1264,6 +1264,8 @@
   "search.noResults": "No matching chats found",
   "startup.title": "Coding Professional Agent",
   "startup.serviceAddress": "CLIProxyAPI Base URL",
+  "startup.showApiKey": "Show API key",
+  "startup.hideApiKey": "Hide API key",
   "startup.apiKey": "API Key",
   "startup.saveAndConnect": "Save & Connect",
   "startup.connecting": "Connecting and loading models...",

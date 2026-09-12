@@ -1,0 +1,241 @@
+/* Card-only styling: the splash choreography stays in StartupSplashOverlay. */
+.card {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5em;
+    padding: 1.85em;
+    border: 1px solid var(--border-subtle);
+    border-radius: 1.75em;
+    background: linear-gradient(var(--bg-card), transparent),
+        color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+    backdrop-filter: blur(20px);
+    box-shadow: inset 0 1px 0 var(--border-subtle),
+        0 12px 32px -20px color-mix(in srgb, var(--text-primary) 18%, transparent);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: var(--ui-font-size, 14px);
+    font-weight: var(--font-weight-ui, normal);
+    line-height: 1.5;
+    text-align: left;
+}
+
+.field {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 0.65em;
+}
+
+.label {
+    padding-inline: 0.2em;
+    color: var(--text-secondary);
+    font-size: 0.86em;
+    letter-spacing: 0.015em;
+}
+
+.inputWell {
+    display: flex;
+    align-items: center;
+    gap: 0.8em;
+    min-width: 0;
+    min-height: 3.4em;
+    padding-inline: 1em 0.3em;
+    border: 1px solid var(--border-subtle);
+    border-radius: 0.95em;
+    background: color-mix(in srgb, var(--bg-app) 70%, var(--bg-elevated));
+    box-shadow: inset 0 1px 2px var(--bg-card);
+}
+
+/* Focus is immediate, including keyboard navigation: no animated focus chase. */
+.inputWell:focus-within {
+    border-color: color-mix(in srgb, var(--accent-blue) 70%, var(--border-subtle));
+    outline: 3px solid color-mix(in srgb, var(--accent-blue) 12%, transparent);
+    outline-offset: 1px;
+}
+
+.fieldIcon {
+    width: 1.15em;
+    height: 1.15em;
+    flex-shrink: 0;
+    color: var(--text-muted);
+    stroke-width: 1.6;
+}
+
+.inputWell:focus-within .fieldIcon {
+    color: var(--accent-blue);
+}
+
+.input {
+    width: 100%;
+    min-width: 0;
+    min-height: 3.2em;
+    padding-block: 0.7em;
+    padding-inline: 0 0.7em;
+    border: 0;
+    outline: none;
+    background: transparent;
+    color: var(--text-primary);
+    caret-color: var(--accent-blue);
+    font: inherit;
+    font-size: 0.93em;
+    user-select: text;
+}
+
+.input::placeholder {
+    color: var(--text-muted);
+}
+
+.visibilityButton {
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    width: 2.85em;
+    height: 2.85em;
+    padding: 0;
+    border: 0;
+    border-radius: 0.65em;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.visibilityButton svg {
+    width: 1.2em;
+    height: 1.2em;
+    stroke-width: 1.6;
+}
+
+.visibilityButton:focus-visible,
+.connectButton:focus-visible {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: 3px;
+}
+
+.actions {
+    padding-top: 0.15em;
+}
+
+.connectButton {
+    --button-accent: var(--accent-blue);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.65em;
+    width: 100%;
+    min-height: 3.3em;
+    padding: 0.8em 1em;
+    border: 1px solid color-mix(in srgb, var(--text-primary) 12%, transparent);
+    border-radius: 0.95em;
+    background: color-mix(in srgb, var(--button-accent) 55%, var(--text-primary));
+    box-shadow: inset 0 1px 0 var(--border-subtle);
+    color: var(--bg-app);
+    font: inherit;
+    font-size: 0.93em;
+    cursor: pointer;
+    transition: transform 120ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.connectButton[data-success] {
+    --button-accent: var(--accent-green);
+}
+
+.connectButton:disabled {
+    cursor: default;
+}
+
+.connectButton:disabled:not([data-success]) {
+    opacity: 0.65;
+    cursor: wait;
+}
+
+@media (hover: hover) and (pointer: fine) {
+    .visibilityButton:hover {
+        background: var(--bg-sidebar-hover);
+        color: var(--text-primary);
+    }
+
+    .connectButton:hover:not(:disabled) {
+        background: color-mix(in srgb, var(--button-accent) 45%, var(--text-primary));
+    }
+}
+
+.visibilityButton:active {
+    background: var(--bg-sidebar-hover);
+}
+
+.connectButton:active:not(:disabled):not(:focus-visible) {
+    transform: scale(0.985);
+}
+
+.error {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.65em;
+    padding: 0.85em 1em;
+    border: 1px solid color-mix(in srgb, var(--accent-orange) 25%, var(--border-subtle));
+    border-radius: 0.85em;
+    background: color-mix(in srgb, var(--accent-orange) 7%, var(--bg-elevated));
+    color: var(--text-secondary);
+    font-size: 0.86em;
+    line-height: 1.65;
+    user-select: text;
+}
+
+.error svg {
+    flex-shrink: 0;
+    width: 1.2em;
+    height: 1.2em;
+    margin-top: 0.2em;
+    color: var(--accent-orange);
+}
+
+.error span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+@media (max-width: 480px) {
+    .card {
+        padding: 1.4em;
+    }
+
+    /* Avoid focus zoom in mobile browsers, while respecting larger user fonts. */
+    .input {
+        font-size: max(16px, 1em);
+    }
+
+    .visibilityButton {
+        min-width: 44px;
+        min-height: 44px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .connectButton {
+        transition: none;
+    }
+
+    .connectButton:active:not(:disabled) {
+        transform: none;
+    }
+}
+
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+    .card {
+        background: var(--bg-elevated);
+        backdrop-filter: none;
+    }
+}
+
+@media (prefers-contrast: more) {
+    .card,
+    .inputWell {
+        border-color: var(--text-secondary);
+    }
+
+    .label,
+    .fieldIcon,
+    .input::placeholder {
+        color: var(--text-secondary);
+    }
+}

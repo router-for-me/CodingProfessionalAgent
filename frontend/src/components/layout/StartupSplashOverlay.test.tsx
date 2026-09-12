@@ -80,6 +80,11 @@ describe('StartupSplashOverlay', () => {
         expect(screen.getByTestId('startup-error-banner')).toHaveTextContent(
             'Please enter an API key',
         )
+        expect(screen.getByRole('alert')).toHaveAttribute('id', 'startup-config-error')
+        expect(screen.getByTestId('startup-config-form')).toHaveAttribute(
+            'aria-describedby', 'startup-config-error',
+        )
+        expect(screen.getByTestId('startup-api-key-input')).toHaveFocus()
     })
 
     it('submits valid configuration, refreshes model catalog, and dismisses on success', async () => {
@@ -197,14 +202,52 @@ describe('StartupSplashOverlay', () => {
         expect(apiKeyInput).toHaveAttribute('type', 'password')
 
         const toggleBtn = screen.getByRole('button', { name: /show api key/i })
+        expect(toggleBtn).toHaveAttribute('aria-controls', 'startup-api-key')
+        expect(toggleBtn).toHaveAttribute('aria-pressed', 'false')
         fireEvent.click(toggleBtn)
 
         expect(apiKeyInput).toHaveAttribute('type', 'text')
+        expect(toggleBtn).toHaveAttribute('aria-pressed', 'true')
 
         const hideBtn = screen.getByRole('button', { name: /hide api key/i })
         fireEvent.click(hideBtn)
 
         expect(apiKeyInput).toHaveAttribute('type', 'password')
+    })
+
+    it('localizes visibility controls and keeps inputs associated with their labels', async () => {
+        await i18n.changeLanguage('zh-CN')
+        render(<StartupSplashOverlay forceOpen />)
+
+        expect(screen.getByLabelText('CLIProxyAPI 服务地址')).toHaveAttribute('inputmode', 'url')
+        expect(screen.getByLabelText('API 密钥')).toHaveAttribute('spellcheck', 'false')
+        fireEvent.click(screen.getByRole('button', { name: '显示 API 密钥' }))
+        expect(screen.getByRole('button', { name: '隐藏 API 密钥' })).toHaveAttribute('aria-pressed', 'true')
+    })
+
+    it('shows a busy, disabled connection button while the request is pending', async () => {
+        let finishRequest!: () => void
+        vi.spyOn(modelCatalogService, 'refreshModelCatalog').mockImplementation(
+            () => new Promise<void>((resolve) => { finishRequest = resolve }),
+        )
+        render(<StartupSplashOverlay forceOpen />)
+        fireEvent.change(screen.getByTestId('startup-api-key-input'), {
+            target: { value: 'test-key' },
+        })
+        await act(async () => {
+            fireEvent.submit(screen.getByTestId('startup-config-form'))
+        })
+
+        expect(screen.getByTestId('startup-config-form')).toHaveAttribute('aria-busy', 'true')
+        expect(screen.getByTestId('startup-save-connect-btn')).toBeDisabled()
+        expect(screen.getByTestId('startup-save-connect-btn')).toHaveTextContent('Connecting')
+
+        await act(async () => {
+            useModelCatalogStore.setState({ status: 'ready', error: null })
+            finishRequest()
+        })
+        expect(screen.getByTestId('startup-config-form')).toHaveAttribute('aria-busy', 'false')
+        expect(screen.getByTestId('startup-save-connect-btn')).toHaveAttribute('data-success', 'true')
     })
 
     it('renders CLIProxyAPI service address label and does not render subtitle', async () => {

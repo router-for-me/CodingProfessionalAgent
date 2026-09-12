@@ -1264,6 +1264,8 @@
   "search.noResults": "未找到相关聊天",
   "startup.title": "Coding Professional Agent",
   "startup.serviceAddress": "CLIProxyAPI 服务地址",
+  "startup.showApiKey": "显示 API 密钥",
+  "startup.hideApiKey": "隐藏 API 密钥",
   "startup.apiKey": "API 密钥",
   "startup.saveAndConnect": "保存并连接",
   "startup.connecting": "正在连接并加载模型...",
