@@ -121,7 +121,7 @@ export function createSpawnAgentTool(
         name: 'spawn_agent',
         label: 'spawn_agent',
         description:
-            'Dispatch a sub-agent to work on an independent task. Choose a short, human-readable name randomly and pass it in name. If a pre-configured role is specified via role, model is optional and defaults to the role\'s configured model. If no role is specified, always pass model as a catalog model id. Waits until the sub-agent finishes and returns its last message, prefixed with the agent id. Use that id with send_message or stop_agent. Do not spawn a sub-agent for work you can finish with a single tool call. Sub-agents cannot spawn their own sub-agents.',
+            'Dispatch a sub-agent to work on an independent task. Choose a short, human-readable name randomly and pass it in name. If a pre-configured role is specified via role, model is optional and defaults to the role\'s configured model. If no role is specified, always pass model as a catalog model id. Waits until the sub-agent finishes and returns its last message, prefixed with the agent id. Use that id with send_message or stop_agent. Do not spawn a sub-agent for work you can finish with a single tool call.',
         targetAgent: 'main',
         parameters: {
             type: 'object',

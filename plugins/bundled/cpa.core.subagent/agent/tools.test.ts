@@ -59,6 +59,7 @@ describe('sub-agent tools', () => {
         expect(tools[0]?.parameters).toMatchObject({
             required: ['prompt', 'name'],
         })
+        expect(tools[0]?.description).not.toContain('cannot spawn their own sub-agents')
     })
 
     it('executes spawn via coordinator forwarding options and context', async () => {
