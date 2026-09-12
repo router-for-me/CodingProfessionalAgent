@@ -16,6 +16,7 @@ export interface BuildCodexRequestInput {
     model: ModelCatalogEntry
     sessionId: string
     systemPrompt: string
+    developerPrompt?: string
     entries: readonly ConversationEntry[]
     tools?: readonly CodexToolDefinition[]
     /** Original catalog request value (not remapped). */
@@ -63,6 +64,7 @@ export function buildCodexRequest(input: BuildCodexRequestInput): CodexResponseC
         model,
         sessionId,
         systemPrompt,
+        developerPrompt,
         entries,
         tools,
         reasoningEffort,
@@ -71,12 +73,18 @@ export function buildCodexRequest(input: BuildCodexRequestInput): CodexResponseC
         maxOutputTokens,
     } = input
 
+    const rawInstructions = systemPrompt || 'You are a helpful assistant.'
+    const effectiveInstructions =
+        developerPrompt && !rawInstructions.includes(developerPrompt)
+            ? `${developerPrompt}\n\n${rawInstructions}`
+            : rawInstructions
+
     const body: CodexResponseCreate = {
         type: 'response.create',
         model: model.id,
         store: false,
         stream: true,
-        instructions: systemPrompt || 'You are a helpful assistant.',
+        instructions: effectiveInstructions,
         input: convertConversationToCodexInput(entries, model),
         text: { verbosity: 'low' },
         include: ['reasoning.encrypted_content'],

@@ -629,7 +629,7 @@ function createWorktreePrepareInput(
             ])
             const spawnTool = prepared.tools.find((tool) => tool.name === 'spawn_agent')
             expect(spawnTool?.parameters).toMatchObject({
-                required: ['prompt', 'name', 'model'],
+                required: ['prompt', 'name'],
                 properties: {
                     model: { enum: [modelBase.id] },
                 },

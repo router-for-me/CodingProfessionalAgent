@@ -276,4 +276,17 @@ describe('buildCodexRequest', () => {
         })
         expect(invalid).not.toHaveProperty('max_output_tokens')
     })
+
+    it('injects developerPrompt at the head of instructions', () => {
+        const body = buildCodexRequest({
+            model: visionModel,
+            sessionId: 's-developer',
+            systemPrompt: 'Base system instructions.',
+            developerPrompt: '<developer_instructions>\nRole: Reviewer\nStrict review rules.\n</developer_instructions>',
+            entries: [],
+        })
+        expect(body.instructions.startsWith('<developer_instructions>')).toBe(true)
+        expect(body.instructions).toContain('Role: Reviewer')
+        expect(body.instructions).toContain('Base system instructions.')
+    })
 })

@@ -204,6 +204,7 @@ export interface ProtocolToolDefinition {
 export interface ProtocolStreamInput {
     model: ModelCatalogEntry
     systemPrompt: string
+    developerPrompt?: string
     entries: readonly ConversationEntry[]
     tools?: readonly ProtocolToolDefinition[]
     reasoningEffort?: string
