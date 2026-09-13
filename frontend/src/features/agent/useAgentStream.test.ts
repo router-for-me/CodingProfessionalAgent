@@ -24,6 +24,7 @@ import {
 } from './useAgentStream'
 import { SubAgentHost } from '@/features/agent-runtime/host/SubAgentHost'
 import { getHostServices } from '@/application/services/createHostServices'
+import { setHostBridge } from '@/application/services/hostTransport'
 import type { SubAgentRecord, SubagentRole } from '@cpa/plugin-api'
 import { useMessageStore } from '@/stores/messageStore'
 import { useSessionStore } from '@/stores/sessionStore'
@@ -390,6 +391,7 @@ describe('useAgentStream', () => {
     })
 
     afterEach(() => {
+        setHostBridge(null)
         Object.defineProperty(navigator, 'userAgent', {
             value: originalUserAgent,
             configurable: true,
@@ -2979,5 +2981,131 @@ describe('useAgentStream', () => {
         } finally {
             dateNowSpy.mockRestore()
         }
+    })
+
+    it('notifies host of task completion when run finishes cleanly and not aborted', async () => {
+        const notifyMock = vi.fn().mockResolvedValue(undefined)
+        setHostBridge({
+            NotificationTaskCompleted: notifyMock,
+            SessionBroadcastRunStatus: vi.fn().mockResolvedValue(undefined),
+            SessionBroadcastStreamEvent: vi.fn().mockResolvedValue(undefined),
+        } as any)
+
+        const { result } = renderHook(() => useAgentStream(), {
+            wrapper: wrapperFor(service),
+        })
+
+        let sessionId: string | null = null
+        await act(async () => {
+            sessionId = await result.current.send('test clean finish')
+        })
+
+        expect(sessionId).toBeTruthy()
+        await waitFor(() => {
+            expect(notifyMock).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    sessionId,
+                }),
+            )
+        })
+    })
+
+    it('does not notify host of task completion when run is aborted', async () => {
+        const notifyMock = vi.fn().mockResolvedValue(undefined)
+        setHostBridge({
+            NotificationTaskCompleted: notifyMock,
+            SessionBroadcastRunStatus: vi.fn().mockResolvedValue(undefined),
+            SessionBroadcastStreamEvent: vi.fn().mockResolvedValue(undefined),
+        } as any)
+
+        let release: () => void = () => {}
+        service.streamHold = new Promise<void>((resolve) => {
+            release = resolve
+        })
+
+        const { result } = renderHook(() => useAgentStream(), {
+            wrapper: wrapperFor(service),
+        })
+
+        await act(async () => {
+            void result.current.send('prompt to abort')
+        })
+        await waitFor(() => expect(result.current.runId).toBeTruthy())
+
+        act(() => {
+            result.current.stop()
+        })
+
+        release()
+        await waitFor(() => expect(result.current.isStreaming).toBe(false))
+        expect(notifyMock).not.toHaveBeenCalled()
+    })
+
+    it('does not notify host of task completion when stream throws an error', async () => {
+        const notifyMock = vi.fn().mockResolvedValue(undefined)
+        setHostBridge({
+            NotificationTaskCompleted: notifyMock,
+            SessionBroadcastRunStatus: vi.fn().mockResolvedValue(undefined),
+            SessionBroadcastStreamEvent: vi.fn().mockResolvedValue(undefined),
+        } as any)
+
+        service.streamImpl = async function* (input) {
+            yield {
+                type: 'agent-start',
+                runId: input.runId,
+                sessionId: input.sessionId,
+            }
+            throw new Error('Stream execution failed')
+        }
+
+        const { result } = renderHook(() => useAgentStream(), {
+            wrapper: wrapperFor(service),
+        })
+
+        await act(async () => {
+            void result.current.send('prompt with stream throw')
+        })
+
+        await waitFor(() => expect(result.current.isStreaming).toBe(false))
+        expect(notifyMock).not.toHaveBeenCalled()
+    })
+
+    it('does not notify host of task completion when stream emits an error event', async () => {
+        const notifyMock = vi.fn().mockResolvedValue(undefined)
+        setHostBridge({
+            NotificationTaskCompleted: notifyMock,
+            SessionBroadcastRunStatus: vi.fn().mockResolvedValue(undefined),
+            SessionBroadcastStreamEvent: vi.fn().mockResolvedValue(undefined),
+        } as any)
+
+        service.streamImpl = async function* (input) {
+            yield {
+                type: 'agent-start',
+                runId: input.runId,
+                sessionId: input.sessionId,
+            }
+            yield {
+                type: 'error',
+                runId: input.runId,
+                sessionId: input.sessionId,
+                message: 'Stream encountered a fatal error',
+            }
+            yield {
+                type: 'agent-end',
+                runId: input.runId,
+                sessionId: input.sessionId,
+            }
+        }
+
+        const { result } = renderHook(() => useAgentStream(), {
+            wrapper: wrapperFor(service),
+        })
+
+        await act(async () => {
+            void result.current.send('prompt with stream error event')
+        })
+
+        await waitFor(() => expect(result.current.isStreaming).toBe(false))
+        expect(notifyMock).not.toHaveBeenCalled()
     })
 })

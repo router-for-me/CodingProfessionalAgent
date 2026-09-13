@@ -22,6 +22,7 @@ import { EnvironmentWatcherService } from '../services/environmentWatcherService
 import { ProfilingService } from '../services/profilingService.js'
 import { PowerSaveService } from '../services/powerSaveService.js'
 import { UpdateService } from '../services/update/updateService.js'
+import { NotificationBadgeService } from '../services/notificationBadgeService.js'
 import { PluginResourceService } from '../plugins/resources/PluginResourceService.js'
 import { MainContributionRegistry } from '../plugins/contributions/MainContributionRegistry.js'
 import { createPlatformServiceDescriptors } from '../plugins/contributions/serviceDescriptors.js'
@@ -49,6 +50,7 @@ export interface CreateServicesOptions {
   pluginResourceService?: PluginResourceService
   pluginGraphManagementService?: PluginGraphManagementService
   updateService?: UpdateService
+  notificationBadgeService?: NotificationBadgeService
 }
 
 export interface AppServices {
@@ -62,6 +64,7 @@ export interface AppServices {
   sessionRunRegistry?: any
   dialogService: DialogService
   windowStateService: WindowStateService
+  notificationBadgeService: NotificationBadgeService
   trayService: TrayService
   webServerService: WebServerService
   pluginResourceService: PluginResourceService
@@ -197,6 +200,7 @@ export function createServices(
     pluginResourceService: options?.pluginResourceService,
     pluginGraphManagementService: options?.pluginGraphManagementService,
     updateService: options?.updateService,
+    notificationBadgeService: options?.notificationBadgeService,
   })
 
   for (const descriptor of serviceDescriptors) {
@@ -331,6 +335,7 @@ export function createServices(
     dialogService: registry.getService<DialogService>('dialogService'),
     pluginResourceService: registry.getService<PluginResourceService>('pluginResourceService'),
     windowStateService: registry.getService<WindowStateService>('windowStateService'),
+    notificationBadgeService: registry.getService<NotificationBadgeService>('notificationBadgeService'),
     trayService: registry.getService<TrayService>('trayService'),
     webServerService,
     binaryService: registry.getService<BinaryService>('binaryService'),
@@ -367,6 +372,10 @@ export function attachMainWindowListeners(win: BrowserWindow, services: AppServi
   if (!win || win.isDestroyed?.()) return
   const webContents = win.webContents
   if (!webContents || webContents.isDestroyed?.()) return
+
+  if (typeof win.on === 'function') {
+    services.notificationBadgeService?.attachWindow?.(win)
+  }
 
   const cleanup = () => {
     try {

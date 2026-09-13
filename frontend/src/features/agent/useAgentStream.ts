@@ -2459,6 +2459,8 @@ export function useAgentStream(
                 void (async () => {
                     let currentBroadcastStatus: 'running' | 'thinking' | 'tool' | 'idle' =
                         'running'
+                    let runSucceeded = false
+                    let hasError = false
                     try {
                         for await (const event of service.streamChat({
                             prepared,
@@ -2506,6 +2508,9 @@ export function useAgentStream(
                                 return undefined
                             },
                         })) {
+                            if (event.type === 'error') {
+                                hasError = true
+                            }
                             if (rt.runs.get(boundSessionId!)?.flightToken !== token) break
                             void getHostBridge()?.SessionBroadcastStreamEvent(
                                 boundSessionId!,
@@ -2537,7 +2542,12 @@ export function useAgentStream(
                                 emit(rt)
                             }
                         }
+                        if (!hasError && rt.runs.get(boundSessionId!)?.flightToken === token) {
+                            runSucceeded = true
+                        }
                     } catch (error) {
+                        hasError = true
+                        runSucceeded = false
                         if (ac.signal.aborted || isAbortError(error)) {
                             // silent abort
                         } else if (!(error instanceof AgentPreflightError)) {
@@ -2587,6 +2597,14 @@ export function useAgentStream(
                             boundRunId!,
                             '',
                         )
+                        if (!ac.signal.aborted && runSucceeded && boundSessionId) {
+                            const session = useSessionStore.getState().sessions.find((s) => s.id === boundSessionId)
+                            const title = session?.title || ''
+                            void getHostBridge()?.NotificationTaskCompleted?.({
+                                sessionId: boundSessionId,
+                                sessionTitle: title,
+                            })
+                        }
                         releaseFlight(rt, boundSessionId!, token, ac.signal.aborted)
                     }
                 })()
@@ -2699,6 +2717,8 @@ export function useAgentStream(
 
             void (async () => {
                 let currentBroadcastStatus: 'running' | 'thinking' | 'tool' | 'idle' = 'running'
+                let runSucceeded = false
+                let hasError = false
                 try {
                     for await (const event of service.streamChat({
                         prepared,
@@ -2745,6 +2765,9 @@ export function useAgentStream(
                             return undefined
                         },
                     })) {
+                        if (event.type === 'error') {
+                            hasError = true
+                        }
                         if (rt.runs.get(boundSessionId)?.flightToken !== token) break
                         void getHostBridge()?.SessionBroadcastStreamEvent(
                             boundSessionId,
@@ -2769,7 +2792,12 @@ export function useAgentStream(
                             emit(rt)
                         }
                     }
+                    if (!hasError && rt.runs.get(boundSessionId)?.flightToken === token) {
+                        runSucceeded = true
+                    }
                 } catch (error) {
+                    hasError = true
+                    runSucceeded = false
                     if (ac.signal.aborted || isAbortError(error)) {
                         // silent abort
                     } else if (!(error instanceof AgentPreflightError)) {
@@ -2819,6 +2847,14 @@ export function useAgentStream(
                         boundRunId,
                         '',
                     )
+                    if (!ac.signal.aborted && runSucceeded && boundSessionId) {
+                        const session = useSessionStore.getState().sessions.find((s) => s.id === boundSessionId)
+                        const title = session?.title || ''
+                        void getHostBridge()?.NotificationTaskCompleted?.({
+                            sessionId: boundSessionId,
+                            sessionTitle: title,
+                        })
+                    }
                     releaseFlight(rt, boundSessionId, token, ac.signal.aborted)
                 }
             })()

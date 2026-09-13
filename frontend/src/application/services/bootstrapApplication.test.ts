@@ -994,4 +994,33 @@ describe('bootstrapApplication', () => {
         expect(commitGenerationSpy).not.toHaveBeenCalled()
         expect(rollbackGenerationSpy).not.toHaveBeenCalled()
     })
+
+    it('updates window.location.hash on notification:navigate-session native event', async () => {
+        let nativeEventHandler: ((event: any) => void) | null = null
+        const onNativeEventMock = vi.fn((cb: (event: any) => void) => {
+            nativeEventHandler = cb
+            return () => {}
+        })
+
+        setHostBridge({
+            StorageGet: vi.fn().mockResolvedValue(null),
+            StorageSet: vi.fn().mockResolvedValue(undefined),
+            ClipboardSetText: vi.fn().mockResolvedValue(undefined),
+            PluginsScan: vi.fn().mockResolvedValue([]),
+            onNativeEvent: onNativeEventMock,
+        } as any)
+
+        await bootstrapApplication()
+        expect(nativeEventHandler).toBeTruthy()
+
+        window.location.hash = '#/'
+        await nativeEventHandler!({
+            operationId: 'op-nav-1',
+            sequence: 1,
+            kind: 'notification:navigate-session',
+            data: JSON.stringify({ sessionId: 'session-target-123' }),
+        })
+
+        expect(window.location.hash).toBe('#/chat/session-target-123')
+    })
 })

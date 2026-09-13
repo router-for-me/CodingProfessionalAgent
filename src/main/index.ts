@@ -21,6 +21,7 @@ import { bootstrapPluginGraph } from './plugins/catalog/bootstrapPluginGraph.js'
 import { MainPluginRuntimeHost } from './plugins/runtime/MainPluginRuntimeHost.js'
 import { MainPluginActivationCoordinator } from './plugins/runtime/MainPluginActivationCoordinator.js'
 import { rotateNativeImage45 } from './utils/imageRotate.js'
+import { registerWin32AppUserModelId } from './services/notificationBadgeService.js'
 
 // Prevent unhandled EPIPE errors when stdout/stderr or IPC pipes close abruptly
 process.stdout?.on?.('error', (err: NodeJS.ErrnoException) => {
@@ -241,6 +242,7 @@ async function bootstrap(): Promise<void> {
   })
 
   app.whenReady().then(async () => {
+    registerWin32AppUserModelId(app)
     if (process.platform === 'darwin' && app.dock) {
       const appIcon = getAppIcon()
       if (appIcon) {

@@ -16,6 +16,7 @@ import { EnvironmentWatcherService } from '../../services/environmentWatcherServ
 import { ProfilingService } from '../../services/profilingService.js'
 import { PowerSaveService } from '../../services/powerSaveService.js'
 import { UpdateService } from '../../services/update/updateService.js'
+import { NotificationBadgeService } from '../../services/notificationBadgeService.js'
 import { PluginResourceService } from '../resources/PluginResourceService.js'
 import { PluginGraphManagementService } from '../management/PluginGraphManagementService.js'
 
@@ -38,6 +39,7 @@ export interface PlatformServiceDescriptorOptions {
     getPluginMetrics?: () => Promise<PluginMetric[]> | PluginMetric[]
     pluginResourceService?: PluginResourceService
     updateService?: UpdateService
+    notificationBadgeService?: NotificationBadgeService
 }
 
 export type CoreServiceDescriptorOptions = PlatformServiceDescriptorOptions
@@ -202,6 +204,14 @@ export function createPlatformServiceDescriptors(
             create: () => new WindowStateService(),
             dispose: (service: WindowStateService) => {
                 service.dispose()
+            },
+        },
+        {
+            id: 'notificationBadgeService',
+            dependencies: [],
+            create: () => options.notificationBadgeService ?? new NotificationBadgeService(getMainWindow, emitEvent),
+            dispose: (service: NotificationBadgeService) => {
+                service.clearBadge()
             },
         },
         {

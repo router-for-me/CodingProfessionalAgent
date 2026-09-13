@@ -17,6 +17,7 @@ import type { DialogService } from '../../services/dialogService.js'
 import type { TrayService, TrayLocale } from '../../services/trayService.js'
 import type { PowerSaveService } from '../../services/powerSaveService.js'
 import type { WebServerService } from '../../services/webServerService.js'
+import type { NotificationBadgeService } from '../../services/notificationBadgeService.js'
 import type { EnvironmentWatcherService } from '../../services/environmentWatcherService.js'
 import type { ProfilingService } from '../../services/profilingService.js'
 import type { UpdateService } from '../../services/update/updateService.js'
@@ -438,6 +439,27 @@ export function createPlatformRpcDescriptors(
             capability: 'tray.manage',
             invoke: async (context, args) =>
                 getService<TrayService>('trayService', context).setLocale(args[0] as TrayLocale),
+        },
+
+        // Notification & Badge
+        {
+            method: 'notification:taskCompleted',
+            aliases: ['NotificationTaskCompleted'],
+            ipcChannel: 'notification:taskCompleted',
+            capability: cap('notification:taskCompleted', 'notification.show'),
+            invoke: async (context, args) => {
+                const payload = args[0] as { sessionId: string; sessionTitle?: string }
+                getService<NotificationBadgeService>('notificationBadgeService', context).notifyTaskCompleted(payload)
+            },
+        },
+        {
+            method: 'notification:clearBadge',
+            aliases: ['NotificationClearBadge'],
+            ipcChannel: 'notification:clearBadge',
+            capability: cap('notification:clearBadge', 'notification.manage'),
+            invoke: async (context) => {
+                getService<NotificationBadgeService>('notificationBadgeService', context).clearBadge()
+            },
         },
 
         // Power / Sleep

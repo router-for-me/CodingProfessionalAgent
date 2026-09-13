@@ -677,6 +677,10 @@ export interface ElectronBridgeApi {
   SetTrayEnabled(enabled: boolean, locale?: 'zh-CN' | 'en'): Promise<void>
   SetTrayLocale(locale: 'zh-CN' | 'en'): Promise<void>
 
+  // Notification & Badge
+  NotificationTaskCompleted(payload: { sessionId: string; sessionTitle?: string }): Promise<void>
+  NotificationClearBadge(): Promise<void>
+
   // Power / Sleep
   SetPreventSleep(enabled: boolean): Promise<void>
   GetPreventSleep(): Promise<boolean>
