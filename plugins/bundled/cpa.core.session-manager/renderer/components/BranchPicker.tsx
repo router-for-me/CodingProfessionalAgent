@@ -25,6 +25,22 @@ export interface BranchPickerProps {
         options?: { create?: boolean; baseBranch?: string },
     ) => Promise<void>
     branchPrefix?: string
+    pollIntervalMs?: number
+}
+
+function areRepoInfosEqual(a: GitRepoInfo | null, b: GitRepoInfo | null): boolean {
+    if (a === b) return true
+    if (!a || !b) return false
+    if (a.current !== b.current || a.detached !== b.detached || a.headSha !== b.headSha) {
+        return false
+    }
+    if (a.branches.length !== b.branches.length) {
+        return false
+    }
+    for (let i = 0; i < a.branches.length; i++) {
+        if (a.branches[i] !== b.branches[i]) return false
+    }
+    return true
 }
 
 /**
@@ -41,6 +57,7 @@ export function BranchPicker({
     loadRepo,
     checkoutBranch,
     branchPrefix,
+    pollIntervalMs,
 }: BranchPickerProps) {
     const { t } = useTranslation()
     const services = useHostServices()
@@ -91,33 +108,106 @@ export function BranchPicker({
     const searchRef = useRef<HTMLInputElement>(null)
     const onChangeRef = useRef(onChange)
     const valueRef = useRef(value)
+    const busyRef = useRef(busy)
+    const repoRef = useRef<GitRepoInfo | null>(null)
+    const inFlightRef = useRef(false)
+    const pendingRefreshRef = useRef(false)
+    const loadGenerationRef = useRef(0)
+
     onChangeRef.current = onChange
     valueRef.current = value
+    busyRef.current = busy
 
     const pathsKey = projectPaths.filter(Boolean).join('\0')
 
+    const refreshRepo = useCallback(async (force = false): Promise<GitRepoInfo | null> => {
+        if (!pathsKey) {
+            if (repoRef.current !== null) {
+                repoRef.current = null
+                setRepo(null)
+            }
+            return null
+        }
+        if (inFlightRef.current && !force) {
+            pendingRefreshRef.current = true
+            return repoRef.current
+        }
+        if (busyRef.current) {
+            return repoRef.current
+        }
+        inFlightRef.current = true
+        const generation = ++loadGenerationRef.current
+        const paths = pathsKey.split('\0')
+        try {
+            const info = await effectiveLoadRepo(paths)
+            if (generation !== loadGenerationRef.current) {
+                return repoRef.current
+            }
+            if (!areRepoInfosEqual(repoRef.current, info)) {
+                repoRef.current = info
+                setRepo(info)
+            }
+            if (info?.current && info.current !== valueRef.current) {
+                onChangeRef.current(info.current)
+            }
+            return info
+        } catch {
+            if (generation === loadGenerationRef.current && repoRef.current !== null) {
+                repoRef.current = null
+                setRepo(null)
+            }
+            return null
+        } finally {
+            inFlightRef.current = false
+            if (pendingRefreshRef.current) {
+                pendingRefreshRef.current = false
+                void refreshRepo()
+            }
+        }
+    }, [pathsKey, effectiveLoadRepo])
+
     useEffect(() => {
         if (!pathsKey) {
+            repoRef.current = null
             setRepo(null)
             return
         }
-        let cancelled = false
-        const paths = pathsKey.split('\0')
-        void effectiveLoadRepo(paths)
-            .then((info) => {
-                if (cancelled) return
-                setRepo(info)
-                if (!valueRef.current && info?.current) {
-                    onChangeRef.current(info.current)
-                }
-            })
-            .catch(() => {
-                if (!cancelled) setRepo(null)
-            })
-        return () => {
-            cancelled = true
+        void refreshRepo(true)
+    }, [pathsKey, refreshRepo, open])
+
+    useEffect(() => {
+        if (!pathsKey) return
+
+        const onFocusOrVisible = () => {
+            if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+                return
+            }
+            void refreshRepo()
         }
-    }, [pathsKey, effectiveLoadRepo, open])
+
+        window.addEventListener('focus', onFocusOrVisible)
+        document.addEventListener('visibilitychange', onFocusOrVisible)
+        return () => {
+            window.removeEventListener('focus', onFocusOrVisible)
+            document.removeEventListener('visibilitychange', onFocusOrVisible)
+        }
+    }, [pathsKey, refreshRepo])
+
+    const effectivePollInterval = pollIntervalMs ?? 3000
+    useEffect(() => {
+        if (!pathsKey || effectivePollInterval <= 0) return
+
+        const timer = setInterval(() => {
+            if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+                return
+            }
+            void refreshRepo()
+        }, effectivePollInterval)
+
+        return () => {
+            clearInterval(timer)
+        }
+    }, [pathsKey, effectivePollInterval, refreshRepo])
 
     useEffect(() => {
         if (!open) return
@@ -187,7 +277,10 @@ export function BranchPicker({
             const paths = pathsKey ? pathsKey.split('\0') : []
             if (paths.length > 0) {
                 const info = await effectiveLoadRepo(paths).catch(() => null)
-                if (info) setRepo(info)
+                if (info) {
+                    repoRef.current = info
+                    setRepo(info)
+                }
             }
             onChange(branch)
             setOpen(false)
@@ -213,8 +306,10 @@ export function BranchPicker({
         await applyBranch(normalizedQuery, true)
     }
 
+    const detachedLabel = repo?.detached && repo?.headSha ? `HEAD (${repo.headSha.slice(0, 7)})` : null
+    const activeBranch = repo?.current || detachedLabel || value
     const currentLabel =
-        value || repo?.current || t('composer.selectBranch', { defaultValue: 'Select branch' })
+        activeBranch || t('composer.selectBranch', { defaultValue: 'Select branch' })
     const searchPlaceholder = projectName
         ? t('composer.searchProjectBranches', {
               name: projectName,
@@ -290,7 +385,7 @@ export function BranchPicker({
 
                     <div className="max-h-48 overflow-y-auto space-y-0.5">
                         {filtered.map((branch) => {
-                            const isSelected = branch === (value || repo?.current)
+                            const isSelected = branch === (repo?.current || value)
                             return (
                                 <button
                                     key={branch}
@@ -367,7 +462,7 @@ export function BranchPicker({
                 isOpen={createModalOpen}
                 onClose={() => setCreateModalOpen(false)}
                 onConfirm={async (newBranch) => {
-                    const base = value || repo?.current || undefined
+                    const base = repo?.current || value || undefined
                     const ok = await applyBranch(newBranch, true, base)
                     if (ok) {
                         setCreateModalOpen(false)

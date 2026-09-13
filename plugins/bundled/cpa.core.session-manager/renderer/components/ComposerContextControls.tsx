@@ -308,10 +308,13 @@ export function BranchPickerControl({ sessionId, disabled, ...props }: ComposerC
         [projects, projectId],
     )
 
-    const projectPaths = useMemo(
-        () => (selectedProject ? getProjectPaths(selectedProject) : []),
-        [selectedProject],
-    )
+    const worktreePath = currentSession?.worktreePath || currentSession?.worktreeSetup?.worktreePath
+    const projectPaths = useMemo(() => {
+        if (currentSession?.workLocation === 'worktree' && worktreePath) {
+            return [worktreePath]
+        }
+        return selectedProject ? getProjectPaths(selectedProject) : []
+    }, [selectedProject, currentSession?.workLocation, worktreePath])
 
     if (!projectId) {
         return null

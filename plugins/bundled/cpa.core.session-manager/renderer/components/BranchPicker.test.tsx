@@ -417,4 +417,142 @@ describe('BranchPicker', () => {
         expect(branchInput.value).toBe('codex/')
         expect(screen.getByText(/Branch name cannot end with/i)).toBeInTheDocument()
     })
+
+    it('synchronizes branch when Git branch changes externally and window gains focus', async () => {
+        let currentRepo = { ...sampleRepo, current: 'dev' }
+        const onChange = vi.fn()
+        const loadRepo = vi.fn(async () => currentRepo)
+
+        const { rerender } = render(
+            <BranchPicker
+                value="dev"
+                onChange={onChange}
+                projectName="CLIProxyAPI"
+                projectPaths={['/workspace/example']}
+                loadRepo={loadRepo}
+            />,
+        )
+
+        expect(screen.getByRole('button', { name: /Select branch|dev/i })).toHaveTextContent('dev')
+        expect(screen.getByRole('button', { name: /Select branch|dev/i })).toHaveAttribute(
+            'title',
+            'CLIProxyAPI: dev',
+        )
+
+        // Simulate external git switch to "feat/new-feature"
+        currentRepo = { ...sampleRepo, current: 'feat/new-feature', branches: ['dev', 'feat/new-feature', 'main'] }
+
+        // Window gains focus
+        await act(async () => {
+            window.dispatchEvent(new Event('focus'))
+        })
+
+        await waitFor(() => {
+            expect(onChange).toHaveBeenCalledWith('feat/new-feature')
+        })
+
+        // Rerender with the updated value as parent would do
+        rerender(
+            <BranchPicker
+                value="feat/new-feature"
+                onChange={onChange}
+                projectName="CLIProxyAPI"
+                projectPaths={['/workspace/example']}
+                loadRepo={loadRepo}
+            />,
+        )
+
+        await waitFor(() => {
+            expect(screen.getByRole('button', { name: /Select branch|feat\/new-feature/i })).toHaveTextContent(
+                'feat/new-feature',
+            )
+        })
+        expect(screen.getByRole('button', { name: /Select branch|feat\/new-feature/i })).toHaveAttribute(
+            'title',
+            'CLIProxyAPI: feat/new-feature',
+        )
+    })
+
+    it('synchronizes branch when Git branch changes externally and document becomes visible', async () => {
+        let currentRepo = { ...sampleRepo, current: 'dev' }
+        const onChange = vi.fn()
+        const loadRepo = vi.fn(async () => currentRepo)
+
+        render(
+            <BranchPicker
+                value="dev"
+                onChange={onChange}
+                projectName="CLIProxyAPI"
+                projectPaths={['/workspace/example']}
+                loadRepo={loadRepo}
+            />,
+        )
+
+        // External git checkout main
+        currentRepo = { ...sampleRepo, current: 'main' }
+
+        await act(async () => {
+            document.dispatchEvent(new Event('visibilitychange'))
+        })
+
+        await waitFor(() => {
+            expect(onChange).toHaveBeenCalledWith('main')
+        })
+    })
+
+    it('periodically polls and synchronizes branch when Git branch changes externally', async () => {
+        let currentRepo = { ...sampleRepo, current: 'dev' }
+        const onChange = vi.fn()
+        const loadRepo = vi.fn(async () => currentRepo)
+
+        render(
+            <BranchPicker
+                value="dev"
+                onChange={onChange}
+                projectName="CLIProxyAPI"
+                projectPaths={['/workspace/example']}
+                loadRepo={loadRepo}
+                pollIntervalMs={50}
+            />,
+        )
+
+        // External switch
+        currentRepo = { ...sampleRepo, current: 'release-2.0' }
+
+        await waitFor(() => {
+            expect(onChange).toHaveBeenCalledWith('release-2.0')
+        })
+    })
+
+    it('shows detached HEAD label when repository is in detached HEAD state', async () => {
+        const detachedRepo: GitRepoInfo = {
+            repoRoot: '/workspace/example',
+            gitDir: '/workspace/example/.git',
+            commonDir: '/workspace/example/.git',
+            current: null,
+            detached: true,
+            headSha: '1234567890abcdef1234567890abcdef12345678',
+            branches: ['dev', 'main'],
+        }
+
+        render(
+            <BranchPicker
+                value={null}
+                onChange={() => undefined}
+                projectName="CLIProxyAPI"
+                projectPaths={['/workspace/example']}
+                loadRepo={async () => detachedRepo}
+            />,
+        )
+
+        await waitFor(() => {
+            expect(screen.getByRole('button', { name: /Select branch|1234567/i })).toHaveTextContent(
+                'HEAD (1234567)',
+            )
+        })
+        expect(screen.getByRole('button', { name: /Select branch|1234567/i })).toHaveAttribute(
+            'title',
+            'CLIProxyAPI: HEAD (1234567)',
+        )
+    })
 })
