@@ -2,7 +2,8 @@ import type { ComponentType } from 'react'
 import type { PluginIdentity } from './manifest.js'
 import type { CapabilityId, CapabilityInvocationContext } from './capabilities.js'
 import type { HostServices } from './services.js'
-import type { ModelCatalogEntry, ToolResultContentBlock } from './protocol.js'
+import type { AssistantEntry, IsolatedModelInvocationRecord, ModelCatalogEntry, ToolResultContentBlock } from './protocol.js'
+export type { IsolatedModelInvocationRecord } from './protocol.js'
 
 export type AgentTarget = 'main' | 'subagent' | 'all'
 
@@ -324,11 +325,31 @@ export interface ChatRendererContribution<T = unknown> {
 
 
 
+export interface IsolatedModelRequest {
+    model: ModelCatalogEntry
+    query: string
+    instructions: string
+    nativeTools?: readonly { type: 'web_search' }[]
+    toolChoice?: 'auto' | 'required' | 'none'
+}
+
+/**
+ * Credential-opaque model invocation available only while one agent run is active.
+ * Implementations MUST create an isolated protocol identity and MUST NOT inherit
+ * conversation history, continuation state, local function tools, or credentials.
+ * Tool plugins require the declared and granted `models.invoke` capability.
+ */
+export interface IsolatedModelInvoker {
+    invoke(request: IsolatedModelRequest, signal?: AbortSignal): Promise<AssistantEntry>
+}
+
 export interface ToolResult {
     content: ToolResultContentBlock[]
     details?: unknown
     isError?: boolean
     terminate?: boolean
+    /** Runtime-owned usage records for isolated model calls made by this tool. */
+    isolatedModelInvocations?: readonly IsolatedModelInvocationRecord[]
 }
 
 export interface ToolExecutionContext {
@@ -336,6 +357,7 @@ export interface ToolExecutionContext {
     cwd?: string
     sessionId?: string
     onUpdate?: (partial: ToolResult) => void
+    modelInvoker?: IsolatedModelInvoker
     [key: string]: unknown
 }
 

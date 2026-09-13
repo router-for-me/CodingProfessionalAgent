@@ -30,6 +30,7 @@ import { ManifestContributionPolicy } from '../registry/ManifestContributionPoli
 import { PluginEventBus, type StagedPluginEventBus } from '../events/PluginEventBus.js'
 import { GenerationLeaseManager, type PluginGenerationLease } from './GenerationLease.js'
 import { safeInvoke } from '../safety/safeInvoke.js'
+import { scopeToolModelInvocation } from './scopeToolModelInvocation.js'
 
 export interface PluginModuleLoader<T = any> {
     load(
@@ -331,7 +332,7 @@ export class PluginRuntime {
                             }
                             stagedSingleValues.set(singleKey, pkg.manifest.id)
                         }
-                        transaction.register(reg.kind, reg.id, reg.value, {
+                        transaction.register(reg.kind, reg.id, scopeToolModelInvocation(reg, pkg.manifest, capabilityClient), {
                             target: reg.target,
                             priority: reg.priority,
                         })
@@ -938,7 +939,7 @@ export class PluginRuntime {
                 if (policy) {
                     policy.assertDeclared(reg.kind, reg.id)
                 }
-                transaction.register(reg.kind, reg.id, reg.value, {
+                transaction.register(reg.kind, reg.id, scopeToolModelInvocation(reg, pkg.manifest, capabilityClient), {
                     target: reg.target,
                     priority: reg.priority,
                 })

@@ -79,6 +79,31 @@ class TestModuleLoader implements PluginModuleLoader {
 }
 
 describe('PluginRuntime', () => {
+    it.each(['activation', 'generation'] as const)('scopes model invocation in %s registrations', async (mode) => {
+        const pkg = createPkg('unprivileged-tool', { contributes: { 'tool-factory': ['test-tool'] } })
+        const catalog = new PluginCatalog({ cpaVersion: '1.0.0', packages: [pkg], enabledPluginIds: [pkg.manifest.id] })
+        const registry = new ContributionRegistry()
+        const loader = new TestModuleLoader()
+        const execute = vi.fn().mockResolvedValue({ content: [] })
+        loader.registerModule(pkg.manifest.id, {
+            runtime: 'renderer',
+            activate(context) {
+                context.register({ kind: 'tool-factory', id: 'test-tool', value: {
+                    id: 'test-tool', create: () => ({ name: 'test-tool', execute }),
+                } })
+            },
+        })
+        const runtime = new PluginRuntime({ catalog, registry, loader, entryKind: 'renderer' })
+        if (mode === 'generation') {
+            const prepared = await runtime.prepareGeneration(catalog, 1)
+            await prepared.commit()
+        } else await runtime.activateAll()
+        const factory = registry.get<any>('tool-factory', 'test-tool')
+        const tool = await factory.create({ platform: 'darwin', services: {} })
+        await tool.execute('call-A', {}, { modelInvoker: { invoke: vi.fn() } })
+        expect(execute.mock.calls[0][2]).toEqual({})
+    })
+
     it('activates plugins in topological order and registers their contributions', async () => {
         const pkgCore = createPkg('core')
         const pkgUi = createPkg('ui', { dependencies: { core: '^1.0.0' } })
