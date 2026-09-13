@@ -24,7 +24,7 @@ describe('SessionDatabaseService', () => {
     }
   })
 
-  it('initializes WAL mode, busy_timeout, and all 8 indexes on file-based database', () => {
+  it('initializes WAL mode, busy_timeout, and chat/accounting indexes on file-based database', () => {
     const db = service.getDb()
     expect(db).toBeDefined()
 
@@ -44,13 +44,15 @@ describe('SessionDatabaseService', () => {
     const syncPragma = db.pragma('synchronous', { simple: true })
     expect(syncPragma).toBe(1)
 
-    // All 10 custom indexes in sqlite_master
+    // All 11 custom indexes in sqlite_master
     const indexes = db
       .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'")
       .all()
       .map((r: any) => r.name)
 
-    expect(indexes).toHaveLength(10)
+    expect(indexes).toHaveLength(13)
+    expect(indexes).toContain('idx_isolated_model_usage_session')
+    expect(indexes).toContain('idx_isolated_model_usage_parent')
     expect(indexes).toContain('idx_sessions_project')
     expect(indexes).toContain('idx_sessions_schedule')
     expect(indexes).toContain('idx_sessions_parent')
@@ -60,6 +62,7 @@ describe('SessionDatabaseService', () => {
     expect(indexes).toContain('idx_turns_stats_agg')
     expect(indexes).toContain('idx_turns_parent_stats')
     expect(indexes).toContain('idx_skills_stats')
+    expect(indexes).toContain('idx_isolated_model_usage_stats')
     expect(indexes).toContain('idx_plugin_storage_lookup')
   })
 
@@ -88,6 +91,7 @@ describe('SessionDatabaseService', () => {
       expect(tables).toContain('subagents')
       expect(tables).toContain('conversation_turns')
       expect(tables).toContain('skill_invocations')
+      expect(tables).toContain('isolated_model_invocations')
       expect(tables).toContain('plugin_storage')
     } finally {
       memService.close()
@@ -713,6 +717,186 @@ describe('SessionDatabaseService', () => {
     expect(t2.tokens_output).toBe(40)
     expect(t2.tokens_total).toBe(120)
     expect(t2.cost_total).toBeCloseTo(0.0024)
+  })
+
+  it.each([false, true])('accounts isolated model usage once without fabricated costs (explicit unknown: %s)', async (explicitUnknown) => {
+    const sessionId = 'sess-isolated-accounting'
+    const entries = [
+      { id: 'u-isolated', kind: 'user', createdAt: 1000, content: [] },
+      {
+        id: 'a-main',
+        kind: 'assistant',
+        createdAt: 1100,
+        completedAt: 1200,
+        model: 'model-a',
+        status: 'done',
+        usage: {
+          input: 60,
+          output: 40,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 100,
+          cost: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0, total: 0.3 },
+        },
+      },
+      {
+        id: 'tool-result-search',
+        kind: 'toolResult',
+        toolCallId: 'search-call-1',
+        createdAt: 1150,
+        isolatedModelInvocations: [
+          {
+            id: 'isolated-invocation-1',
+            model: 'model-b',
+            parentToolCallId: 'search-call-1',
+            usage: {
+              input: 20,
+              output: 10,
+              cacheRead: 2,
+              cacheWrite: 1,
+              reasoning: 3,
+              totalTokens: 30,
+              // Both absent prices and the protocol's explicit unknown marker
+              // remain NULL, rather than becoming fabricated free model calls.
+              ...(explicitUnknown ? { costKnown: false, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } : {}),
+            },
+          },
+        ],
+      },
+    ]
+
+    await service.set(sessionId, { projectId: 'project-isolated', entries })
+    await service.set(sessionId, { projectId: 'project-isolated', entries })
+
+    const db = service.getDb()
+    const turn = db.prepare('SELECT * FROM conversation_turns WHERE session_id = ?').get(sessionId) as any
+    expect(db.prepare('SELECT * FROM conversation_turns WHERE session_id = ?').all(sessionId)).toHaveLength(1)
+    expect(turn.model_id).toBe('model-a')
+    expect(turn.tokens_total).toBe(100)
+
+    const isolated = db.prepare('SELECT * FROM isolated_model_invocations WHERE session_id = ?').all(sessionId) as any[]
+    expect(isolated).toHaveLength(1)
+    expect(isolated[0]).toMatchObject({
+      invocation_id: 'isolated-invocation-1',
+      turn_id: 'u-isolated',
+      parent_tool_call_id: 'search-call-1',
+      model_id: 'model-b',
+      tokens_total: 30,
+    })
+    expect(isolated[0].cost_total).toBeNull()
+
+    const metrics = await service.queryMetrics({ sessionId, groupByModel: true })
+    expect(metrics.summary.totalChats).toBe(1)
+    expect(metrics.summary.totalTokens).toBe(130)
+    expect(metrics.summary.totalTokensBreakdown).toEqual({
+      input: 80,
+      output: 50,
+      cacheRead: 2,
+      cacheWrite: 1,
+      reasoning: 3,
+    })
+    expect(metrics.summary.totalCost).toBeCloseTo(0.3)
+    expect(metrics.summary.topModels).toEqual([
+      { modelId: 'model-a', count: 1, totalTokens: 100, percentage: 50 },
+      { modelId: 'model-b', count: 1, totalTokens: 30, percentage: 50 },
+    ])
+    const modelB = metrics.groups?.find((group) => group.groupKey === 'model-b')
+    expect(modelB?.summary.totalChats).toBe(0)
+    expect(modelB?.summary.totalTokens).toBe(30)
+    expect(modelB?.summary.totalCost).toBe(0)
+  })
+
+  it('rejects malformed or mismatched isolated records and deduplicates invocation IDs', async () => {
+    const validUsage = {
+      input: 7,
+      output: 3,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 10,
+      cost: { input: 0.01, output: 0.02, cacheRead: 0, cacheWrite: 0, total: 0.03 },
+    }
+    const entries = [
+      { id: 'u-validation', kind: 'user', createdAt: 2000, content: [] },
+      {
+        id: 'tool-result-validation',
+        kind: 'toolResult',
+        toolCallId: 'owner-call',
+        isolatedModelInvocations: [
+          { id: 'valid-id', model: 'model-b', parentToolCallId: 'owner-call', usage: validUsage },
+          { id: 'valid-id', model: 'model-b', parentToolCallId: 'owner-call', usage: validUsage },
+          { id: '', model: 'model-b', parentToolCallId: 'owner-call', usage: validUsage },
+          { id: 'wrong-parent', model: 'model-b', parentToolCallId: 'other-call', usage: validUsage },
+          { id: 'bad-usage', model: 'model-b', parentToolCallId: 'owner-call', usage: { ...validUsage, input: -1 } },
+        ],
+      },
+      {
+        id: 'not-a-tool-result',
+        kind: 'assistant',
+        toolCallId: 'owner-call',
+        isolatedModelInvocations: [
+          { id: 'wrong-owner-kind', model: 'model-b', parentToolCallId: 'owner-call', usage: validUsage },
+        ],
+      },
+    ]
+
+    await service.set('sess-isolated-validation', { entries })
+    await service.set('sess-isolated-validation', { entries })
+
+    const rows = service.getDb().prepare(
+      'SELECT invocation_id FROM isolated_model_invocations WHERE session_id = ?',
+    ).all('sess-isolated-validation') as any[]
+    expect(rows).toEqual([{ invocation_id: 'valid-id' }])
+    const metrics = await service.queryMetrics({
+      sessionId: 'sess-isolated-validation',
+      groupByModel: true,
+    })
+    expect(metrics.summary.totalChats).toBe(1)
+    expect(metrics.summary.totalTokens).toBe(10)
+    expect(metrics.summary.totalCost).toBeCloseTo(0.03)
+    const modelB = metrics.groups?.find((group) => group.groupKey === 'model-b')
+    expect(modelB?.summary.totalChats).toBe(0)
+    expect(modelB?.summary.totalTokens).toBe(10)
+    expect(modelB?.summary.totalCost).toBeCloseTo(0.03)
+  })
+
+  it('migrates the additive isolated accounting schema and cascades session deletion', async () => {
+    await service.set('legacy-accounting-session', {
+      entries: [
+        { id: 'legacy-u', kind: 'user', createdAt: 1000, content: [] },
+        { id: 'legacy-a', kind: 'assistant', model: 'model-a', usage: { input: 1, output: 1, totalTokens: 2 } },
+      ],
+    })
+    const db = service.getDb()
+    db.exec('DROP VIEW usage_metrics; DROP TABLE isolated_model_invocations;')
+    service.close()
+
+    service = new SessionDatabaseService({ customDir: tempDir })
+    const tables = service.getDb().prepare(
+      "SELECT name FROM sqlite_master WHERE type IN ('table', 'view')",
+    ).all().map((row: any) => row.name)
+    expect(tables).toContain('isolated_model_invocations')
+    expect(tables).toContain('usage_metrics')
+    expect((await service.queryMetrics()).summary.totalTokens).toBe(2)
+
+    await service.set('legacy-accounting-session', {
+      entries: [
+        { id: 'legacy-u', kind: 'user', createdAt: 1000, content: [] },
+        {
+          id: 'legacy-tool',
+          kind: 'toolResult',
+          toolCallId: 'legacy-call',
+          isolatedModelInvocations: [{
+            id: 'legacy-isolated',
+            model: 'model-b',
+            parentToolCallId: 'legacy-call',
+            usage: { input: 2, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 3 },
+          }],
+        },
+      ],
+    })
+    expect(service.getDb().prepare('SELECT * FROM isolated_model_invocations').all()).toHaveLength(1)
+    await service.delete('legacy-accounting-session')
+    expect(service.getDb().prepare('SELECT * FROM isolated_model_invocations').all()).toHaveLength(0)
   })
 
   it('extracts and deduplicates skill invocations from user text and assistant tool calls', async () => {

@@ -90,6 +90,7 @@ function emptyUsage(): Usage {
         cacheWrite: 0,
         reasoning: 0,
         totalTokens: 0,
+        costKnown: false,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     }
 }

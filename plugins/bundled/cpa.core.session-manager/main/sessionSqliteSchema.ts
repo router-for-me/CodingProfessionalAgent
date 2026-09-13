@@ -168,6 +168,56 @@ CREATE TABLE IF NOT EXISTS skill_invocations (
 );
 `
 
+/**
+ * Usage produced by model calls made inside a tool execution. These are not
+ * conversation turns, but must remain independently attributable by model.
+ */
+export const ISOLATED_MODEL_INVOCATIONS_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS isolated_model_invocations (
+    invocation_id TEXT PRIMARY KEY,
+    turn_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    project_id TEXT,
+    parent_session_id TEXT,
+    is_subagent INTEGER NOT NULL DEFAULT 0,
+    parent_tool_call_id TEXT NOT NULL,
+    model_id TEXT NOT NULL,
+    invoked_at INTEGER NOT NULL,
+    tokens_input INTEGER NOT NULL,
+    tokens_output INTEGER NOT NULL,
+    tokens_cache_read INTEGER NOT NULL,
+    tokens_cache_write INTEGER NOT NULL,
+    tokens_reasoning INTEGER NOT NULL,
+    tokens_total INTEGER NOT NULL,
+    cost_input REAL,
+    cost_output REAL,
+    cost_cache_read REAL,
+    cost_cache_write REAL,
+    cost_total REAL,
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
+`
+
+export const USAGE_METRICS_VIEW_SQL = `
+CREATE VIEW IF NOT EXISTS usage_metrics AS
+SELECT
+    id AS usage_id, session_id, project_id, parent_session_id, is_subagent,
+    model_id, speed, reasoning_effort, started_at, completed_at, duration_ms,
+    tokens_input, tokens_output, tokens_cache_read, tokens_cache_write,
+    tokens_reasoning, tokens_total, cost_input, cost_output, cost_cache_read,
+    cost_cache_write, cost_total, 1 AS is_chat
+FROM conversation_turns
+UNION ALL
+SELECT
+    invocation_id AS usage_id, session_id, project_id, parent_session_id, is_subagent,
+    model_id, NULL AS speed, NULL AS reasoning_effort, invoked_at AS started_at,
+    invoked_at AS completed_at, 0 AS duration_ms, tokens_input, tokens_output,
+    tokens_cache_read, tokens_cache_write, tokens_reasoning, tokens_total,
+    cost_input, cost_output, cost_cache_read, cost_cache_write, cost_total,
+    0 AS is_chat
+FROM isolated_model_invocations;
+`
+
 export const PLUGIN_STORAGE_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS plugin_storage (
     plugin_id TEXT NOT NULL,
@@ -193,6 +243,9 @@ CREATE INDEX IF NOT EXISTS idx_turns_stats_agg ON conversation_turns(started_at,
 CREATE INDEX IF NOT EXISTS idx_turns_parent_stats ON conversation_turns(parent_session_id, started_at);
 
 CREATE INDEX IF NOT EXISTS idx_skills_stats ON skill_invocations(invoked_at, skill_name, project_id, model_id);
+CREATE INDEX IF NOT EXISTS idx_isolated_model_usage_stats ON isolated_model_invocations(invoked_at, project_id, model_id, is_subagent, session_id);
+CREATE INDEX IF NOT EXISTS idx_isolated_model_usage_session ON isolated_model_invocations(session_id, turn_id);
+CREATE INDEX IF NOT EXISTS idx_isolated_model_usage_parent ON isolated_model_invocations(parent_session_id, invoked_at);
 
 CREATE INDEX IF NOT EXISTS idx_plugin_storage_lookup ON plugin_storage(plugin_id, namespace_version);
 `
@@ -203,6 +256,7 @@ ${SESSION_ENTRIES_TABLE_SQL}
 ${SUBAGENTS_TABLE_SQL}
 ${CONVERSATION_TURNS_TABLE_SQL}
 ${SKILL_INVOCATIONS_TABLE_SQL}
+${ISOLATED_MODEL_INVOCATIONS_TABLE_SQL}
 ${PLUGIN_STORAGE_TABLE_SQL}
 `
 
@@ -356,11 +410,12 @@ export function applySessionSchemaAndMigrations(db: DatabaseType): void {
     }
   }
 
-  // 5. Create indexes now that all columns are guaranteed to exist
+  // 5. Create indexes and the additive metrics view now that all columns exist.
   try {
     db.exec(INDEXES_SQL)
+    db.exec(USAGE_METRICS_VIEW_SQL)
   } catch {
-    // Ignore index creation errors if any
+    // Ignore creation errors if a partially migrated database is read-only.
   }
 
   // 6. Backfill first_prompt_at from existing user session_entries if null

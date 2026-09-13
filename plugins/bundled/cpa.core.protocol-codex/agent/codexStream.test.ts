@@ -86,6 +86,7 @@ describe('parseCodexEvents', () => {
             cacheWrite: 0,
             reasoning: 0,
             totalTokens: 14,
+            costKnown: false,
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
         })
         const text = result?.content.find((b) => b.type === 'text')

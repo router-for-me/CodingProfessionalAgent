@@ -60,6 +60,8 @@ export interface Usage {
     cacheWrite: number
     reasoning?: number
     totalTokens: number
+    /** False when the provider supplied token counts but no price information. */
+    costKnown?: boolean
     cost: {
         input: number
         output: number

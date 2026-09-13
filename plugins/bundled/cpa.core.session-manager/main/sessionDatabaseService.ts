@@ -527,8 +527,18 @@ export class SessionDatabaseService {
       WHERE session_id = @childSessionId
     `)
 
+    const updateChildIsolatedUsageStmt = this.getStatement(`
+      UPDATE isolated_model_invocations
+      SET parent_session_id = @parentId, is_subagent = 1,
+          project_id = COALESCE(@projectId, project_id)
+      WHERE session_id = @childSessionId
+    `)
+
     const deleteTurnsStmt = this.getStatement(`DELETE FROM conversation_turns WHERE session_id = ?`)
     const deleteSkillsStmt = this.getStatement(`DELETE FROM skill_invocations WHERE session_id = ?`)
+    const deleteIsolatedUsageStmt = this.getStatement(
+      `DELETE FROM isolated_model_invocations WHERE session_id = ?`,
+    )
 
     const insertTurnStmt = this.getStatement(`
       INSERT INTO conversation_turns (
@@ -553,6 +563,22 @@ export class SessionDatabaseService {
         id, turn_id, session_id, project_id, model_id, skill_name, invoked_at
       ) VALUES (
         @id, @turn_id, @session_id, @project_id, @model_id, @skill_name, @invoked_at
+      )
+    `)
+
+    const insertIsolatedUsageStmt = this.getStatement(`
+      INSERT OR IGNORE INTO isolated_model_invocations (
+        invocation_id, turn_id, session_id, project_id, parent_session_id,
+        is_subagent, parent_tool_call_id, model_id, invoked_at,
+        tokens_input, tokens_output, tokens_cache_read, tokens_cache_write,
+        tokens_reasoning, tokens_total, cost_input, cost_output,
+        cost_cache_read, cost_cache_write, cost_total
+      ) VALUES (
+        @invocation_id, @turn_id, @session_id, @project_id, @parent_session_id,
+        @is_subagent, @parent_tool_call_id, @model_id, @invoked_at,
+        @tokens_input, @tokens_output, @tokens_cache_read, @tokens_cache_write,
+        @tokens_reasoning, @tokens_total, @cost_input, @cost_output,
+        @cost_cache_read, @cost_cache_write, @cost_total
       )
     `)
 
@@ -707,6 +733,12 @@ export class SessionDatabaseService {
               projectId: effectiveProjectId,
               childSessionId: sa.sessionId,
             })
+
+            updateChildIsolatedUsageStmt.run({
+              parentId: sa.parentSessionId,
+              projectId: effectiveProjectId,
+              childSessionId: sa.sessionId,
+            })
           }
         }
       }
@@ -723,8 +755,9 @@ export class SessionDatabaseService {
         })
       }
 
-      // 4. Refresh conversation turns and skill invocations
+      // 4. Refresh conversation turns, isolated usage, and skill invocations.
       deleteSkillsStmt.run(sessionId)
+      deleteIsolatedUsageStmt.run(sessionId)
       deleteTurnsStmt.run(sessionId)
 
       const turns = this.extractTurnsFromEntries(entries)
@@ -802,7 +835,7 @@ export class SessionDatabaseService {
         let costCacheWrite = 0.0
         let costTotal = 0.0
 
-        const usageEntries = turn.entries.filter(
+        const usageEntries: any[] = turn.entries.filter(
           (e) =>
             e &&
             (e.kind === 'assistant' ||
@@ -877,6 +910,39 @@ export class SessionDatabaseService {
           cost_total: costTotal,
           status: turnStatus,
         })
+
+        // Persist isolated calls as accounting records, not synthetic chat turns.
+        // Runtime IDs are globally unique; first valid occurrence wins per save.
+        const seenInvocationIds = new Set<string>()
+        for (const entry of turn.entries) {
+          const isCanonicalToolResult =
+            entry &&
+            entry.kind === 'toolResult' &&
+            typeof entry.toolCallId === 'string' &&
+            entry.toolCallId.trim().length > 0
+          if (!isCanonicalToolResult || !Array.isArray(entry.isolatedModelInvocations)) continue
+
+          for (const invocation of entry.isolatedModelInvocations) {
+            const parsed = parseIsolatedModelInvocation(invocation, entry.toolCallId)
+            if (!parsed || seenInvocationIds.has(parsed.id)) continue
+            seenInvocationIds.add(parsed.id)
+            insertIsolatedUsageStmt.run({
+              invocation_id: parsed.id,
+              turn_id: turnId,
+              session_id: sessionId,
+              project_id: effectiveProjectId,
+              parent_session_id: effectiveParentSessionId,
+              is_subagent: effectiveIsSubagent,
+              parent_tool_call_id: parsed.parentToolCallId,
+              model_id: parsed.model,
+              invoked_at:
+                typeof entry.createdAt === 'number' && Number.isFinite(entry.createdAt)
+                  ? entry.createdAt
+                  : startedAt,
+              ...parsed.usage,
+            })
+          }
+        }
 
         // Extract skills for this turn
         const turnSkills = this.extractSkillsFromTurn(userEntry, turn.entries)
@@ -1081,6 +1147,9 @@ export class SessionDatabaseService {
           this.getStatement(
             'UPDATE skill_invocations SET project_id = ? WHERE session_id = ? OR session_id IN (SELECT id FROM sessions WHERE parent_session_id = ?)',
           ).run(effectiveProj, meta.id, meta.id)
+          this.getStatement(
+            'UPDATE isolated_model_invocations SET project_id = ? WHERE session_id = ? OR parent_session_id = ?',
+          ).run(effectiveProj, meta.id, meta.id)
         }
       } else {
         const title = meta.title || 'New Session'
@@ -1275,7 +1344,7 @@ export class SessionDatabaseService {
 
     const distinctQuery = `
       SELECT DISTINCT COALESCE(NULLIF(${column}, ''), '${defaultVal}') as group_key
-      FROM conversation_turns
+      FROM usage_metrics
       ${turnWhereSql}
       UNION
       SELECT DISTINCT COALESCE(NULLIF(${column}, ''), '${defaultVal}') as group_key
@@ -1348,7 +1417,8 @@ export class SessionDatabaseService {
     // 1. Turn stats
     const turnStatsRow = this.getStatement(`
         SELECT
-          COUNT(*) as total_chats,
+          COALESCE(SUM(is_chat), 0) as total_chats,
+          COUNT(*) as total_usage_records,
           COALESCE(SUM(tokens_input), 0) as total_tokens_input,
           COALESCE(SUM(tokens_output), 0) as total_tokens_output,
           COALESCE(SUM(tokens_cache_read), 0) as total_tokens_cache_read,
@@ -1358,12 +1428,13 @@ export class SessionDatabaseService {
           COALESCE(SUM(cost_total), 0.0) as total_cost,
           COALESCE(MAX(duration_ms), 0) as max_task_duration_ms,
           COALESCE(SUM(CASE WHEN speed = 'fast' THEN 1 ELSE 0 END), 0) as fast_mode_count
-        FROM conversation_turns
+        FROM usage_metrics
         ${turnWhereSql}
       `)
       .get(...turnParams) as
       | {
           total_chats: number
+          total_usage_records: number
           total_tokens_input: number
           total_tokens_output: number
           total_tokens_cache_read: number
@@ -1377,6 +1448,7 @@ export class SessionDatabaseService {
       | undefined
 
     const totalChats = Number(turnStatsRow?.total_chats) || 0
+    const totalUsageRecords = Number(turnStatsRow?.total_usage_records) || 0
     const totalTokens = Number(turnStatsRow?.total_tokens) || 0
     const tokensInput = Number(turnStatsRow?.total_tokens_input) || 0
     const tokensOutput = Number(turnStatsRow?.total_tokens_output) || 0
@@ -1393,14 +1465,14 @@ export class SessionDatabaseService {
     let topReasoningEffort: { level: string; count: number; percentage: number } | null = null
     if (totalChats > 0) {
       const reasoningWhere = turnWhereSql
-        ? `${turnWhereSql} AND reasoning_effort IS NOT NULL AND TRIM(reasoning_effort) != ''`
-        : `WHERE reasoning_effort IS NOT NULL AND TRIM(reasoning_effort) != ''`
+        ? `${turnWhereSql} AND is_chat = 1 AND reasoning_effort IS NOT NULL AND TRIM(reasoning_effort) != ''`
+        : `WHERE is_chat = 1 AND reasoning_effort IS NOT NULL AND TRIM(reasoning_effort) != ''`
 
       const topReasoningRow = this.getStatement(`
           SELECT
             reasoning_effort as level,
             COUNT(*) as count
-          FROM conversation_turns
+          FROM usage_metrics
           ${reasoningWhere}
           GROUP BY reasoning_effort
           ORDER BY count DESC, level ASC
@@ -1422,8 +1494,8 @@ export class SessionDatabaseService {
     const dateRows = this.getStatement(`
         SELECT DISTINCT
           strftime('%Y-%m-%d', started_at / 1000, 'unixepoch', 'localtime') as active_date
-        FROM conversation_turns
-        ${turnWhereSql}
+        FROM usage_metrics
+        ${turnWhereSql ? `${turnWhereSql} AND is_chat = 1` : 'WHERE is_chat = 1'}
         ORDER BY active_date ASC
       `)
       .all(...turnParams) as Array<{ active_date: string }>
@@ -1470,7 +1542,7 @@ export class SessionDatabaseService {
           COALESCE(NULLIF(TRIM(model_id), ''), 'unknown') as model_id,
           COUNT(*) as count,
           COALESCE(SUM(tokens_total), 0) as total_tokens
-        FROM conversation_turns
+        FROM usage_metrics
         ${turnWhereSql}
         GROUP BY COALESCE(NULLIF(TRIM(model_id), ''), 'unknown')
         ORDER BY count DESC, total_tokens DESC, model_id ASC
@@ -1488,7 +1560,10 @@ export class SessionDatabaseService {
         modelId: r.model_id,
         count,
         totalTokens: Number(r.total_tokens),
-        percentage: totalChats > 0 ? Number(((count / totalChats) * 100).toFixed(1)) : 0,
+        percentage:
+          totalUsageRecords > 0
+            ? Number(((count / totalUsageRecords) * 100).toFixed(1))
+            : 0,
       }
     })
 
@@ -1537,7 +1612,8 @@ export class SessionDatabaseService {
     const bucketTurnRows = this.getStatement(`
         SELECT
           strftime('${strftimePattern}', started_at / 1000, 'unixepoch', 'localtime') as bucket_key,
-          COUNT(*) as total_chats,
+          COALESCE(SUM(is_chat), 0) as total_chats,
+          COUNT(*) as total_usage_records,
           COALESCE(SUM(tokens_input), 0) as total_tokens_input,
           COALESCE(SUM(tokens_output), 0) as total_tokens_output,
           COALESCE(SUM(tokens_cache_read), 0) as total_tokens_cache_read,
@@ -1549,7 +1625,7 @@ export class SessionDatabaseService {
           COALESCE(SUM(CASE WHEN speed = 'fast' THEN 1 ELSE 0 END), 0) as fast_mode_count,
           MIN(started_at) as min_started_at,
           MAX(completed_at) as max_completed_at
-        FROM conversation_turns
+        FROM usage_metrics
         ${turnWhereSql}
         GROUP BY bucket_key
         ORDER BY bucket_key ASC
@@ -1557,6 +1633,7 @@ export class SessionDatabaseService {
       .all(...turnParams) as Array<{
         bucket_key: string
         total_chats: number
+        total_usage_records: number
         total_tokens_input: number
         total_tokens_output: number
         total_tokens_cache_read: number
@@ -1572,15 +1649,15 @@ export class SessionDatabaseService {
 
     // 2. Reasoning effort per bucket
     const reasoningWhere = turnWhereSql
-      ? `${turnWhereSql} AND reasoning_effort IS NOT NULL AND TRIM(reasoning_effort) != ''`
-      : `WHERE reasoning_effort IS NOT NULL AND TRIM(reasoning_effort) != ''`
+      ? `${turnWhereSql} AND is_chat = 1 AND reasoning_effort IS NOT NULL AND TRIM(reasoning_effort) != ''`
+      : `WHERE is_chat = 1 AND reasoning_effort IS NOT NULL AND TRIM(reasoning_effort) != ''`
 
     const bucketReasoningRows = this.getStatement(`
         SELECT
           strftime('${strftimePattern}', started_at / 1000, 'unixepoch', 'localtime') as bucket_key,
           reasoning_effort as level,
           COUNT(*) as count
-        FROM conversation_turns
+        FROM usage_metrics
         ${reasoningWhere}
         GROUP BY bucket_key, reasoning_effort
         ORDER BY bucket_key ASC, count DESC, level ASC
@@ -1606,8 +1683,8 @@ export class SessionDatabaseService {
         SELECT DISTINCT
           strftime('${strftimePattern}', started_at / 1000, 'unixepoch', 'localtime') as bucket_key,
           strftime('%Y-%m-%d', started_at / 1000, 'unixepoch', 'localtime') as active_date
-        FROM conversation_turns
-        ${turnWhereSql}
+        FROM usage_metrics
+        ${turnWhereSql ? `${turnWhereSql} AND is_chat = 1` : 'WHERE is_chat = 1'}
         ORDER BY bucket_key ASC, active_date ASC
       `)
       .all(...turnParams) as Array<{
@@ -1703,7 +1780,7 @@ export class SessionDatabaseService {
           COALESCE(NULLIF(TRIM(model_id), ''), 'unknown') as model_id,
           COUNT(*) as count,
           COALESCE(SUM(tokens_total), 0) as total_tokens
-        FROM conversation_turns
+        FROM usage_metrics
         ${turnWhereSql}
         GROUP BY bucket_key, COALESCE(NULLIF(TRIM(model_id), ''), 'unknown')
         ORDER BY bucket_key ASC, count DESC, total_tokens DESC, model_id ASC
@@ -1727,13 +1804,16 @@ export class SessionDatabaseService {
       const list = bucketTopModelsMap.get(row.bucket_key)!
       if (list.length < topModelsLimit) {
         const turnData = turnMap.get(row.bucket_key)
-        const bChats = Number(turnData?.total_chats) || 0
+        const bUsageRecords = Number(turnData?.total_usage_records) || 0
         const count = Number(row.count)
         list.push({
           modelId: row.model_id,
           count,
           totalTokens: Number(row.total_tokens),
-          percentage: bChats > 0 ? Number(((count / bChats) * 100).toFixed(1)) : 0,
+          percentage:
+            bUsageRecords > 0
+              ? Number(((count / bUsageRecords) * 100).toFixed(1))
+              : 0,
         })
       }
     }
@@ -2315,6 +2395,103 @@ export class SessionDatabaseService {
     }
 
     return null
+  }
+}
+
+interface ParsedIsolatedModelInvocation {
+  id: string
+  model: string
+  parentToolCallId: string
+  usage: {
+    tokens_input: number
+    tokens_output: number
+    tokens_cache_read: number
+    tokens_cache_write: number
+    tokens_reasoning: number
+    tokens_total: number
+    cost_input: number | null
+    cost_output: number | null
+    cost_cache_read: number | null
+    cost_cache_write: number | null
+    cost_total: number | null
+  }
+}
+
+function parseIsolatedModelInvocation(
+  value: unknown,
+  owningToolCallId: string,
+): ParsedIsolatedModelInvocation | null {
+  if (!value || typeof value !== 'object') return null
+  const record = value as Record<string, unknown>
+  const id = typeof record.id === 'string' ? record.id.trim() : ''
+  const model = typeof record.model === 'string' ? record.model.trim() : ''
+  const parentToolCallId =
+    typeof record.parentToolCallId === 'string' ? record.parentToolCallId.trim() : ''
+  if (!id || !model || !parentToolCallId || parentToolCallId !== owningToolCallId) return null
+
+  if (!record.usage || typeof record.usage !== 'object') return null
+  const usage = record.usage as Record<string, unknown>
+  const tokenKeys = ['input', 'output', 'cacheRead', 'cacheWrite', 'totalTokens'] as const
+  if (
+    tokenKeys.some(
+      (key) =>
+        typeof usage[key] !== 'number' ||
+        !Number.isFinite(usage[key]) ||
+        (usage[key] as number) < 0,
+    )
+  ) {
+    return null
+  }
+  if (
+    usage.reasoning !== undefined &&
+    (typeof usage.reasoning !== 'number' ||
+      !Number.isFinite(usage.reasoning) ||
+      usage.reasoning < 0)
+  ) {
+    return null
+  }
+
+  let costs: [number, number, number, number, number] | null = null
+  if (usage.cost !== undefined && usage.costKnown !== false) {
+    if (!usage.cost || typeof usage.cost !== 'object') return null
+    const cost = usage.cost as Record<string, unknown>
+    const costKeys = ['input', 'output', 'cacheRead', 'cacheWrite', 'total'] as const
+    if (
+      costKeys.some(
+        (key) =>
+          typeof cost[key] !== 'number' ||
+          !Number.isFinite(cost[key]) ||
+          (cost[key] as number) < 0,
+      )
+    ) {
+      return null
+    }
+    costs = costKeys.map((key) => cost[key] as number) as [
+      number,
+      number,
+      number,
+      number,
+      number,
+    ]
+  }
+
+  return {
+    id,
+    model,
+    parentToolCallId,
+    usage: {
+      tokens_input: usage.input as number,
+      tokens_output: usage.output as number,
+      tokens_cache_read: usage.cacheRead as number,
+      tokens_cache_write: usage.cacheWrite as number,
+      tokens_reasoning: (usage.reasoning as number | undefined) ?? 0,
+      tokens_total: usage.totalTokens as number,
+      cost_input: costs?.[0] ?? null,
+      cost_output: costs?.[1] ?? null,
+      cost_cache_read: costs?.[2] ?? null,
+      cost_cache_write: costs?.[3] ?? null,
+      cost_total: costs?.[4] ?? null,
+    },
   }
 }
 
