@@ -553,6 +553,48 @@ describe('buildSystemPrompt', () => {
             '- Maintain a strict, terse, and highly concise tone. Provide direct answers with minimal fluff and maximum density.',
         )
     })
+
+    it('injects <git> section when gitSettings are provided with non-empty values', () => {
+        const prompt = buildSystemPrompt({
+            cwd: '/repo',
+            tools: [],
+            gitSettings: {
+                mergeMethod: 'squash',
+                alwaysForcePush: true,
+                createDraftPr: false,
+                commitInstructions: 'Prefix with issue tag',
+                prInstructions: 'Follow PR checklist',
+            },
+        })
+        expect(prompt).toContain('<git>')
+        expect(prompt).toContain('Use the "squash" method when merging pull requests.')
+        expect(prompt).not.toContain('Pull request merge method:')
+        expect(prompt).toContain('When pushing branches to the remote repository, always use force push with lease (e.g. "git push --force-with-lease").')
+        expect(prompt).not.toContain('Always force push:')
+        expect(prompt).toContain('Do not create pull requests as draft by default (create regular, ready-for-review pull requests).')
+        expect(prompt).not.toContain('Create draft pull requests:')
+        expect(prompt).toContain('Commit instructions: Prefix with issue tag')
+        expect(prompt).toContain('Pull request instructions: Follow PR checklist')
+        expect(prompt).toContain('</git>')
+        // Ensure section order: <git> is before Current working directory
+        const idxGit = prompt.indexOf('<git>')
+        const idxCwd = prompt.indexOf('Current working directory:')
+        expect(idxGit).toBeGreaterThan(0)
+        expect(idxCwd).toBeGreaterThan(idxGit)
+    })
+
+    it('omits <git> section when gitSettings is empty or contains only un-filled fields', () => {
+        const emptyPrompt = buildSystemPrompt({
+            cwd: '/repo',
+            tools: [],
+            gitSettings: {
+                commitInstructions: '',
+                prInstructions: '   ',
+            },
+        })
+        expect(emptyPrompt).not.toContain('<git>')
+        expect(emptyPrompt).not.toContain('</git>')
+    })
 })
 
 describe('resolvePersonalityGuideline', () => {

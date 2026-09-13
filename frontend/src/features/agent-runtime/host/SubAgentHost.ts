@@ -198,6 +198,7 @@ export function buildSubAgentSystemPrompt(
         promptGuidelines: effectiveGuidelines,
         language: prepared?.language,
         personality: prepared?.personality,
+        gitSettings: prepared?.gitSettings,
     })
 
     const withWorktree = prepared?.worktreePolicy
@@ -278,6 +279,7 @@ export interface SubAgentHostConfig {
     codingTools: readonly AgentTool[]
     allTools?: readonly AgentTool[]
     subagentsSettings?: SubagentsSettings
+    gitSettings?: any
     models: readonly ModelCatalogEntry[]
     extensionRegistry?: any
     hookEngine?: any

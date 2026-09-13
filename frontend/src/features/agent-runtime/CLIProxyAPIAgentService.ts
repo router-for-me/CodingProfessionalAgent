@@ -1228,6 +1228,10 @@ export class CLIProxyAPIAgentService implements AgentService {
                 this.latestSnapshot?.subagentsSettings ??
                 DEFAULT_SUBAGENT_SETTINGS
 
+            const gitSettings =
+                input.gitSettings ??
+                this.latestSnapshot?.gitSettings
+
             const effectiveToolsRaw = subagentsSettings.enabled
                 ? toolsRaw
                 : toolsRaw.filter((tool) => !isSubAgentToolName(tool.name))
@@ -1253,6 +1257,7 @@ export class CLIProxyAPIAgentService implements AgentService {
                     extensionRegistry: this.extensionRegistry,
                     worktreePolicy,
                     subagentsSettings,
+                    gitSettings,
                 }),
                 signal,
             )
@@ -1313,6 +1318,7 @@ export class CLIProxyAPIAgentService implements AgentService {
                 personality: input.personality,
                 protocolProviderId: input.protocolProviderId,
                 subagentsSettings,
+                gitSettings,
                 ...(worktreePolicy ? { worktreePolicy } : {}),
                 generationSnapshot,
             }) as PreparedAgentRun
@@ -1349,6 +1355,7 @@ export class CLIProxyAPIAgentService implements AgentService {
                     codingTools: freezeTools(codingToolsOnly(toolsRaw)),
                     allTools: freezeTools(toolsRaw),
                     subagentsSettings,
+                    gitSettings,
                     models: deepFreezeData(
                         deepCloneData(models),
                     ) as ModelCatalogEntry[],

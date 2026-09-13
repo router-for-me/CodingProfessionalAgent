@@ -6,6 +6,7 @@
 
 import type {
     AgentTarget,
+    GitSettings,
     ResourceKind,
     ResourceProvider,
     ResourceProviderInput,
@@ -29,6 +30,7 @@ import {
     type SkillDiagnostic,
     expandPromptTemplate,
     expandSkillCommand,
+    formatGitSettingsForPrompt,
     formatSkillsForPrompt,
     formatSubagentRolesForPrompt,
     isAbsolutePath,
@@ -107,6 +109,8 @@ export interface LoadResourceSnapshotInput {
     sessionId?: string
     /** Optional subagents settings containing pre-configured roles. */
     subagentsSettings?: SubagentsSettings
+    /** Optional Git settings containing instructions, merge method, force push, draft PR. */
+    gitSettings?: Partial<GitSettings>
 }
 
 export interface ContextProviderItem {
@@ -154,6 +158,7 @@ export async function loadResourcesFromProviders(
                 promptGuidelines: input.promptGuidelines,
                 language: input.language,
                 personality: input.personality,
+                gitSettings: input.gitSettings,
             }),
             systemPromptParts: [
                 {
@@ -163,6 +168,7 @@ export async function loadResourcesFromProviders(
                         promptGuidelines: input.promptGuidelines,
                         language: input.language,
                         personality: input.personality,
+                        gitSettings: input.gitSettings,
                     }),
                 },
             ],
@@ -374,8 +380,9 @@ export async function loadResourcesFromProviders(
             ? (input.subagentsSettings?.roles ?? [])
             : []
     const rolesSection = formatSubagentRolesForPrompt(subagentRoles)
+    const gitSection = formatGitSettingsForPrompt(input.gitSettings)
 
-    let systemPrompt = basePrompt + skillsSection + rolesSection
+    let systemPrompt = basePrompt + skillsSection + rolesSection + gitSection
     if (effectiveCwd) {
         systemPrompt += `\nCurrent working directory: ${normalizePromptPath(effectiveCwd)}`
     }
@@ -430,6 +437,12 @@ export async function loadResourcesFromProviders(
         addSystemPromptPart({
             id: 'subagent-roles',
             content: rolesSection,
+        })
+    }
+    if (gitSection.length > 0) {
+        addSystemPromptPart({
+            id: 'git',
+            content: gitSection,
         })
     }
     if (effectiveCwd) {

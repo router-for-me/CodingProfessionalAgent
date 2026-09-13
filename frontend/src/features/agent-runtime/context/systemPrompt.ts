@@ -3,7 +3,8 @@
  * Identity is Coding Professional Agent (CPA) — never Pi paths or branding.
  */
 
-import { assertPromptCwd } from '@cpa/plugin-sdk'
+import { assertPromptCwd, formatGitSettingsForPrompt } from '@cpa/plugin-sdk'
+import type { GitSettings } from '@cpa/plugin-api'
 import type { PersonalityTone } from '@/types/models'
 
 export const SET_SESSION_TITLE_TOOL_NAME = 'title'
@@ -36,6 +37,8 @@ export interface BuildSystemPromptOptions {
     language?: string
     /** User's selected personality tone constraint. */
     personality?: PersonalityTone | string
+    /** User's configured Git settings (commit instructions, PR instructions, merge method, force push, draft PR). */
+    gitSettings?: Partial<GitSettings> | null
 }
 
 /**
@@ -103,6 +106,11 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
             prompt += `<project_instructions path="${pathAttr}">\n${content}\n</project_instructions>\n\n`
         }
         prompt += '</project_context>\n'
+    }
+
+    const gitSection = formatGitSettingsForPrompt(options.gitSettings)
+    if (gitSection) {
+        prompt += gitSection
     }
 
     if (cwd !== undefined && cwd !== null && cwd !== '') {

@@ -436,7 +436,7 @@ function createWorktreePrepareInput(
             // Test subagents disabled -> omits subagent tools and system prompt
             const bridgeWithDir = new FakeNativeBridge()
             bridgeWithDir.setFile('/workspace/.keep', '')
-            const { service: serviceWithDir } = createService({ bridge: bridgeWithDir })
+            const { service: serviceWithDir, loadCalls: dirLoadCalls } = createService({ bridge: bridgeWithDir })
 
             const preparedWithoutSubagents = await serviceWithDir.prepare({
                 baseUrl: 'http://127.0.0.1:8317',
@@ -478,6 +478,31 @@ function createWorktreePrepareInput(
             })
             expect(preparedWithSubagents.tools.some((t) => t.name === 'spawn_agent')).toBe(true)
             expect(preparedWithSubagents.systemPrompt).toContain('spawn_agent')
+
+            // Test gitSettings passed -> injected into prepared.gitSettings and loadResources input
+            const preparedWithGit = await serviceWithDir.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'key',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'high',
+                speed: 'standard',
+                requestApproval: false,
+                projectPath: '/workspace',
+                gitSettings: {
+                    mergeMethod: 'squash',
+                    alwaysForcePush: true,
+                    createDraftPr: false,
+                    commitInstructions: 'Use conventional commits',
+                    prInstructions: 'Follow PR checklist',
+                },
+            })
+            expect(preparedWithGit.gitSettings?.mergeMethod).toBe('squash')
+            expect(dirLoadCalls[dirLoadCalls.length - 1]?.gitSettings?.mergeMethod).toBe('squash')
+            expect(dirLoadCalls[dirLoadCalls.length - 1]?.gitSettings?.alwaysForcePush).toBe(true)
+            expect(dirLoadCalls[dirLoadCalls.length - 1]?.gitSettings?.createDraftPr).toBe(false)
+            expect(dirLoadCalls[dirLoadCalls.length - 1]?.gitSettings?.commitInstructions).toBe('Use conventional commits')
+            expect(dirLoadCalls[dirLoadCalls.length - 1]?.gitSettings?.prInstructions).toBe('Follow PR checklist')
 
             await expect(
                 service.prepare({

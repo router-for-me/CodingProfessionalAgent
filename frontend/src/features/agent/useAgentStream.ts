@@ -1227,6 +1227,7 @@ async function prepareExecutionRun(
                 scheduleId: params.scheduleId ?? null,
                 sessionId: params.sessionId,
                 subagentsSettings: params.settings.subagents,
+                gitSettings: params.settings.git,
                 getEntries: async (sid: string) => {
                     await ensureSessionLoaded(sid)
                     return useMessageStore.getState().getEntries(sid)
@@ -1356,6 +1357,7 @@ async function prepareExecutionRun(
             scheduleId: params.scheduleId ?? null,
             sessionId: params.sessionId,
             subagentsSettings: params.settings.subagents,
+            gitSettings: params.settings.git,
             getEntries: async (sid: string) => {
                 await ensureSessionLoaded(sid)
                 return useMessageStore.getState().getEntries(sid)
@@ -2125,6 +2127,7 @@ export function useAgentStream(
                         scheduleId: payload.scheduleId ?? targetSession?.scheduleId ?? null,
                         sessionId: targetSessionId ?? null,
                         subagentsSettings: settings.subagents,
+                        gitSettings: settings.git,
                         getEntries: async (sid: string) => {
                             await ensureSessionLoaded(sid)
                             return useMessageStore.getState().getEntries(sid)

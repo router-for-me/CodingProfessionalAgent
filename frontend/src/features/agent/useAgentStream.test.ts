@@ -1304,6 +1304,29 @@ describe('useAgentStream', () => {
         expect(service.prepareInputs[0]?.subagentsSettings?.concurrency).toBe(5)
     })
 
+    it('passes configured git settings to prepare on send', async () => {
+        useSettingsStore.getState().setGitSettings({
+            mergeMethod: 'squash',
+            alwaysForcePush: true,
+            createDraftPr: false,
+            commitInstructions: 'Prefix with ticket ID',
+            prInstructions: 'Link to JIRA issue',
+        })
+        const { result } = renderHook(() => useAgentStream(), {
+            wrapper: wrapperFor(service),
+        })
+
+        await act(async () => {
+            await result.current.send('Hello')
+        })
+
+        expect(service.prepareInputs[0]?.gitSettings?.mergeMethod).toBe('squash')
+        expect(service.prepareInputs[0]?.gitSettings?.alwaysForcePush).toBe(true)
+        expect(service.prepareInputs[0]?.gitSettings?.createDraftPr).toBe(false)
+        expect(service.prepareInputs[0]?.gitSettings?.commitInstructions).toBe('Prefix with ticket ID')
+        expect(service.prepareInputs[0]?.gitSettings?.prInstructions).toBe('Link to JIRA issue')
+    })
+
     it('events stay on original session when currentSession changes mid-stream', async () => {
         let release!: () => void
         service.streamHold = new Promise<void>((resolve) => {

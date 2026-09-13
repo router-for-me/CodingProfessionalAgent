@@ -434,4 +434,72 @@ describe('ResourceProvider', () => {
         })
         expect(snapshotEmptyRoles.systemPrompt).not.toContain('<available_roles>')
     })
+
+    it('injects <git> section into systemPrompt and systemPromptParts when gitSettings are configured', async () => {
+        const bridge = new FakeNativeBridge()
+        const snapshot = await loadResourcesFromProviders({
+            cwd: REPO,
+            agentDir: AGENT,
+            bridge,
+            agentTarget: 'main',
+            gitSettings: {
+                mergeMethod: 'squash',
+                alwaysForcePush: true,
+                createDraftPr: false,
+                commitInstructions: 'Follow conventional commit standard',
+                prInstructions: 'Include testing plan and screenshot',
+            },
+        })
+
+        expect(snapshot.systemPrompt).toContain('<git>')
+        expect(snapshot.systemPrompt).toContain('Use the "squash" method when merging pull requests.')
+        expect(snapshot.systemPrompt).not.toContain('Pull request merge method:')
+        expect(snapshot.systemPrompt).toContain('When pushing branches to the remote repository, always use force push with lease (e.g. "git push --force-with-lease").')
+        expect(snapshot.systemPrompt).not.toContain('Always force push:')
+        expect(snapshot.systemPrompt).toContain('Do not create pull requests as draft by default (create regular, ready-for-review pull requests).')
+        expect(snapshot.systemPrompt).not.toContain('Create draft pull requests:')
+        expect(snapshot.systemPrompt).toContain('Commit instructions: Follow conventional commit standard')
+        expect(snapshot.systemPrompt).toContain('Pull request instructions: Include testing plan and screenshot')
+        expect(snapshot.systemPrompt).toContain('</git>')
+
+        const gitPart = snapshot.systemPromptParts?.find((p) => p.id === 'git')
+        expect(gitPart).toBeDefined()
+        expect(gitPart?.content).toContain('<git>')
+        expect(gitPart?.content).toContain('Follow conventional commit standard')
+    })
+
+    it('omits un-filled Git settings and does not inject empty <git> section when gitSettings is empty', async () => {
+        const bridge = new FakeNativeBridge()
+        const snapshotEmpty = await loadResourcesFromProviders({
+            cwd: REPO,
+            agentDir: AGENT,
+            bridge,
+            agentTarget: 'main',
+            gitSettings: {
+                commitInstructions: '',
+                prInstructions: '   ',
+            },
+        })
+
+        expect(snapshotEmpty.systemPrompt).not.toContain('<git>')
+        expect(snapshotEmpty.systemPrompt).not.toContain('</git>')
+        expect(snapshotEmpty.systemPromptParts?.some((p) => p.id === 'git')).toBe(false)
+
+        const snapshotPartial = await loadResourcesFromProviders({
+            cwd: REPO,
+            agentDir: AGENT,
+            bridge,
+            agentTarget: 'main',
+            gitSettings: {
+                commitInstructions: 'Prefix with [JIRA-123]',
+            },
+        })
+
+        expect(snapshotPartial.systemPrompt).toContain('<git>')
+        expect(snapshotPartial.systemPrompt).toContain('Commit instructions: Prefix with [JIRA-123]')
+        expect(snapshotPartial.systemPrompt).not.toContain('merging pull requests')
+        expect(snapshotPartial.systemPrompt).not.toContain('force push')
+        expect(snapshotPartial.systemPrompt).not.toContain('pull requests as draft')
+        expect(snapshotPartial.systemPrompt).not.toContain('Pull request instructions')
+    })
 })

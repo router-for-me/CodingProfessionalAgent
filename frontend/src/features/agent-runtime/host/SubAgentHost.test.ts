@@ -1491,4 +1491,51 @@ describe('SubAgentHost', () => {
         // Verify: Developer prompt is still injected properly
         expect(childRunDeveloperPrompt).toContain('Specialist prompt for nested tasks.')
     })
+
+    it('injects <git> section into subagent system prompt when prepared.gitSettings are present', async () => {
+        let childSystemPrompt = ''
+        const replies = ['done']
+        const host = new SubAgentHost({
+            generateId: () => 'subagent-git-1',
+            now: () => 1000,
+            run: (request) => {
+                childSystemPrompt = request.systemPrompt
+                return scriptedRun(request, replies)
+            },
+        })
+
+        const preparedWithGit = {
+            ...preparedRun(),
+            gitSettings: {
+                mergeMethod: 'merge',
+                alwaysForcePush: true,
+                createDraftPr: false,
+                commitInstructions: 'Prefix with subagent task ID',
+                prInstructions: 'List changes clearly',
+            },
+        }
+
+        host.configure({
+            prepared: preparedWithGit,
+            codingTools: [readTool],
+            models: [model],
+        })
+        host.setParentContext({ sessionId: 'session-1', runId: 'run-1' })
+
+        await host.spawn('Do git operations', {
+            name: 'git-subagent',
+            modelId: 'parent-model',
+        })
+
+        expect(childSystemPrompt).toContain('<git>')
+        expect(childSystemPrompt).toContain('Use the "merge" method when merging pull requests.')
+        expect(childSystemPrompt).not.toContain('Pull request merge method:')
+        expect(childSystemPrompt).toContain('When pushing branches to the remote repository, always use force push with lease (e.g. "git push --force-with-lease").')
+        expect(childSystemPrompt).not.toContain('Always force push:')
+        expect(childSystemPrompt).toContain('Do not create pull requests as draft by default (create regular, ready-for-review pull requests).')
+        expect(childSystemPrompt).not.toContain('Create draft pull requests:')
+        expect(childSystemPrompt).toContain('Commit instructions: Prefix with subagent task ID')
+        expect(childSystemPrompt).toContain('Pull request instructions: List changes clearly')
+        expect(childSystemPrompt).toContain('</git>')
+    })
 })
