@@ -217,7 +217,11 @@ export function SkillDraftEditor({
             return
         }
 
-        if (value === lastEmittedRef.current && root.childNodes.length > 0) {
+        if (
+            value === lastEmittedRef.current &&
+            root.childNodes.length > 0 &&
+            (!value ? root.querySelector('br') === null : true)
+        ) {
             resize()
             scrollToActivePosition(root)
             return
@@ -245,7 +249,9 @@ export function SkillDraftEditor({
         const next = serializeSkillDraft(parts)
         const domNeedsTrailingZwsp =
             next.endsWith('\n') && !root.lastChild?.textContent?.endsWith(ZWSP)
-        if (partsChanged(read.parts, parts) || domNeedsTrailingZwsp) {
+        const domNeedsEmptyReset =
+            !next && (root.querySelector('br') !== null || !hasContent(root))
+        if (partsChanged(read.parts, parts) || domNeedsTrailingZwsp || domNeedsEmptyReset) {
             writeDraftDom(root, parts)
             setDraftCaret(root, read.cursor)
         }
@@ -353,6 +359,18 @@ export function SkillDraftEditor({
                     return
                 }
                 onKeyDown?.(event)
+                if (
+                    (event.key === 'Backspace' || event.key === 'Delete') &&
+                    !event.defaultPrevented &&
+                    !composingRef.current &&
+                    !event.nativeEvent?.isComposing &&
+                    event.keyCode !== 229
+                ) {
+                    if (isEditorEmpty(rootRef.current, value)) {
+                        event.preventDefault()
+                        return
+                    }
+                }
                 if (
                     event.key === 'Enter' &&
                     !event.defaultPrevented &&
@@ -571,12 +589,49 @@ function readDraftDom(root: HTMLElement): {
     cursor: number
     parts: SkillDraftPart[]
 } {
+    if (!hasContent(root)) {
+        return { text: '', cursor: 0, parts: [] }
+    }
     const parts = partsFromDom(root)
     const text = serializeSkillDraft(parts)
     return { text, cursor: caretSerializedOffset(root), parts }
 }
 
+function hasContent(root: Node | null): boolean {
+    if (!root) return false
+    if (root.nodeType === Node.TEXT_NODE) {
+        return (root.textContent ?? '').split(ZWSP).join('').length > 0
+    }
+    if ('querySelector' in root && typeof (root as Element).querySelector === 'function') {
+        if ((root as Element).querySelector('[data-skill-name]')) {
+            return true
+        }
+    }
+    for (const node of root.childNodes) {
+        if (node.nodeType === Node.TEXT_NODE) {
+            const val = (node.textContent ?? '').split(ZWSP).join('')
+            if (val.length > 0) return true
+        } else if (node.nodeType === Node.ELEMENT_NODE) {
+            const el = node as HTMLElement
+            if (el.dataset.skillName) return true
+            if (el.tagName !== 'BR' && hasContent(el)) {
+                return true
+            }
+        }
+    }
+    return false
+}
+
+function isEditorEmpty(root: HTMLElement | null, value: string): boolean {
+    if (value && value.length > 0) return false
+    if (!root) return true
+    return !hasContent(root)
+}
+
 function partsFromDom(root: HTMLElement): SkillDraftPart[] {
+    if (!hasContent(root)) {
+        return []
+    }
     const parts: SkillDraftPart[] = []
     for (const node of root.childNodes) {
         if (node.nodeType === Node.TEXT_NODE) {
@@ -606,6 +661,7 @@ function partsFromDom(root: HTMLElement): SkillDraftPart[] {
 }
 
 function caretSerializedOffset(root: HTMLElement): number {
+    if (!hasContent(root)) return 0
     const selection = window.getSelection()
     if (!selection || selection.rangeCount === 0 || !root.contains(selection.anchorNode)) {
         return serializeSkillDraft(partsFromDom(root)).length
@@ -746,6 +802,7 @@ function isRedoShortcut(event: KeyboardEvent<HTMLElement>): boolean {
 }
 
 function getSelectionOffsets(root: HTMLElement): { start: number; end: number } {
+    if (!hasContent(root)) return { start: 0, end: 0 }
     const selection = window.getSelection()
     if (!selection || selection.rangeCount === 0 || !root.contains(selection.anchorNode)) {
         const len = serializeSkillDraft(partsFromDom(root)).length

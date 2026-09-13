@@ -453,4 +453,70 @@ describe('SkillDraftEditor', () => {
         // Verifies scrollTop was adjusted to show the end position
         expect(input.scrollTop).toBe(300)
     })
+
+    it('prevents default and does not produce a newline when Backspace is pressed on empty editor', () => {
+        const handleChange = vi.fn()
+        render(
+            <SkillDraftEditor
+                value=""
+                onChange={handleChange}
+            />,
+        )
+
+        const input = screen.getByTestId('composer-input')
+        const backspaceEvent = new KeyboardEvent('keydown', {
+            key: 'Backspace',
+            code: 'Backspace',
+            bubbles: true,
+            cancelable: true,
+        })
+        input.dispatchEvent(backspaceEvent)
+
+        expect(backspaceEvent.defaultPrevented).toBe(true)
+        expect(handleChange).not.toHaveBeenCalled()
+    })
+
+    it('prevents default when Delete is pressed on empty editor', () => {
+        const handleChange = vi.fn()
+        render(
+            <SkillDraftEditor
+                value=""
+                onChange={handleChange}
+            />,
+        )
+
+        const input = screen.getByTestId('composer-input')
+        const deleteEvent = new KeyboardEvent('keydown', {
+            key: 'Delete',
+            code: 'Delete',
+            bubbles: true,
+            cancelable: true,
+        })
+        input.dispatchEvent(deleteEvent)
+
+        expect(deleteEvent.defaultPrevented).toBe(true)
+        expect(handleChange).not.toHaveBeenCalled()
+    })
+
+    it('does not produce a newline when editor content is cleared and browser inserts a filler br', () => {
+        const handleChange = vi.fn()
+        render(
+            <SkillDraftEditor
+                value=""
+                onChange={handleChange}
+            />,
+        )
+
+        const input = screen.getByTestId('composer-input')
+
+        // Simulate browser inserting a filler <br> on empty contenteditable element
+        input.innerHTML = '<br>'
+        fireEvent.input(input)
+
+        // Must emit empty string with cursor 0, not a newline '\n'
+        expect(handleChange).toHaveBeenCalledWith('', 0)
+        // Must normalize DOM back to clean zero-width space without residual <br>
+        expect(input.querySelector('br')).toBeNull()
+        expect(input.textContent).toBe('\u200b')
+    })
 })
