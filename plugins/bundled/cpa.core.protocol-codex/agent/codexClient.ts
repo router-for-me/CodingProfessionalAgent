@@ -44,6 +44,7 @@ export interface CodexClientOptions {
 export interface CodexClientStreamInput {
     model: ModelCatalogEntry
     systemPrompt: string
+    developerPrompt?: string
     entries: readonly ConversationEntry[]
     tools?: readonly CodexToolDefinition[]
     nativeTools?: readonly { type: 'web_search' }[]
@@ -140,6 +141,7 @@ export class CodexClient {
             model: input.model,
             sessionId: promptCacheKey,
             systemPrompt: input.systemPrompt,
+            developerPrompt: input.developerPrompt,
             entries: input.entries,
             tools: input.tools,
             nativeTools: input.nativeTools,

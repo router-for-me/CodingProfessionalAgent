@@ -1252,6 +1252,7 @@ export class CLIProxyAPIAgentService implements AgentService {
                     localMemoryEnabled: input.localMemoryEnabled,
                     extensionRegistry: this.extensionRegistry,
                     worktreePolicy,
+                    subagentsSettings,
                 }),
                 signal,
             )
@@ -1973,6 +1974,7 @@ export class CLIProxyAPIAgentService implements AgentService {
                     userEntry: request.userEntry,
                     model: request.model,
                     systemPrompt: request.systemPrompt,
+                    developerPrompt: request.developerPrompt,
                     tools: request.tools as AgentTool[],
                     requestApproval: false,
                     reasoningEffort:

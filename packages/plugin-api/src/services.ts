@@ -254,11 +254,22 @@ export interface WorktreeSettings {
   deleteLimit: number
 }
 
+export interface SubagentRole {
+  id: string
+  name: string
+  description: string
+  modelId: string
+  reasoningEffort: string
+}
+
+export const DEFAULT_SUBAGENT_ROLES: readonly SubagentRole[] = Object.freeze([])
+
 export interface SubagentsSettings {
   enabled: boolean
   concurrency: number
   maxPerSession: number
   maxDepth: number
+  roles?: SubagentRole[]
 }
 
 export type EditorSendShortcut = 'enter' | 'cmdEnter'
@@ -904,6 +915,9 @@ export interface SubAgentRecord {
     pausedMs?: number
     depth?: number
     parentAgentId?: string
+    roleId?: string
+    roleName?: string
+    rolePrompt?: string
 }
 
 export interface SubAgentService {

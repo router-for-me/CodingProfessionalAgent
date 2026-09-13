@@ -200,6 +200,7 @@ export function SkillDraftEditor({
         writeDraftDom(root, parts)
         setDraftCaret(root, nextCursor)
         resize()
+        scrollToActivePosition(root)
 
         lastEmittedRef.current = nextText
         onChangeRef.current(nextText, Math.min(nextCursor, nextText.length))
@@ -212,11 +213,17 @@ export function SkillDraftEditor({
         if (isApplyingHistoryRef.current) {
             isApplyingHistoryRef.current = false
             resize()
+            scrollToActivePosition(root)
             return
         }
 
-        if (value === lastEmittedRef.current && root.childNodes.length > 0) {
+        if (
+            value === lastEmittedRef.current &&
+            root.childNodes.length > 0 &&
+            (!value ? root.querySelector('br') === null : true)
+        ) {
             resize()
+            scrollToActivePosition(root)
             return
         }
 
@@ -226,6 +233,7 @@ export function SkillDraftEditor({
         writeDraftDom(root, parseSkillDraft(value, skillsRef.current))
         setDraftCaret(root, nextCaret)
         resize()
+        scrollToActivePosition(root)
 
         const currentEntry = historyRef.current[historyIndexRef.current]
         if (!currentEntry || currentEntry.value !== value) {
@@ -241,7 +249,9 @@ export function SkillDraftEditor({
         const next = serializeSkillDraft(parts)
         const domNeedsTrailingZwsp =
             next.endsWith('\n') && !root.lastChild?.textContent?.endsWith(ZWSP)
-        if (partsChanged(read.parts, parts) || domNeedsTrailingZwsp) {
+        const domNeedsEmptyReset =
+            !next && (root.querySelector('br') !== null || !hasContent(root))
+        if (partsChanged(read.parts, parts) || domNeedsTrailingZwsp || domNeedsEmptyReset) {
             writeDraftDom(root, parts)
             setDraftCaret(root, read.cursor)
         }
@@ -302,6 +312,7 @@ export function SkillDraftEditor({
             )}
             onInput={() => {
                 resize()
+                scrollToActivePosition(rootRef.current)
                 if (composingRef.current) return
                 emitFromDom()
             }}
@@ -312,11 +323,13 @@ export function SkillDraftEditor({
             }}
             onCompositionUpdate={() => {
                 resize()
+                scrollToActivePosition(rootRef.current)
             }}
             onCompositionEnd={() => {
                 composingRef.current = false
                 setIsComposing(false)
                 resize()
+                scrollToActivePosition(rootRef.current)
                 emitFromDom(true)
             }}
             onKeyUp={() => {
@@ -346,6 +359,18 @@ export function SkillDraftEditor({
                     return
                 }
                 onKeyDown?.(event)
+                if (
+                    (event.key === 'Backspace' || event.key === 'Delete') &&
+                    !event.defaultPrevented &&
+                    !composingRef.current &&
+                    !event.nativeEvent?.isComposing &&
+                    event.keyCode !== 229
+                ) {
+                    if (isEditorEmpty(rootRef.current, value)) {
+                        event.preventDefault()
+                        return
+                    }
+                }
                 if (
                     event.key === 'Enter' &&
                     !event.defaultPrevented &&
@@ -403,6 +428,7 @@ export function SkillDraftEditor({
                 writeDraftDom(root, parts)
                 setDraftCaret(root, nextCursor)
                 resize()
+                scrollToActivePosition(root)
 
                 lastEmittedRef.current = nextText
                 onChangeRef.current(nextText, Math.min(nextCursor, nextText.length))
@@ -441,6 +467,48 @@ function adjustEditorHeight(
     const next = Math.min(Math.max(measured, minCap), maxHeight)
     root.style.height = `${next}px`
     root.style.overflowY = measured > maxHeight ? 'auto' : 'hidden'
+}
+
+function scrollToActivePosition(root: HTMLElement | null): void {
+    if (!root) return
+    const doScroll = () => {
+        if (!root) return
+        if (root.scrollHeight <= root.clientHeight) return
+
+        try {
+            const selection = window.getSelection()
+            if (selection && selection.rangeCount > 0) {
+                const range = selection.getRangeAt(0)
+                if (root.contains(range.commonAncestorContainer)) {
+                    const rects = range.getClientRects()
+                    const rect = rects.length > 0 ? rects[0] : range.getBoundingClientRect()
+                    const rootRect = root.getBoundingClientRect()
+                    if (rect && rootRect && rect.height > 0) {
+                        if (rect.bottom > rootRect.bottom) {
+                            root.scrollTop += (rect.bottom - rootRect.bottom) + 8
+                            return
+                        } else if (rect.top < rootRect.top) {
+                            root.scrollTop -= (rootRect.top - rect.top) + 8
+                            return
+                        }
+                    }
+                }
+            }
+
+            const { end } = getSelectionOffsets(root)
+            const currentText = readDraftDom(root).text
+            if (end >= currentText.length - 1) {
+                root.scrollTop = root.scrollHeight
+            }
+        } catch {
+            root.scrollTop = root.scrollHeight
+        }
+    }
+
+    doScroll()
+    if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(doScroll)
+    }
 }
 
 function partsChanged(
@@ -521,12 +589,49 @@ function readDraftDom(root: HTMLElement): {
     cursor: number
     parts: SkillDraftPart[]
 } {
+    if (!hasContent(root)) {
+        return { text: '', cursor: 0, parts: [] }
+    }
     const parts = partsFromDom(root)
     const text = serializeSkillDraft(parts)
     return { text, cursor: caretSerializedOffset(root), parts }
 }
 
+function hasContent(root: Node | null): boolean {
+    if (!root) return false
+    if (root.nodeType === Node.TEXT_NODE) {
+        return (root.textContent ?? '').split(ZWSP).join('').length > 0
+    }
+    if ('querySelector' in root && typeof (root as Element).querySelector === 'function') {
+        if ((root as Element).querySelector('[data-skill-name]')) {
+            return true
+        }
+    }
+    for (const node of root.childNodes) {
+        if (node.nodeType === Node.TEXT_NODE) {
+            const val = (node.textContent ?? '').split(ZWSP).join('')
+            if (val.length > 0) return true
+        } else if (node.nodeType === Node.ELEMENT_NODE) {
+            const el = node as HTMLElement
+            if (el.dataset.skillName) return true
+            if (el.tagName !== 'BR' && hasContent(el)) {
+                return true
+            }
+        }
+    }
+    return false
+}
+
+function isEditorEmpty(root: HTMLElement | null, value: string): boolean {
+    if (value && value.length > 0) return false
+    if (!root) return true
+    return !hasContent(root)
+}
+
 function partsFromDom(root: HTMLElement): SkillDraftPart[] {
+    if (!hasContent(root)) {
+        return []
+    }
     const parts: SkillDraftPart[] = []
     for (const node of root.childNodes) {
         if (node.nodeType === Node.TEXT_NODE) {
@@ -556,6 +661,7 @@ function partsFromDom(root: HTMLElement): SkillDraftPart[] {
 }
 
 function caretSerializedOffset(root: HTMLElement): number {
+    if (!hasContent(root)) return 0
     const selection = window.getSelection()
     if (!selection || selection.rangeCount === 0 || !root.contains(selection.anchorNode)) {
         return serializeSkillDraft(partsFromDom(root)).length
@@ -696,6 +802,7 @@ function isRedoShortcut(event: KeyboardEvent<HTMLElement>): boolean {
 }
 
 function getSelectionOffsets(root: HTMLElement): { start: number; end: number } {
+    if (!hasContent(root)) return { start: 0, end: 0 }
     const selection = window.getSelection()
     if (!selection || selection.rangeCount === 0 || !root.contains(selection.anchorNode)) {
         const len = serializeSkillDraft(partsFromDom(root)).length

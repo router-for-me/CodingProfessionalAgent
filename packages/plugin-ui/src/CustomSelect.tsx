@@ -10,7 +10,7 @@ import {
     type KeyboardEvent as ReactKeyboardEvent,
 } from 'react'
 import { createPortal } from 'react-dom'
-import { Check, ChevronDown } from 'lucide-react'
+import { Check, ChevronDown, Search } from 'lucide-react'
 import { cn } from './cn.js'
 
 export interface CustomSelectOption<T extends string> {
@@ -29,6 +29,8 @@ export interface CustomSelectProps<T extends string> {
     className?: string
     triggerClassName?: string
     align?: 'left' | 'right'
+    searchable?: boolean
+    searchPlaceholder?: string
 }
 
 interface MenuPosition {
@@ -57,45 +59,68 @@ export function CustomSelect<T extends string>({
     className,
     triggerClassName,
     align,
+    searchable = false,
+    searchPlaceholder,
 }: CustomSelectProps<T>) {
     const reactId = useId()
     const idSuffix = toAriaId(reactId)
     const listboxId = `custom-select-${idSuffix}`
     const [open, setOpen] = useState(false)
     const [activeIndex, setActiveIndex] = useState(0)
+    const [searchQuery, setSearchQuery] = useState('')
     const [position, setPosition] = useState<MenuPosition | null>(null)
     const rootRef = useRef<HTMLDivElement>(null)
     const triggerRef = useRef<HTMLButtonElement>(null)
     const menuRef = useRef<HTMLDivElement>(null)
+    const searchInputRef = useRef<HTMLInputElement>(null)
+
+    const filteredOptions = useMemo(() => {
+        if (!searchable || !searchQuery.trim()) return options
+        const q = searchQuery.trim().toLowerCase()
+        return options.filter(
+            (opt) => opt.label.toLowerCase().includes(q) || opt.value.toLowerCase().includes(q)
+        )
+    }, [options, searchable, searchQuery])
 
     const selectedIndex = Math.max(
         0,
-        options.findIndex((option) => option.value === value),
+        filteredOptions.findIndex((option) => option.value === value),
     )
-    const selected = options[selectedIndex] ?? options[0]
+    const selected = options.find((option) => option.value === value) ?? options[0]
     const selectedLabel = selected?.label ?? ''
 
     const optionIds = useMemo(
-        () => options.map((option) => `${listboxId}-${toAriaId(option.value)}`),
-        [listboxId, options],
+        () => filteredOptions.map((option) => `${listboxId}-${toAriaId(option.value)}`),
+        [listboxId, filteredOptions],
     )
 
     const updatePosition = useCallback(() => {
         const trigger = triggerRef.current
         if (!trigger) return
-        setPosition(computeMenuPosition(trigger.getBoundingClientRect(), align))
-    }, [align])
+        setPosition(computeMenuPosition(trigger.getBoundingClientRect(), align, searchable))
+    }, [align, searchable])
 
     const close = useCallback(() => {
         setOpen(false)
+        setSearchQuery('')
     }, [])
 
     const openMenu = useCallback(() => {
         if (disabled) return
-        setActiveIndex(selectedIndex)
+        setActiveIndex(selectedIndex >= 0 ? selectedIndex : 0)
+        setSearchQuery('')
         updatePosition()
         setOpen(true)
     }, [disabled, selectedIndex, updatePosition])
+
+    useEffect(() => {
+        if (open && searchable) {
+            const timer = setTimeout(() => {
+                searchInputRef.current?.focus()
+            }, 0)
+            return () => clearTimeout(timer)
+        }
+    }, [open, searchable])
 
     useEffect(() => {
         if (disabled) setOpen(false)
@@ -147,12 +172,43 @@ export function CustomSelect<T extends string>({
         document.getElementById(optionId)?.scrollIntoView?.({ block: 'nearest' })
     }, [activeIndex, open, optionIds])
 
-    const selectIndex = (index: number) => {
-        const option = options[index]
-        if (!option) return
-        onChange(option.value)
+    const selectOption = (optValue: T) => {
+        onChange(optValue)
         setOpen(false)
+        setSearchQuery('')
         triggerRef.current?.focus()
+    }
+
+    const selectIndex = (index: number) => {
+        const option = filteredOptions[index]
+        if (!option) return
+        selectOption(option.value)
+    }
+
+    const handleSearchKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+        if (event.key === 'ArrowDown') {
+            event.preventDefault()
+            setActiveIndex((index) => Math.min(index + 1, Math.max(filteredOptions.length - 1, 0)))
+            return
+        }
+        if (event.key === 'ArrowUp') {
+            event.preventDefault()
+            setActiveIndex((index) => Math.max(index - 1, 0))
+            return
+        }
+        if (event.key === 'Enter') {
+            event.preventDefault()
+            const chosen = filteredOptions[activeIndex]
+            if (chosen) {
+                selectOption(chosen.value)
+            }
+            return
+        }
+        if (event.key === 'Escape') {
+            event.preventDefault()
+            close()
+            triggerRef.current?.focus()
+        }
     }
 
     const handleTriggerKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
@@ -210,8 +266,12 @@ export function CustomSelect<T extends string>({
                 disabled={disabled}
                 className={cn(
                     'inline-flex items-center gap-1.5 text-left outline-none',
+                    'font-[inherit] text-[12px] text-[var(--text-primary)]',
+                    'rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-sidebar-hover)] px-2.5 py-1.5',
+                    'hover:bg-[var(--bg-elevated)] transition-colors',
+                    'focus-visible:ring-2 focus-visible:ring-[var(--accent-blue)]/40',
                     'disabled:pointer-events-none disabled:opacity-50',
-                    fullWidth && 'w-full',
+                    fullWidth && 'w-full justify-between',
                     triggerClassName,
                 )}
                 onClick={() => {
@@ -241,8 +301,9 @@ export function CustomSelect<T extends string>({
                         aria-label={ariaLabel}
                         data-custom-select-menu=""
                         className={cn(
-                            'fixed z-[70] overflow-y-auto rounded-[var(--radius-card)]',
+                            'fixed z-[70] flex flex-col overflow-hidden rounded-[var(--radius-card)]',
                             'border border-[var(--border-subtle)] bg-[var(--bg-elevated)] py-1 shadow-lg',
+                            'font-[inherit]',
                         )}
                         style={{
                             left: position.left,
@@ -254,36 +315,65 @@ export function CustomSelect<T extends string>({
                             bottom: position.bottom,
                         }}
                     >
-                        {options.map((option, index) => {
-                            const selectedOption = option.value === value
-                            const active = index === activeIndex
-                            return (
-                                <button
-                                    key={option.value}
-                                    id={optionIds[index]}
-                                    type="button"
-                                    role="option"
-                                    tabIndex={-1}
-                                    aria-selected={selectedOption}
-                                    className={cn(
-                                        'flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[13px]',
-                                        active
-                                            ? 'bg-[var(--bg-sidebar-hover)] text-[var(--text-primary)]'
-                                            : 'text-[var(--text-secondary)]',
-                                    )}
-                                    onMouseEnter={() => setActiveIndex(index)}
-                                    onClick={() => selectIndex(index)}
-                                >
-                                    <span className="min-w-0 flex-1 truncate">{option.label}</span>
-                                    {selectedOption ? (
-                                        <Check
-                                            className="size-3.5 shrink-0 text-[var(--accent-blue)]"
-                                            aria-hidden
-                                        />
-                                    ) : null}
-                                </button>
-                            )
-                        })}
+                        {searchable ? (
+                            <div className="shrink-0 border-b border-[var(--border-subtle)] px-2 py-1.5">
+                                <div className="flex items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-app)] px-2 py-1">
+                                    <Search className="size-3.5 shrink-0 text-[var(--text-muted)]" aria-hidden />
+                                    <input
+                                        ref={searchInputRef}
+                                        type="text"
+                                        value={searchQuery}
+                                        onChange={(e) => {
+                                            setSearchQuery(e.target.value)
+                                            setActiveIndex(0)
+                                        }}
+                                        onKeyDown={handleSearchKeyDown}
+                                        placeholder={searchPlaceholder || '搜索...'}
+                                        aria-label={searchPlaceholder || '搜索'}
+                                        className="w-full bg-transparent text-[12px] text-[var(--text-primary)] placeholder:text-[var(--text-muted)] outline-none font-[inherit]"
+                                    />
+                                </div>
+                            </div>
+                        ) : null}
+
+                        <div className="min-h-0 flex-1 overflow-y-auto">
+                            {filteredOptions.length === 0 ? (
+                                <div className="px-3 py-3 text-center text-[12px] text-[var(--text-muted)] font-[inherit]">
+                                    未找到匹配结果
+                                </div>
+                            ) : (
+                                filteredOptions.map((option, index) => {
+                                    const selectedOption = option.value === value
+                                    const active = index === activeIndex
+                                    return (
+                                        <button
+                                            key={option.value}
+                                            id={optionIds[index]}
+                                            type="button"
+                                            role="option"
+                                            tabIndex={-1}
+                                            aria-selected={selectedOption}
+                                            className={cn(
+                                                'flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] font-[inherit]',
+                                                active
+                                                    ? 'bg-[var(--bg-sidebar-hover)] text-[var(--text-primary)]'
+                                                    : 'text-[var(--text-secondary)]',
+                                            )}
+                                            onMouseEnter={() => setActiveIndex(index)}
+                                            onClick={() => selectOption(option.value)}
+                                        >
+                                            <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                                            {selectedOption ? (
+                                                <Check
+                                                    className="size-3.5 shrink-0 text-[var(--accent-blue)]"
+                                                    aria-hidden
+                                                />
+                                            ) : null}
+                                        </button>
+                                    )
+                                })
+                            )}
+                        </div>
                     </div>,
                     document.body,
                 )
@@ -292,7 +382,11 @@ export function CustomSelect<T extends string>({
     )
 }
 
-function computeMenuPosition(trigger: DOMRect, align?: 'left' | 'right'): MenuPosition {
+function computeMenuPosition(
+    trigger: DOMRect,
+    align?: 'left' | 'right',
+    searchable?: boolean,
+): MenuPosition {
     const spaceBelow = window.innerHeight - trigger.bottom - VIEWPORT_PAD
     const spaceAbove = trigger.top - VIEWPORT_PAD
     const placement =
@@ -317,8 +411,10 @@ function computeMenuPosition(trigger: DOMRect, align?: 'left' | 'right'): MenuPo
             ? { top: trigger.bottom + MENU_GUTTER }
             : { bottom: window.innerHeight - trigger.top + MENU_GUTTER }
 
+    const minWidth = searchable ? Math.max(trigger.width, 220) : trigger.width
+
     return {
-        minWidth: trigger.width,
+        minWidth,
         maxWidth,
         maxHeight,
         ...horizontal,

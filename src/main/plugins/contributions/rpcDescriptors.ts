@@ -17,8 +17,10 @@ import type { DialogService } from '../../services/dialogService.js'
 import type { TrayService, TrayLocale } from '../../services/trayService.js'
 import type { PowerSaveService } from '../../services/powerSaveService.js'
 import type { WebServerService } from '../../services/webServerService.js'
+import type { NotificationBadgeService } from '../../services/notificationBadgeService.js'
 import type { EnvironmentWatcherService } from '../../services/environmentWatcherService.js'
 import type { ProfilingService } from '../../services/profilingService.js'
+import type { UpdateService } from '../../services/update/updateService.js'
 import { getRequiredCapabilityForMethod } from '../../../shared/capabilityDescriptors.js'
 
 export interface PlatformRpcDescriptorOptions {
@@ -439,6 +441,27 @@ export function createPlatformRpcDescriptors(
                 getService<TrayService>('trayService', context).setLocale(args[0] as TrayLocale),
         },
 
+        // Notification & Badge
+        {
+            method: 'notification:taskCompleted',
+            aliases: ['NotificationTaskCompleted'],
+            ipcChannel: 'notification:taskCompleted',
+            capability: cap('notification:taskCompleted', 'notification.show'),
+            invoke: async (context, args) => {
+                const payload = args[0] as { sessionId: string; sessionTitle?: string }
+                getService<NotificationBadgeService>('notificationBadgeService', context).notifyTaskCompleted(payload)
+            },
+        },
+        {
+            method: 'notification:clearBadge',
+            aliases: ['NotificationClearBadge'],
+            ipcChannel: 'notification:clearBadge',
+            capability: cap('notification:clearBadge', 'notification.manage'),
+            invoke: async (context) => {
+                getService<NotificationBadgeService>('notificationBadgeService', context).clearBadge()
+            },
+        },
+
         // Power / Sleep
         {
             method: 'power:setPreventSleep',
@@ -756,6 +779,43 @@ export function createPlatformRpcDescriptors(
                 )
                 return { ok: true }
             },
+        },
+
+        // Update
+        {
+            method: 'update:check',
+            aliases: ['CheckForUpdates', 'UpdateCheck'],
+            ipcChannel: 'update:check',
+            capability: cap('update:check', 'system.update'),
+            invoke: async (context) => getService<UpdateService>('updateService', context).checkForUpdates(),
+        },
+        {
+            method: 'update:download',
+            aliases: ['DownloadUpdate', 'UpdateDownload'],
+            ipcChannel: 'update:download',
+            capability: cap('update:download', 'system.update'),
+            invoke: async (context) => getService<UpdateService>('updateService', context).startDownload(),
+        },
+        {
+            method: 'update:cancel',
+            aliases: ['CancelUpdate', 'UpdateCancel'],
+            ipcChannel: 'update:cancel',
+            capability: cap('update:cancel', 'system.update'),
+            invoke: async (context) => getService<UpdateService>('updateService', context).cancelDownload(),
+        },
+        {
+            method: 'update:apply',
+            aliases: ['QuitAndInstallUpdate', 'UpdateApply'],
+            ipcChannel: 'update:apply',
+            capability: cap('update:apply', 'system.update'),
+            invoke: async (context) => getService<UpdateService>('updateService', context).quitAndInstall(),
+        },
+        {
+            method: 'update:getState',
+            aliases: ['GetUpdateState', 'UpdateGetState'],
+            ipcChannel: 'update:getState',
+            capability: cap('update:getState', 'system.update'),
+            invoke: async (context) => getService<UpdateService>('updateService', context).getStatusSnapshot(),
         },
     ]
 

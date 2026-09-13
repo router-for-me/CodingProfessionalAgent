@@ -100,6 +100,7 @@ export interface AgentRunInput {
     userEntry?: UserEntry
     model: ModelCatalogEntry
     systemPrompt: string
+    developerPrompt?: string
     tools: readonly AgentTool[]
     /** When true, bash/edit/write wait for ApprovalController. read is always auto. */
     requestApproval?: boolean
@@ -1020,6 +1021,7 @@ export class AgentLoop {
                     assistantId,
                     model,
                     systemPrompt,
+                    developerPrompt: input.developerPrompt,
                     toolDefs,
                     reasoningEffort: activeReasoningEffort,
                     speed: activeSpeed,
@@ -1339,6 +1341,7 @@ export class AgentLoop {
         assistantId: string
         model: ModelCatalogEntry
         systemPrompt: string
+        developerPrompt?: string
         toolDefs: ProtocolToolDefinition[] | undefined
         reasoningEffort?: string
         speed?: string
@@ -1405,6 +1408,7 @@ export class AgentLoop {
             const streamInput: ProtocolStreamInput = {
                 model,
                 systemPrompt,
+                developerPrompt: args.developerPrompt,
                 entries: buildCompactedContext(stableEntries),
                 tools: toolDefs,
                 reasoningEffort,

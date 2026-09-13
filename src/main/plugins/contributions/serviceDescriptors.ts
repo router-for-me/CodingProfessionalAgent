@@ -15,6 +15,8 @@ import { BinaryService } from '../../services/binaryService.js'
 import { EnvironmentWatcherService } from '../../services/environmentWatcherService.js'
 import { ProfilingService } from '../../services/profilingService.js'
 import { PowerSaveService } from '../../services/powerSaveService.js'
+import { UpdateService } from '../../services/update/updateService.js'
+import { NotificationBadgeService } from '../../services/notificationBadgeService.js'
 import { PluginResourceService } from '../resources/PluginResourceService.js'
 import { PluginGraphManagementService } from '../management/PluginGraphManagementService.js'
 
@@ -36,6 +38,8 @@ export interface PlatformServiceDescriptorOptions {
     cpaVersion?: string
     getPluginMetrics?: () => Promise<PluginMetric[]> | PluginMetric[]
     pluginResourceService?: PluginResourceService
+    updateService?: UpdateService
+    notificationBadgeService?: NotificationBadgeService
 }
 
 export type CoreServiceDescriptorOptions = PlatformServiceDescriptorOptions
@@ -203,6 +207,14 @@ export function createPlatformServiceDescriptors(
             },
         },
         {
+            id: 'notificationBadgeService',
+            dependencies: [],
+            create: () => options.notificationBadgeService ?? new NotificationBadgeService(getMainWindow, emitEvent),
+            dispose: (service: NotificationBadgeService) => {
+                service.clearBadge()
+            },
+        },
+        {
             id: 'trayService',
             dependencies: [],
             create: () => new TrayService(getMainWindow, isDebug),
@@ -235,6 +247,19 @@ export function createPlatformServiceDescriptors(
             dependencies: [],
             create: () => new PowerSaveService(),
             dispose: (service: PowerSaveService) => {
+                service.dispose()
+            },
+        },
+        {
+            id: 'updateService',
+            dependencies: [],
+            create: () =>
+                options.updateService ??
+                new UpdateService({
+                    currentVersion: options.cpaVersion,
+                    emitEvent,
+                }),
+            dispose: (service: UpdateService) => {
                 service.dispose()
             },
         },

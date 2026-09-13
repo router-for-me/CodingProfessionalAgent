@@ -271,6 +271,16 @@ export async function bootstrapApplication(): Promise<void> {
             } catch {
                 // Ignore JSON parse error
             }
+        } else if (event.kind === 'notification:navigate-session' && event.data) {
+            try {
+                const payload = typeof event.data === 'string' ? JSON.parse(event.data) : event.data
+                const targetSessionId = payload?.sessionId || payload
+                if (typeof targetSessionId === 'string' && targetSessionId) {
+                    window.location.hash = `#/chat/${targetSessionId}`
+                }
+            } catch (err) {
+                console.warn('[Bootstrap] Failed to parse notification navigate session event:', err)
+            }
         } else if (event.kind === 'plugins:updated') {
             void hostServices.pluginManagement?.refresh?.().catch(() => {})
         }

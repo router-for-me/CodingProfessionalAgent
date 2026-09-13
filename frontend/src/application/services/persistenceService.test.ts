@@ -34,6 +34,7 @@ import {
   reloadSessionFromDisk,
   sanitizeConversationEntries,
   sanitizeSubAgents,
+  sanitizeSubagentRoles,
   savePersistedState,
   saveSessionData,
   saveSessionEntries,
@@ -447,6 +448,122 @@ describe('persist pure helpers', () => {
     expect(useSettingsStore.getState().settings.speed).toBe('max')
     expect(useSettingsStore.getState().settings.compactionThresholdPercent).toBe(80)
     expect(useSettingsStore.getState().settings.fastContextCompaction).toBe(false)
+  })
+
+  it('preserves and sanitizes subagent roles across persisted state load and save', async () => {
+    const customRoles = [
+      {
+        id: 'custom-role-1',
+        name: 'Security Auditor',
+        description: 'Audits code changes for security vulnerabilities.',
+        modelId: 'claude-sonnet-4-6',
+        reasoningEffort: 'high',
+      },
+      {
+        id: 'custom-role-2',
+        name: 'Doc Writer',
+        description: 'Writes documentation and guides.',
+        modelId: 'gpt-5.5',
+        reasoningEffort: 'medium',
+      },
+    ]
+
+    useSettingsStore.getState().setSubagentSettings({
+      enabled: true,
+      concurrency: 12,
+      maxPerSession: 4,
+      maxDepth: 2,
+      roles: customRoles,
+    })
+
+    const snapshot = serializeAppState()
+    expect(snapshot.settings.subagents?.roles).toEqual(customRoles)
+
+    resetAllStores()
+
+    applyPersistedState(snapshot)
+
+    const restoredSettings = useSettingsStore.getState().settings.subagents
+    expect(restoredSettings?.enabled).toBe(true)
+    expect(restoredSettings?.concurrency).toBe(12)
+    expect(restoredSettings?.maxPerSession).toBe(4)
+    expect(restoredSettings?.maxDepth).toBe(2)
+    expect(restoredSettings?.roles).toEqual(customRoles)
+  })
+
+  it('falls back to empty subagent roles when roles are missing in legacy state', () => {
+    const legacyState = {
+      version: 2,
+      settings: {
+        ...DEFAULT_SETTINGS,
+        subagents: {
+          enabled: true,
+          concurrency: 8,
+          maxPerSession: 2,
+          maxDepth: 1,
+        },
+      },
+      projects: [],
+      sessions: [],
+      messagesBySession: {},
+      currentSessionId: null,
+      collapsedGroups: {},
+    } as unknown as PersistedAppState
+
+    applyPersistedState(legacyState)
+
+    const restored = useSettingsStore.getState().settings.subagents
+    expect(restored?.concurrency).toBe(8)
+    expect(Array.isArray(restored?.roles)).toBe(true)
+    expect(restored?.roles).toEqual([])
+  })
+
+  it('preserves empty subagent roles list when explicitly configured by user', () => {
+    useSettingsStore.getState().setSubagentSettings({
+      roles: [],
+    })
+
+    const snapshot = serializeAppState()
+    expect(snapshot.settings.subagents?.roles).toEqual([])
+
+    resetAllStores()
+    applyPersistedState(snapshot)
+
+    expect(useSettingsStore.getState().settings.subagents?.roles).toEqual([])
+  })
+
+  it('sanitizeSubagentRoles cleans invalid fields and generates id when missing', () => {
+    const dirty = [
+      {
+        name: '  Trimmed Name  ',
+        description: 'Some description',
+        modelId: 'gpt-5.5',
+        reasoningEffort: 'high',
+      },
+      'not-an-object',
+      null,
+      {
+        id: 'explicit-id',
+        name: 123 as any,
+        description: null as any,
+        modelId: 456 as any,
+        reasoningEffort: undefined,
+      },
+    ]
+
+    const sanitized = sanitizeSubagentRoles(dirty)
+    expect(sanitized).toHaveLength(2)
+    expect(sanitized[0].id).toBeTruthy()
+    expect(sanitized[0].name).toBe('Trimmed Name')
+    expect(sanitized[0].description).toBe('Some description')
+    expect(sanitized[0].modelId).toBe('gpt-5.5')
+    expect(sanitized[0].reasoningEffort).toBe('high')
+
+    expect(sanitized[1].id).toBe('explicit-id')
+    expect(sanitized[1].name).toBe('')
+    expect(sanitized[1].description).toBe('')
+    expect(sanitized[1].modelId).toBe('')
+    expect(sanitized[1].reasoningEffort).toBe('default')
   })
 
   it('defaults missing fast context compaction to enabled', () => {

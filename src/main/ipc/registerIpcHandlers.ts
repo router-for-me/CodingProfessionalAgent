@@ -21,6 +21,8 @@ import { BinaryService } from '../services/binaryService.js'
 import { EnvironmentWatcherService } from '../services/environmentWatcherService.js'
 import { ProfilingService } from '../services/profilingService.js'
 import { PowerSaveService } from '../services/powerSaveService.js'
+import { UpdateService } from '../services/update/updateService.js'
+import { NotificationBadgeService } from '../services/notificationBadgeService.js'
 import { PluginResourceService } from '../plugins/resources/PluginResourceService.js'
 import { MainContributionRegistry } from '../plugins/contributions/MainContributionRegistry.js'
 import { createPlatformServiceDescriptors } from '../plugins/contributions/serviceDescriptors.js'
@@ -47,6 +49,8 @@ export interface CreateServicesOptions {
   pluginActivationCoordinator?: MainPluginActivationCoordinator
   pluginResourceService?: PluginResourceService
   pluginGraphManagementService?: PluginGraphManagementService
+  updateService?: UpdateService
+  notificationBadgeService?: NotificationBadgeService
 }
 
 export interface AppServices {
@@ -60,6 +64,7 @@ export interface AppServices {
   sessionRunRegistry?: any
   dialogService: DialogService
   windowStateService: WindowStateService
+  notificationBadgeService: NotificationBadgeService
   trayService: TrayService
   webServerService: WebServerService
   pluginResourceService: PluginResourceService
@@ -67,6 +72,7 @@ export interface AppServices {
   environmentWatcherService: EnvironmentWatcherService
   profilingService: ProfilingService
   powerSaveService: PowerSaveService
+  updateService: UpdateService
   registry: MainContributionRegistry
   pluginRuntimeHost?: MainPluginRuntimeHost
   pluginActivationCoordinator?: MainPluginActivationCoordinator
@@ -114,6 +120,14 @@ export function createServices(
       sendNativeEventToWindow(getMainWindow(), event)
     }
     options?.pluginRuntimeHost?.capabilityBroker?.emit('native-event', event)
+    if (event.kind === 'update:status-changed') {
+      try {
+        const payload = typeof event.data === 'string' ? JSON.parse(event.data) : event.data
+        options?.pluginRuntimeHost?.capabilityBroker?.emit('update:status-changed', payload)
+      } catch {
+        options?.pluginRuntimeHost?.capabilityBroker?.emit('update:status-changed', event.data)
+      }
+    }
     if (registry.hasService('webServerService')) {
       const webServer = registry.getService<WebServerService>('webServerService')
       webServer.broadcastEvent(event, event.sourceClientId)
@@ -185,6 +199,8 @@ export function createServices(
     pluginActivationCoordinator: options?.pluginActivationCoordinator,
     pluginResourceService: options?.pluginResourceService,
     pluginGraphManagementService: options?.pluginGraphManagementService,
+    updateService: options?.updateService,
+    notificationBadgeService: options?.notificationBadgeService,
   })
 
   for (const descriptor of serviceDescriptors) {
@@ -319,12 +335,14 @@ export function createServices(
     dialogService: registry.getService<DialogService>('dialogService'),
     pluginResourceService: registry.getService<PluginResourceService>('pluginResourceService'),
     windowStateService: registry.getService<WindowStateService>('windowStateService'),
+    notificationBadgeService: registry.getService<NotificationBadgeService>('notificationBadgeService'),
     trayService: registry.getService<TrayService>('trayService'),
     webServerService,
     binaryService: registry.getService<BinaryService>('binaryService'),
     environmentWatcherService: registry.getService<EnvironmentWatcherService>('environmentWatcherService'),
     profilingService: registry.getService<ProfilingService>('profilingService'),
     powerSaveService: registry.getService<PowerSaveService>('powerSaveService'),
+    updateService: registry.getService<UpdateService>('updateService'),
     registry,
     pluginRuntimeHost: options?.pluginRuntimeHost,
     pluginActivationCoordinator: options?.pluginActivationCoordinator,
@@ -354,6 +372,10 @@ export function attachMainWindowListeners(win: BrowserWindow, services: AppServi
   if (!win || win.isDestroyed?.()) return
   const webContents = win.webContents
   if (!webContents || webContents.isDestroyed?.()) return
+
+  if (typeof win.on === 'function') {
+    services.notificationBadgeService?.attachWindow?.(win)
+  }
 
   const cleanup = () => {
     try {

@@ -352,4 +352,86 @@ describe('ResourceProvider', () => {
         expect(Object.isFrozen(snapshot.prompts)).toBe(true)
         expect(Object.isFrozen(snapshot.diagnostics)).toBe(true)
     })
+
+    it('injects subagent roles XML block and priority instructions when roles are configured and spawn_agent is available', async () => {
+        const snapshot = await loadResourcesFromProviders({
+            cwd: REPO,
+            agentDir: AGENT,
+            bridge,
+            agentTarget: 'main',
+            tools: [{ name: 'spawn_agent', description: 'Spawn agent' }],
+            subagentsSettings: {
+                enabled: true,
+                concurrency: 10,
+                maxPerSession: 3,
+                maxDepth: 1,
+                roles: [
+                    {
+                        id: 'role-1',
+                        name: '代码审查员',
+                        description: '负责代码质量与安全审计',
+                        modelId: 'claude-sonnet-5',
+                        reasoningEffort: 'high',
+                    },
+                ],
+            },
+        })
+
+        expect(snapshot.systemPrompt).toContain('<available_roles>')
+        expect(snapshot.systemPrompt).toContain(
+            'When encountering scenarios matching any of these defined roles when dispatching a sub-agent, prioritize using the user-defined subagent role rather than deciding the model, reasoning effort, or prompt on your own.'
+        )
+        expect(snapshot.systemPrompt).toContain('<id>role-1</id>')
+        expect(snapshot.systemPrompt).toContain('<name>代码审查员</name>')
+        expect(snapshot.systemPrompt).toContain('<description>负责代码质量与安全审计</description>')
+        expect(snapshot.systemPrompt).toContain('<model>claude-sonnet-5</model>')
+        expect(snapshot.systemPrompt).toContain('<reasoning_effort>high</reasoning_effort>')
+        expect(snapshot.systemPrompt).toContain('</available_roles>')
+
+        const rolesPart = snapshot.systemPromptParts?.find((p) => p.id === 'subagent-roles')
+        expect(rolesPart).toBeDefined()
+        expect(rolesPart?.content).toContain('<available_roles>')
+    })
+
+    it('does not inject subagent roles if spawn_agent tool is missing or roles list is empty', async () => {
+        const snapshotNoSpawn = await loadResourcesFromProviders({
+            cwd: REPO,
+            agentDir: AGENT,
+            bridge,
+            agentTarget: 'main',
+            tools: [{ name: 'read', description: 'Read' }],
+            subagentsSettings: {
+                enabled: true,
+                concurrency: 10,
+                maxPerSession: 3,
+                maxDepth: 1,
+                roles: [
+                    {
+                        id: 'role-1',
+                        name: '代码审查员',
+                        description: '负责代码质量与安全审计',
+                        modelId: 'claude-sonnet-5',
+                        reasoningEffort: 'high',
+                    },
+                ],
+            },
+        })
+        expect(snapshotNoSpawn.systemPrompt).not.toContain('<available_roles>')
+
+        const snapshotEmptyRoles = await loadResourcesFromProviders({
+            cwd: REPO,
+            agentDir: AGENT,
+            bridge,
+            agentTarget: 'main',
+            tools: [{ name: 'spawn_agent', description: 'Spawn agent' }],
+            subagentsSettings: {
+                enabled: true,
+                concurrency: 10,
+                maxPerSession: 3,
+                maxDepth: 1,
+                roles: [],
+            },
+        })
+        expect(snapshotEmptyRoles.systemPrompt).not.toContain('<available_roles>')
+    })
 })

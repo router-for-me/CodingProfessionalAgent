@@ -26,6 +26,12 @@ export type CodexUserMessageItem = {
     content: CodexUserContentPart[]
 }
 
+export type CodexDeveloperMessageItem = {
+    type?: 'message'
+    role: 'developer'
+    content: CodexUserContentPart[]
+}
+
 export type CodexAssistantMessageItem = {
     type: 'message'
     role: 'assistant'
@@ -78,6 +84,7 @@ export type CodexReasoningItem = {
 export type CodexInputItem =
     | CodexUserMessageItem
     | CodexAssistantMessageItem
+    | CodexDeveloperMessageItem
     | CodexFunctionCallItem
     | CodexFunctionCallOutputItem
     | CodexReasoningItem

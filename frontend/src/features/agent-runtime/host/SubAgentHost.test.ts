@@ -1172,7 +1172,7 @@ describe('SubAgentHost', () => {
         })
         const prepared = preparedRun()
 
-        // Test 1: maxDepth = 1 (default) -> spawned child (depth 1) must NOT receive spawn_agent
+        // Test 1: maxDepth = 1 (default) -> spawned child (depth 1) must NOT receive spawn_agent and must NOT see subagent roles
         host.configure({
             prepared,
             codingTools: [readTool],
@@ -1183,6 +1183,15 @@ describe('SubAgentHost', () => {
                 concurrency: 10,
                 maxPerSession: 3,
                 maxDepth: 1,
+                roles: [
+                    {
+                        id: 'leaf-role',
+                        name: 'Leaf Role',
+                        description: 'Some role prompt.',
+                        modelId: 'parent-model',
+                        reasoningEffort: 'medium',
+                    },
+                ],
             },
         })
         host.setParentContext({ sessionId: 'session-root', runId: 'run-1' })
@@ -1190,6 +1199,8 @@ describe('SubAgentHost', () => {
         await host.spawn('Run task', { name: 'ChildOne' })
         expect(childRunTools.some((t) => t.name === 'spawn_agent')).toBe(false)
         expect(childRunSystemPrompt).toContain('Do not spawn other agents.')
+        expect(childRunSystemPrompt).not.toContain('<available_roles>')
+        expect(childRunSystemPrompt).not.toContain('<id>leaf-role</id>')
 
         // Test 2: maxDepth = 2 -> spawned child (depth 1) MUST receive spawn_agent
         childRunTools = []
@@ -1213,6 +1224,15 @@ describe('SubAgentHost', () => {
                 concurrency: 10,
                 maxPerSession: 3,
                 maxDepth: 2,
+                roles: [
+                    {
+                        id: 'nested-role',
+                        name: 'Nested Reviewer',
+                        description: 'Inspect nested code.',
+                        modelId: 'parent-model',
+                        reasoningEffort: 'medium',
+                    },
+                ],
             },
         })
         host2.setParentContext({ sessionId: 'session-root', runId: 'run-1' })
@@ -1221,5 +1241,254 @@ describe('SubAgentHost', () => {
         expect(childRunTools.some((t) => t.name === 'spawn_agent')).toBe(true)
         expect(childRunSystemPrompt).not.toContain('Do not spawn other agents.')
         expect(childRunSystemPrompt).toContain('You may spawn child subagents if necessary.')
+        expect(childRunSystemPrompt).toContain('<available_roles>')
+        expect(childRunSystemPrompt).toContain('<id>nested-role</id>')
+        expect(childRunSystemPrompt).toContain(
+            'When encountering scenarios matching any of these defined roles when dispatching a sub-agent, prioritize using the user-defined subagent role rather than deciding the model, reasoning effort, or prompt on your own.'
+        )
+    })
+
+    it('injects developer-level prompt at the head when spawning with a matching configured role and prioritizes role model/effort', async () => {
+        let childRunSystemPrompt = ''
+        let childRunDeveloperPrompt: string | undefined
+        let childModel: ModelCatalogEntry | undefined
+        let childReasoningEffort: string | undefined
+
+        const roleModel: ModelCatalogEntry = {
+            ...model,
+            id: 'gpt-5.5',
+            label: 'GPT 5.5',
+            reasoningLevels: [{ id: 'high', requestValue: 'high' }],
+        }
+
+        const host = new SubAgentHost({
+            generateId: () => 'sub-role-agent',
+            now: () => 1000,
+            run: (request) => {
+                childRunSystemPrompt = request.systemPrompt
+                childRunDeveloperPrompt = request.developerPrompt
+                childModel = request.model
+                childReasoningEffort = request.reasoningEffort
+                return scriptedRun(request, ['Role task completed'])
+            },
+        })
+
+        const prepared = preparedRun()
+        host.configure({
+            prepared,
+            codingTools: [readTool],
+            models: [model, roleModel],
+            subagentsSettings: {
+                enabled: true,
+                concurrency: 10,
+                maxPerSession: 3,
+                maxDepth: 1,
+                roles: [
+                    {
+                        id: 'reviewer-id',
+                        name: '代码审查员',
+                        description: '负责严格的代码规范审查与安全审计指令。',
+                        modelId: 'gpt-5.5',
+                        reasoningEffort: 'high',
+                    },
+                ],
+            },
+        })
+        host.setParentContext({ sessionId: 'session-root', runId: 'run-1' })
+
+        // Even if the caller passed parent-model, role-configured model should take precedence
+        await host.spawn('请审查这个提交', {
+            name: 'ReviewerBot',
+            role: '代码审查员',
+            modelId: 'parent-model',
+        })
+
+        // Verify developerPrompt property on request is populated as developer-level instructions
+        expect(childRunDeveloperPrompt).toBeDefined()
+        expect(childRunDeveloperPrompt).toContain('Role: 代码审查员')
+        expect(childRunDeveloperPrompt).toContain('负责严格的代码规范审查与安全审计指令。')
+
+        // Verify base system prompt is generated cleanly
+        expect(childRunSystemPrompt).toContain('You are a sub-agent named ReviewerBot')
+
+        // Verify role's configured model and reasoning effort take priority
+        expect(childModel?.id).toBe('gpt-5.5')
+        expect(childReasoningEffort).toBe('high')
+    })
+
+    it('matches configured role by unique role id and handles whitespace', async () => {
+        let childRunDeveloperPrompt: string | undefined
+
+        const host = new SubAgentHost({
+            generateId: () => 'sub-role-id-agent',
+            now: () => 1000,
+            run: (request) => {
+                childRunDeveloperPrompt = request.developerPrompt
+                return scriptedRun(request, ['Done'])
+            },
+        })
+
+        const prepared = preparedRun()
+        host.configure({
+            prepared,
+            codingTools: [readTool],
+            models: [model],
+            subagentsSettings: {
+                enabled: true,
+                concurrency: 10,
+                maxPerSession: 3,
+                maxDepth: 1,
+                roles: [
+                    {
+                        id: 'unique-reviewer-id',
+                        name: ' Reviewer With Spaces ',
+                        description: 'Special instructions for unique reviewer.',
+                        modelId: 'parent-model',
+                        reasoningEffort: 'medium',
+                    },
+                ],
+            },
+        })
+        host.setParentContext({ sessionId: 'session-root', runId: 'run-1' })
+
+        // Match by exact ID
+        await host.spawn('Task', { name: 'Bot', role: 'unique-reviewer-id' })
+        expect(childRunDeveloperPrompt).toContain('Special instructions for unique reviewer.')
+
+        // Match by trimmed name
+        await host.spawn('Task 2', { name: 'Bot2', role: 'Reviewer With Spaces' })
+        expect(childRunDeveloperPrompt).toContain('Special instructions for unique reviewer.')
+    })
+
+    it('preserves role developer prompt on resumed subagent and follow-up turns', async () => {
+        let lastDeveloperPrompt: string | undefined
+
+        const host = new SubAgentHost({
+            generateId: () => 'sub-turn-agent',
+            now: () => 1000,
+            run: (request) => {
+                lastDeveloperPrompt = request.developerPrompt
+                return scriptedRun(request, ['Turn done'])
+            },
+        })
+
+        const prepared = preparedRun()
+        host.configure({
+            prepared,
+            codingTools: [readTool],
+            models: [model],
+            subagentsSettings: {
+                enabled: true,
+                concurrency: 10,
+                maxPerSession: 3,
+                maxDepth: 1,
+                roles: [
+                    {
+                        id: 'role-turn-id',
+                        name: 'Tester Role',
+                        description: 'Instructions for testing turns.',
+                        modelId: 'parent-model',
+                        reasoningEffort: 'medium',
+                    },
+                ],
+            },
+        })
+        host.setParentContext({ sessionId: 'session-root', runId: 'run-1' })
+
+        await host.spawn('Initial prompt', {
+            name: 'TurnBot',
+            role: 'role-turn-id',
+        })
+        expect(lastDeveloperPrompt).toContain('Instructions for testing turns.')
+
+        const subAgentId = host.list()[0]?.id!
+        lastDeveloperPrompt = undefined
+
+        // Send follow up message
+        await host.sendMessage(subAgentId, 'Follow up prompt')
+        expect(lastDeveloperPrompt).toContain('Instructions for testing turns.')
+    })
+
+    it('restores depth accurately and blocks roles/tools when restored subagent reaches maxDepth', async () => {
+        let childRunTools: AgentTool[] = []
+        let childRunSystemPrompt = ''
+        let childRunDeveloperPrompt: string | undefined
+
+        const spawnTool: AgentTool = {
+            name: 'spawn_agent',
+            label: 'spawn_agent',
+            description: 'Spawn a subagent',
+            parameters: { type: 'object', properties: {} },
+            validate: (input) => (input ?? {}) as Record<string, unknown>,
+            execute: async () => ({ content: [{ type: 'text', text: 'ok' }] }),
+        }
+
+        const host = new SubAgentHost({
+            generateId: () => 'sub-restored-turn',
+            now: () => 1000,
+            run: (request) => {
+                childRunTools = [...request.tools]
+                childRunSystemPrompt = request.systemPrompt
+                childRunDeveloperPrompt = request.developerPrompt
+                return scriptedRun(request, ['Nested task finished'])
+            },
+        })
+
+        const prepared = preparedRun()
+        host.configure({
+            prepared,
+            codingTools: [readTool],
+            allTools: [readTool, spawnTool],
+            models: [model],
+            subagentsSettings: {
+                enabled: true,
+                concurrency: 10,
+                maxPerSession: 3,
+                maxDepth: 2,
+                roles: [
+                    {
+                        id: 'nested-role-id',
+                        name: 'Nested Specialist',
+                        description: 'Specialist prompt for nested tasks.',
+                        modelId: 'parent-model',
+                        reasoningEffort: 'medium',
+                    },
+                ],
+            },
+        })
+        host.setParentContext({ sessionId: 'session-root', runId: 'run-1' })
+
+        // Hydrate a restored depth-2 subagent (at maxDepth = 2, so cannot spawn child subagents)
+        host.hydrate([
+            {
+                id: 'child-depth-2',
+                name: 'NestedChild',
+                color: '#3dd68c',
+                icon: 'atom',
+                parentSessionId: 'session-root',
+                sessionId: 'child-depth-2',
+                modelId: 'parent-model',
+                status: 'completed',
+                depth: 2,
+                parentAgentId: 'parent-agent-id',
+                roleId: 'nested-role-id',
+                roleName: 'Nested Specialist',
+                rolePrompt: 'Specialist prompt for nested tasks.',
+                createdAt: 1000,
+                updatedAt: 1000,
+            },
+        ])
+
+        // Resume / send message to the restored depth-2 subagent
+        await host.sendMessage('child-depth-2', 'Continue work')
+
+        // Verify: It cannot spawn child agents because depth 2 >= maxDepth 2
+        expect(childRunTools.some((t) => t.name === 'spawn_agent')).toBe(false)
+        expect(childRunSystemPrompt).toContain('Do not spawn other agents.')
+        expect(childRunSystemPrompt).not.toContain('<available_roles>')
+        expect(childRunSystemPrompt).not.toContain('<id>nested-role-id</id>')
+
+        // Verify: Developer prompt is still injected properly
+        expect(childRunDeveloperPrompt).toContain('Specialist prompt for nested tasks.')
     })
 })

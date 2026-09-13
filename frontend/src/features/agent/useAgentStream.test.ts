@@ -24,7 +24,8 @@ import {
 } from './useAgentStream'
 import { SubAgentHost } from '@/features/agent-runtime/host/SubAgentHost'
 import { getHostServices } from '@/application/services/createHostServices'
-import type { SubAgentRecord } from '@cpa/plugin-api'
+import { setHostBridge } from '@/application/services/hostTransport'
+import type { SubAgentRecord, SubagentRole } from '@cpa/plugin-api'
 import { useMessageStore } from '@/stores/messageStore'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useSettingsStore } from '@/stores/settingsStore'
@@ -390,6 +391,7 @@ describe('useAgentStream', () => {
     })
 
     afterEach(() => {
+        setHostBridge(null)
         Object.defineProperty(navigator, 'userAgent', {
             value: originalUserAgent,
             configurable: true,
@@ -1275,6 +1277,33 @@ describe('useAgentStream', () => {
         expect(service.prepareInputs[0]?.language).toBe('zh-CN')
     })
 
+    it('passes configured subagents settings to prepare on send', async () => {
+        const customRoles: SubagentRole[] = [
+            {
+                id: 'role-reviewer',
+                name: 'Code Reviewer',
+                description: 'Custom review role',
+                modelId: 'gpt-6-astra',
+                reasoningEffort: 'low',
+            },
+        ]
+        useSettingsStore.getState().setSubagentSettings({
+            enabled: true,
+            concurrency: 5,
+            roles: customRoles,
+        })
+        const { result } = renderHook(() => useAgentStream(), {
+            wrapper: wrapperFor(service),
+        })
+
+        await act(async () => {
+            await result.current.send('Hello')
+        })
+
+        expect(service.prepareInputs[0]?.subagentsSettings?.roles).toEqual(customRoles)
+        expect(service.prepareInputs[0]?.subagentsSettings?.concurrency).toBe(5)
+    })
+
     it('events stay on original session when currentSession changes mid-stream', async () => {
         let release!: () => void
         service.streamHold = new Promise<void>((resolve) => {
@@ -1781,6 +1810,7 @@ describe('useAgentStream', () => {
             modelId: 'model-1',
             parentToolCallId: 'spawn-restored',
             status: 'running',
+            depth: 1,
             createdAt: 101,
             updatedAt: 101,
         }
@@ -2951,5 +2981,131 @@ describe('useAgentStream', () => {
         } finally {
             dateNowSpy.mockRestore()
         }
+    })
+
+    it('notifies host of task completion when run finishes cleanly and not aborted', async () => {
+        const notifyMock = vi.fn().mockResolvedValue(undefined)
+        setHostBridge({
+            NotificationTaskCompleted: notifyMock,
+            SessionBroadcastRunStatus: vi.fn().mockResolvedValue(undefined),
+            SessionBroadcastStreamEvent: vi.fn().mockResolvedValue(undefined),
+        } as any)
+
+        const { result } = renderHook(() => useAgentStream(), {
+            wrapper: wrapperFor(service),
+        })
+
+        let sessionId: string | null = null
+        await act(async () => {
+            sessionId = await result.current.send('test clean finish')
+        })
+
+        expect(sessionId).toBeTruthy()
+        await waitFor(() => {
+            expect(notifyMock).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    sessionId,
+                }),
+            )
+        })
+    })
+
+    it('does not notify host of task completion when run is aborted', async () => {
+        const notifyMock = vi.fn().mockResolvedValue(undefined)
+        setHostBridge({
+            NotificationTaskCompleted: notifyMock,
+            SessionBroadcastRunStatus: vi.fn().mockResolvedValue(undefined),
+            SessionBroadcastStreamEvent: vi.fn().mockResolvedValue(undefined),
+        } as any)
+
+        let release: () => void = () => {}
+        service.streamHold = new Promise<void>((resolve) => {
+            release = resolve
+        })
+
+        const { result } = renderHook(() => useAgentStream(), {
+            wrapper: wrapperFor(service),
+        })
+
+        await act(async () => {
+            void result.current.send('prompt to abort')
+        })
+        await waitFor(() => expect(result.current.runId).toBeTruthy())
+
+        act(() => {
+            result.current.stop()
+        })
+
+        release()
+        await waitFor(() => expect(result.current.isStreaming).toBe(false))
+        expect(notifyMock).not.toHaveBeenCalled()
+    })
+
+    it('does not notify host of task completion when stream throws an error', async () => {
+        const notifyMock = vi.fn().mockResolvedValue(undefined)
+        setHostBridge({
+            NotificationTaskCompleted: notifyMock,
+            SessionBroadcastRunStatus: vi.fn().mockResolvedValue(undefined),
+            SessionBroadcastStreamEvent: vi.fn().mockResolvedValue(undefined),
+        } as any)
+
+        service.streamImpl = async function* (input) {
+            yield {
+                type: 'agent-start',
+                runId: input.runId,
+                sessionId: input.sessionId,
+            }
+            throw new Error('Stream execution failed')
+        }
+
+        const { result } = renderHook(() => useAgentStream(), {
+            wrapper: wrapperFor(service),
+        })
+
+        await act(async () => {
+            void result.current.send('prompt with stream throw')
+        })
+
+        await waitFor(() => expect(result.current.isStreaming).toBe(false))
+        expect(notifyMock).not.toHaveBeenCalled()
+    })
+
+    it('does not notify host of task completion when stream emits an error event', async () => {
+        const notifyMock = vi.fn().mockResolvedValue(undefined)
+        setHostBridge({
+            NotificationTaskCompleted: notifyMock,
+            SessionBroadcastRunStatus: vi.fn().mockResolvedValue(undefined),
+            SessionBroadcastStreamEvent: vi.fn().mockResolvedValue(undefined),
+        } as any)
+
+        service.streamImpl = async function* (input) {
+            yield {
+                type: 'agent-start',
+                runId: input.runId,
+                sessionId: input.sessionId,
+            }
+            yield {
+                type: 'error',
+                runId: input.runId,
+                sessionId: input.sessionId,
+                message: 'Stream encountered a fatal error',
+            }
+            yield {
+                type: 'agent-end',
+                runId: input.runId,
+                sessionId: input.sessionId,
+            }
+        }
+
+        const { result } = renderHook(() => useAgentStream(), {
+            wrapper: wrapperFor(service),
+        })
+
+        await act(async () => {
+            void result.current.send('prompt with stream error event')
+        })
+
+        await waitFor(() => expect(result.current.isStreaming).toBe(false))
+        expect(notifyMock).not.toHaveBeenCalled()
     })
 })

@@ -205,7 +205,7 @@ export class SessionDatabaseService {
     }
 
     const subAgentRows = this.getStatement(
-        'SELECT id, session_id, parent_session_id, parent_tool_call_id, name, model_id, reasoning_effort, status, color, icon, last_message, error_message, created_at, updated_at FROM subagents WHERE parent_session_id = ? ORDER BY created_at ASC',
+        'SELECT id, session_id, parent_session_id, parent_tool_call_id, name, model_id, reasoning_effort, status, color, icon, last_message, error_message, role_id, role_name, role_prompt, depth, parent_agent_id, created_at, updated_at FROM subagents WHERE parent_session_id = ? ORDER BY created_at ASC',
       ).all(sessionId) as Array<{
         id: string
         session_id: string
@@ -219,6 +219,11 @@ export class SessionDatabaseService {
         icon: string | null
         last_message: string | null
         error_message: string | null
+        role_id: string | null
+        role_name: string | null
+        role_prompt: string | null
+        depth: number | null
+        parent_agent_id: string | null
         created_at: number
         updated_at: number
       }>
@@ -238,6 +243,11 @@ export class SessionDatabaseService {
       ...(row.parent_tool_call_id ? { parentToolCallId: row.parent_tool_call_id } : {}),
       ...(row.last_message ? { lastMessage: row.last_message } : {}),
       ...(row.error_message ? { errorMessage: row.error_message } : {}),
+      ...(row.role_id ? { roleId: row.role_id } : {}),
+      ...(row.role_name ? { roleName: row.role_name } : {}),
+      ...(row.role_prompt ? { rolePrompt: row.role_prompt } : {}),
+      ...(typeof row.depth === 'number' ? { depth: row.depth } : {}),
+      ...(row.parent_agent_id ? { parentAgentId: row.parent_agent_id } : {}),
     }))
 
     const workLocation =
@@ -485,9 +495,9 @@ export class SessionDatabaseService {
 
     const upsertSubAgentStmt = this.getStatement(`
       INSERT INTO subagents (
-        id, session_id, parent_session_id, parent_tool_call_id, name, model_id, reasoning_effort, status, color, icon, last_message, error_message, created_at, updated_at
+        id, session_id, parent_session_id, parent_tool_call_id, name, model_id, reasoning_effort, status, color, icon, last_message, error_message, role_id, role_name, role_prompt, depth, parent_agent_id, created_at, updated_at
       ) VALUES (
-        @id, @session_id, @parent_session_id, @parent_tool_call_id, @name, @model_id, @reasoning_effort, @status, @color, @icon, @last_message, @error_message, @created_at, @updated_at
+        @id, @session_id, @parent_session_id, @parent_tool_call_id, @name, @model_id, @reasoning_effort, @status, @color, @icon, @last_message, @error_message, @role_id, @role_name, @role_prompt, @depth, @parent_agent_id, @created_at, @updated_at
       ) ON CONFLICT(id) DO UPDATE SET
         session_id = excluded.session_id,
         parent_session_id = excluded.parent_session_id,
@@ -500,6 +510,11 @@ export class SessionDatabaseService {
         icon = excluded.icon,
         last_message = excluded.last_message,
         error_message = excluded.error_message,
+        role_id = excluded.role_id,
+        role_name = excluded.role_name,
+        role_prompt = excluded.role_prompt,
+        depth = excluded.depth,
+        parent_agent_id = excluded.parent_agent_id,
         updated_at = excluded.updated_at
     `)
 
@@ -662,6 +677,11 @@ export class SessionDatabaseService {
             icon: sa?.icon || null,
             lastMessage: sa?.lastMessage || sa?.last_message || null,
             errorMessage: sa?.errorMessage || sa?.error_message || null,
+            roleId: sa?.roleId || sa?.role_id || null,
+            roleName: sa?.roleName || sa?.role_name || null,
+            rolePrompt: sa?.rolePrompt || sa?.role_prompt || null,
+            depth: typeof sa?.depth === 'number' ? sa.depth : 1,
+            parentAgentId: sa?.parentAgentId || sa?.parent_agent_id || null,
             createdAt:
               typeof sa?.createdAt === 'number'
                 ? sa.createdAt
@@ -707,6 +727,11 @@ export class SessionDatabaseService {
             icon: sa.icon,
             last_message: sa.lastMessage,
             error_message: sa.errorMessage,
+            role_id: sa.roleId,
+            role_name: sa.roleName,
+            role_prompt: sa.rolePrompt,
+            depth: sa.depth,
+            parent_agent_id: sa.parentAgentId,
             created_at: sa.createdAt,
             updated_at: sa.updatedAt,
           })

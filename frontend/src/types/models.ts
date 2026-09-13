@@ -7,7 +7,7 @@ import type {
   UserProfileSettings,
   WorktreeSettings,
 } from '@cpa/plugin-api'
-import { getAppConfigDirName } from '@cpa/plugin-api'
+import { getAppConfigDirName, DEFAULT_SUBAGENT_ROLES } from '@cpa/plugin-api'
 
 export type {
   ActionPlatform,
@@ -56,6 +56,7 @@ export type {
   ShortcutsConfig,
   ShortcutsMap,
   Speed,
+  SubagentRole,
   SubagentsSettings,
   TerminalPosition,
   ThemeMode,
@@ -150,7 +151,10 @@ export const DEFAULT_SUBAGENT_SETTINGS: SubagentsSettings = {
   concurrency: 10,
   maxPerSession: 3,
   maxDepth: 1,
+  roles: [...DEFAULT_SUBAGENT_ROLES],
 }
+
+export { DEFAULT_SUBAGENT_ROLES }
 
 export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   showContextUsage: true,

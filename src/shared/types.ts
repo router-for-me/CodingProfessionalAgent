@@ -56,6 +56,7 @@ import type {
   ResolvedPluginNodeDTO,
   BlockedPluginDTO,
 } from '@cpa/plugin-api'
+import type { UpdateStatusSnapshot } from './updateTypes.js'
 
 export type {
   AgentRunStatus,
@@ -676,6 +677,10 @@ export interface ElectronBridgeApi {
   SetTrayEnabled(enabled: boolean, locale?: 'zh-CN' | 'en'): Promise<void>
   SetTrayLocale(locale: 'zh-CN' | 'en'): Promise<void>
 
+  // Notification & Badge
+  NotificationTaskCompleted(payload: { sessionId: string; sessionTitle?: string }): Promise<void>
+  NotificationClearBadge(): Promise<void>
+
   // Power / Sleep
   SetPreventSleep(enabled: boolean): Promise<void>
   GetPreventSleep(): Promise<boolean>
@@ -706,6 +711,13 @@ export interface ElectronBridgeApi {
   PluginsRollback?(revision?: string, generation?: number): Promise<{ ok: boolean }>
   PluginsCommitGeneration?(revision: string, generation: number): Promise<{ ok: boolean }>
   PluginsRollbackGeneration?(revision?: string, generation?: number): Promise<{ ok: boolean }>
+
+  // Update
+  UpdateCheck(): Promise<UpdateStatusSnapshot>
+  UpdateDownload(): Promise<void>
+  UpdateCancel(): Promise<void>
+  UpdateApply(): Promise<void>
+  UpdateGetState(): Promise<UpdateStatusSnapshot>
 
   // Event stream subscription
   onNativeEvent(callback: (event: NativeEvent) => void): () => void

@@ -20,6 +20,10 @@ export interface SubAgentExecutionCoordinator {
             parentSessionId?: string
             modelId?: string
             reasoningEffort?: string
+            role?: string
+            roleId?: string
+            roleName?: string
+            rolePrompt?: string
             signal?: AbortSignal
             onUpdate?: (partial: {
                 content: { type: 'text'; text: string }[]
@@ -41,6 +45,7 @@ export type SpawnAgentArgs = {
     prompt: string
     name: string
     model?: string
+    role?: string
     reasoning_effort?: string
     thinking?: string
 } & Record<string, unknown>
@@ -116,7 +121,7 @@ export function createSpawnAgentTool(
         name: 'spawn_agent',
         label: 'spawn_agent',
         description:
-            'Dispatch a sub-agent to work on an independent task. Choose a short, human-readable name randomly and pass it in name. Always pass model as a catalog model id — the sub-agent uses that model on its own upstream connection and must not inherit the parent model. Use a fresh name for each sub-agent. Waits until the sub-agent finishes and returns its last message, prefixed with the agent id. Use that id with send_message or stop_agent. Do not spawn a sub-agent for work you can finish with a single tool call. Sub-agents cannot spawn their own sub-agents.',
+            'Dispatch a sub-agent to work on an independent task. Choose a short, human-readable name randomly and pass it in name. If a pre-configured role is specified via role, model is optional and defaults to the role\'s configured model. If no role is specified, always pass model as a catalog model id. Waits until the sub-agent finishes and returns its last message, prefixed with the agent id. Use that id with send_message or stop_agent. Do not spawn a sub-agent for work you can finish with a single tool call.',
         targetAgent: 'main',
         parameters: {
             type: 'object',
@@ -129,6 +134,11 @@ export function createSpawnAgentTool(
                     type: 'string',
                     description: 'A short, human-readable name chosen randomly for this sub-agent',
                 },
+                role: {
+                    type: 'string',
+                    description:
+                        'Optional subagent role name or id from available roles. If specified, the subagent adopts this role configuration and prompt instructions.',
+                },
                 model: modelProperty,
                 reasoning_effort: {
                     type: 'string',
@@ -140,14 +150,24 @@ export function createSpawnAgentTool(
                     description: 'Alias for reasoning_effort',
                 },
             },
-            required: ['prompt', 'name', 'model'],
+            required: ['prompt', 'name'],
             additionalProperties: false,
         },
         validate(input: unknown): SpawnAgentArgs {
             const prompt = requireString(input, 'prompt')
             const name = requireString(input, 'name')
-            const model = requireString(input, 'model')
             const raw = input as Record<string, unknown>
+            const role =
+                typeof raw.role === 'string'
+                    ? raw.role.trim() || undefined
+                    : undefined
+            const rawModel =
+                typeof raw.model === 'string'
+                    ? raw.model.trim() || undefined
+                    : undefined
+            if (!rawModel && !role) {
+                throw new Error('model is required when role is not specified')
+            }
             const reasoning_effort =
                 typeof raw.reasoning_effort === 'string'
                     ? raw.reasoning_effort.trim() || undefined
@@ -156,7 +176,7 @@ export function createSpawnAgentTool(
                 typeof raw.thinking === 'string'
                     ? raw.thinking.trim() || undefined
                     : undefined
-            return { prompt, name, model, reasoning_effort, thinking }
+            return { prompt, name, model: rawModel, role, reasoning_effort, thinking }
         },
         async execute(
             toolCallId: string,
@@ -172,6 +192,7 @@ export function createSpawnAgentTool(
             }
             return coordinator.spawn(args.prompt, {
                 name: args.name,
+                role: args.role,
                 toolCallId,
                 parentSessionId: context.sessionId ?? undefined,
                 modelId: args.model,

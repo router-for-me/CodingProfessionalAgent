@@ -66,6 +66,43 @@ jobs:
           prerelease: ${{ github.event.inputs.prerelease == 'true' }}
           generate_release_notes: true
 
+  build-patch:
+    name: Build ASAR Patch
+    needs: create-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - name: Sync package version from release tag
+        run: node scripts/sync-version.js "${{ github.event.inputs.tag_name || github.ref }}"
+
+      - name: Install dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --dir frontend install --frozen-lockfile
+
+      - name: Build patch archive
+        run: node scripts/build-update-patch.mjs
+
+      - name: Upload patch to GitHub Release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ needs.create-release.outputs.tag }}
+          files: |
+            bin/dist/app-update-*.asar
+
   build:
     name: Build (${{ matrix.name }})
     needs: create-release
@@ -168,8 +205,8 @@ jobs:
             bin/dist/*.zip
 
   finalize:
-    name: Finalize Release (Checksums)
-    needs: [create-release, build]
+    name: Finalize Release (Checksums & Manifest)
+    needs: [create-release, build-patch, build]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -180,15 +217,15 @@ jobs:
         with:
           node-version: 22
 
-      - name: Download all release assets and generate SHA256SUMS
+      - name: Download all release assets and generate manifest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.create-release.outputs.tag }}
         run: |
           mkdir -p release-assets
           cd release-assets
-          gh release download "$TAG" --pattern "*.dmg" --pattern "*.exe" --pattern "*.AppImage" --pattern "*.tar.gz" --pattern "*.zip" || true
-          rm -f SHA256SUMS.txt
+          gh release download "$TAG" --pattern "*.dmg" --pattern "*.exe" --pattern "*.AppImage" --pattern "*.tar.gz" --pattern "*.zip" --pattern "*.asar"
+          rm -f SHA256SUMS.txt release-manifest.json
           for file in *; do
             if [ -f "$file" ]; then
               sha256sum "$file" >> SHA256SUMS.txt
@@ -196,6 +233,9 @@ jobs:
           done
           echo "Generated checksums:"
           cat SHA256SUMS.txt
+          node ../scripts/generate-release-manifest.mjs "$TAG"
+          echo "Generated release-manifest.json:"
+          cat release-manifest.json
           if [ -s SHA256SUMS.txt ]; then
-            gh release upload "$TAG" SHA256SUMS.txt --clobber
+            gh release upload "$TAG" SHA256SUMS.txt release-manifest.json --clobber
           fi

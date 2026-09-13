@@ -10,4 +10,5 @@ export * from './services.js'
 export * from './shortcuts.js'
 export * from './graph.js'
 export * from './config.js'
+export * from './updater.js'
 

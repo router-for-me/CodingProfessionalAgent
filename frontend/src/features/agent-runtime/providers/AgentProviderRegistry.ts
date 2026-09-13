@@ -305,6 +305,7 @@ export class AgentProviderRegistry {
                     localMemoryEnabled: input.localMemoryEnabled,
                     extensionRegistry: this.extensionRegistry,
                     worktreePolicy: options.worktreePolicy,
+                    subagentsSettings: input.subagentsSettings,
                 })
             } else if (bridge) {
                 resources = await loadResourcesFromProviders({
@@ -319,6 +320,7 @@ export class AgentProviderRegistry {
                     extensionRegistry: this.extensionRegistry,
                     worktreePolicy: options.worktreePolicy,
                     sessionId: input.sessionId ?? undefined,
+                    subagentsSettings: input.subagentsSettings,
                 })
             } else {
                 resources = Object.freeze({

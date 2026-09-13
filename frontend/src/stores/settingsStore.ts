@@ -514,6 +514,15 @@ export const useSettingsStore = create<SettingsState>((set) => ({
           ...partial.worktrees,
         }
       }
+      if (partial.subagents) {
+        settings.subagents = {
+          ...(state.settings.subagents ?? DEFAULT_SUBAGENT_SETTINGS),
+          ...partial.subagents,
+          roles: Array.isArray(partial.subagents.roles)
+            ? partial.subagents.roles
+            : (state.settings.subagents?.roles ?? DEFAULT_SUBAGENT_SETTINGS.roles ?? []),
+        }
+      }
       if (partial.editor) {
         settings.editor = {
           ...(state.settings.editor ?? DEFAULT_EDITOR_SETTINGS),

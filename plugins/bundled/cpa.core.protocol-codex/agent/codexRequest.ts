@@ -17,6 +17,7 @@ export interface BuildCodexRequestInput {
     model: ModelCatalogEntry
     sessionId: string
     systemPrompt: string
+    developerPrompt?: string
     entries: readonly ConversationEntry[]
     tools?: readonly CodexToolDefinition[]
     nativeTools?: readonly { type: 'web_search' }[]
@@ -66,6 +67,7 @@ export function buildCodexRequest(input: BuildCodexRequestInput): CodexResponseC
         model,
         sessionId,
         systemPrompt,
+        developerPrompt,
         entries,
         tools,
         nativeTools,
@@ -76,13 +78,23 @@ export function buildCodexRequest(input: BuildCodexRequestInput): CodexResponseC
         maxOutputTokens,
     } = input
 
+    const codexInput = convertConversationToCodexInput(entries, model)
+
+    if (developerPrompt && developerPrompt.trim().length > 0) {
+        codexInput.unshift({
+            type: 'message',
+            role: 'developer',
+            content: [{ type: 'input_text', text: developerPrompt.trim() }],
+        })
+    }
+
     const body: CodexResponseCreate = {
         type: 'response.create',
         model: model.id,
         store: false,
         stream: true,
         instructions: systemPrompt || 'You are a helpful assistant.',
-        input: convertConversationToCodexInput(entries, model),
+        input: codexInput,
         text: { verbosity: 'low' },
         include: ['reasoning.encrypted_content'],
         prompt_cache_key: sessionId,

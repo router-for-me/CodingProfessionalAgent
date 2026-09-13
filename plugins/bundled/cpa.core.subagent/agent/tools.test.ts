@@ -57,8 +57,9 @@ describe('sub-agent tools', () => {
             'stop_agent',
         ])
         expect(tools[0]?.parameters).toMatchObject({
-            required: ['prompt', 'name', 'model'],
+            required: ['prompt', 'name'],
         })
+        expect(tools[0]?.description).not.toContain('cannot spawn their own sub-agents')
     })
 
     it('executes spawn via coordinator forwarding options and context', async () => {
@@ -92,6 +93,47 @@ describe('sub-agent tools', () => {
             signal: abortController.signal,
             onUpdate,
         })
+    })
+
+    it('validates and forwards role parameter to coordinator', async () => {
+        const coordinator = createMockCoordinator()
+        const spawnTool = createSpawnAgentTool(coordinator)
+
+        const validated = spawnTool.validate({
+            prompt: 'review changes',
+            name: 'Reviewer',
+            model: 'claude-sonnet-5',
+            role: '代码审查员',
+        })
+        expect(validated.role).toBe('代码审查员')
+
+        await spawnTool.execute('call-2', validated, { sessionId: 'session-parent-2' })
+        expect(coordinator.spawn).toHaveBeenCalledWith('review changes', expect.objectContaining({
+            name: 'Reviewer',
+            role: '代码审查员',
+            modelId: 'claude-sonnet-5',
+            parentSessionId: 'session-parent-2',
+        }))
+    })
+
+    it('allows omitting model when role is specified, but rejects when both are missing', () => {
+        const coordinator = createMockCoordinator()
+        const spawnTool = createSpawnAgentTool(coordinator)
+
+        const validated = spawnTool.validate({
+            prompt: 'review changes',
+            name: 'Reviewer',
+            role: '代码审查员',
+        })
+        expect(validated.role).toBe('代码审查员')
+        expect(validated.model).toBeUndefined()
+
+        expect(() =>
+            spawnTool.validate({
+                prompt: 'review changes',
+                name: 'Reviewer',
+            }),
+        ).toThrow('model is required when role is not specified')
     })
 
     it('executes sendMessage and stopAgent via coordinator', async () => {

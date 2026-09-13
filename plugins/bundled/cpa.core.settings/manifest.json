@@ -21,7 +21,8 @@
         "webserver.*",
         "plugins.read",
         "plugins.manage",
-        "plugins.install"
+        "plugins.install",
+        "system.update"
     ],
     "contributes": {
         "service": [
