@@ -116,19 +116,23 @@ export async function readGitRepoWithDefaultFs(
 export async function switchGitBranch(
   repo: Pick<GitRepoInfo, 'repoRoot'>,
   name: string,
-  options: { create?: boolean; run?: GitCommandRunner } = {},
+  options: { create?: boolean; baseBranch?: string; run?: GitCommandRunner } = {},
 ): Promise<void> {
   if (!isValidGitBranchName(name)) {
     throw new Error('invalid branch name')
   }
   const run = options.run ?? runGitViaNativeBridge
   const switchArgs = options.create
-    ? (['switch', '-c', name] as const)
+    ? options.baseBranch
+      ? (['switch', '-c', name, options.baseBranch] as const)
+      : (['switch', '-c', name] as const)
     : (['switch', '--', name] as const)
   let result = await run(repo.repoRoot, switchArgs)
   if (result.exitCode !== 0 && isSwitchUnsupported(result)) {
     const checkoutArgs = options.create
-      ? (['checkout', '-b', name] as const)
+      ? options.baseBranch
+        ? (['checkout', '-b', name, options.baseBranch] as const)
+        : (['checkout', '-b', name] as const)
       : (['checkout', '--', name] as const)
     result = await run(repo.repoRoot, checkoutArgs)
   }
@@ -140,7 +144,7 @@ export async function switchGitBranch(
 export async function switchGitBranchWithDefaultRunner(
   repo: Pick<GitRepoInfo, 'repoRoot'>,
   name: string,
-  options: { create?: boolean } = {},
+  options: { create?: boolean; baseBranch?: string } = {},
 ): Promise<void> {
   await switchGitBranch(repo, name, options)
 }

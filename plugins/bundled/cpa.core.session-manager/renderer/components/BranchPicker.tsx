@@ -9,6 +9,7 @@ import {
     type GitFs,
     type GitRepoInfo,
 } from '../utils/gitBranches.js'
+import { CreateBranchModal } from './CreateBranchModal.js'
 
 export interface BranchPickerProps {
     value: string | null
@@ -21,8 +22,9 @@ export interface BranchPickerProps {
     checkoutBranch?: (
         repo: GitRepoInfo,
         name: string,
-        options?: { create?: boolean },
+        options?: { create?: boolean; baseBranch?: string },
     ) => Promise<void>
+    branchPrefix?: string
 }
 
 /**
@@ -38,6 +40,7 @@ export function BranchPicker({
     className,
     loadRepo,
     checkoutBranch,
+    branchPrefix,
 }: BranchPickerProps) {
     const { t } = useTranslation()
     const services = useHostServices()
@@ -56,7 +59,7 @@ export function BranchPicker({
     const defaultCheckoutBranch = async (
         repo: GitRepoInfo,
         name: string,
-        options?: { create?: boolean },
+        options?: { create?: boolean; baseBranch?: string },
     ) => {
         if (!services?.process) {
             throw new Error('Process service unavailable for git branch switch')
@@ -80,6 +83,7 @@ export function BranchPicker({
     const effectiveCheckoutBranch = checkoutBranch ?? defaultCheckoutBranch
 
     const [open, setOpen] = useState(false)
+    const [createModalOpen, setCreateModalOpen] = useState(false)
     const [query, setQuery] = useState('')
     const [repo, setRepo] = useState<GitRepoInfo | null>(null)
     const [busy, setBusy] = useState(false)
@@ -161,21 +165,25 @@ export function BranchPicker({
         normalizedQuery && !exactMatch && isValidGitBranchName(normalizedQuery),
     )
 
-    const applyBranch = async (branch: string, create = false) => {
-        if (busy) return
+    const applyBranch = async (
+        branch: string,
+        create = false,
+        baseBranch?: string,
+    ): Promise<boolean> => {
+        if (busy) return false
         if (!repo) {
             onChange(branch)
             setOpen(false)
-            return
+            return true
         }
         if (!create && branch === repo.current) {
             onChange(branch)
             setOpen(false)
-            return
+            return true
         }
         setBusy(true)
         try {
-            await effectiveCheckoutBranch(repo, branch, { create })
+            await effectiveCheckoutBranch(repo, branch, { create, baseBranch })
             const paths = pathsKey ? pathsKey.split('\0') : []
             if (paths.length > 0) {
                 const info = await effectiveLoadRepo(paths).catch(() => null)
@@ -183,8 +191,10 @@ export function BranchPicker({
             }
             onChange(branch)
             setOpen(false)
+            return true
         } catch (error: any) {
             pushToast(checkoutErrorMessage(error, create, t), 'error')
+            return false
         } finally {
             setBusy(false)
         }
@@ -333,8 +343,40 @@ export function BranchPicker({
                             </div>
                         ) : null}
                     </div>
+
+                    <div className="my-1 border-t border-[var(--border-subtle)]" />
+                    <button
+                        type="button"
+                        role="option"
+                        aria-selected={false}
+                        onClick={() => {
+                            setOpen(false)
+                            setCreateModalOpen(true)
+                        }}
+                        className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[12px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-sidebar-hover)] hover:text-[var(--text-primary)]"
+                    >
+                        <Plus className="size-3.5 shrink-0 opacity-80" aria-hidden />
+                        <span className="truncate">
+                            {t('composer.createBranch', { defaultValue: '创建并检出新分支...' })}
+                        </span>
+                    </button>
                 </div>
             ) : null}
+
+            <CreateBranchModal
+                isOpen={createModalOpen}
+                onClose={() => setCreateModalOpen(false)}
+                onConfirm={async (newBranch) => {
+                    const base = value || repo?.current || undefined
+                    const ok = await applyBranch(newBranch, true, base)
+                    if (ok) {
+                        setCreateModalOpen(false)
+                    }
+                }}
+                existingBranches={repo?.branches}
+                initialValue={query.trim()}
+                branchPrefix={branchPrefix}
+            />
         </div>
     )
 }

@@ -276,4 +276,145 @@ describe('BranchPicker', () => {
         expect(trigger.className).toContain('leading-normal')
         expect(trigger.className).not.toContain('leading-none')
     })
+
+    it('shows divider and create new branch menu item at end of branch list, and creates new branch from modal', async () => {
+        const user = userEvent.setup()
+        const onChange = vi.fn()
+        const checkoutBranch = vi.fn(async () => undefined)
+
+        render(
+            <BranchPicker
+                value="dev"
+                onChange={onChange}
+                projectName="CLIProxyAPI"
+                projectPaths={['/workspace/example']}
+                loadRepo={async () => sampleRepo}
+                checkoutBranch={checkoutBranch}
+            />,
+        )
+
+        // Open branch dropdown
+        await user.click(screen.getByRole('button', { name: /Select branch|dev/i }))
+
+        // Should see the "Create and check out new branch..." option
+        const createOption = screen.getByRole('option', { name: /Create and check out new branch\.\.\./i })
+        expect(createOption).toBeInTheDocument()
+
+        // Click to open modal
+        await user.click(createOption)
+
+        // Modal should appear
+        const modal = screen.getByRole('dialog')
+        expect(modal).toBeInTheDocument()
+        expect(screen.getByText('Create and checkout branch')).toBeInTheDocument()
+        expect(screen.getByText('Branch name')).toBeInTheDocument()
+
+        const branchInput = screen.getByPlaceholderText(/Enter a new branch name/i)
+        const submitBtn = screen.getByRole('button', { name: /Create and check out$/i })
+
+        // Initially empty, submit should be disabled
+        expect(submitBtn).toBeDisabled()
+
+        // Type a branch name ending with '/' -> should show error and be disabled
+        await user.type(branchInput, 'feat/test/')
+        expect(screen.getByText(/Branch name cannot end with/i)).toBeInTheDocument()
+        expect(submitBtn).toBeDisabled()
+
+        // Fix branch name by typing a valid segment
+        await user.type(branchInput, 'sub-feature')
+        expect(screen.queryByText(/Branch name cannot end with/i)).not.toBeInTheDocument()
+        expect(submitBtn).toBeEnabled()
+
+        // Submit via button click
+        await user.click(submitBtn)
+
+        // Should have called checkoutBranch with create: true and baseBranch: 'dev'
+        await waitFor(() => {
+            expect(checkoutBranch).toHaveBeenCalledWith(sampleRepo, 'feat/test/sub-feature', {
+                create: true,
+                baseBranch: 'dev',
+            })
+        })
+        expect(onChange).toHaveBeenCalledWith('feat/test/sub-feature')
+
+        // Modal should be closed
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    })
+
+    it('validates branch ending with slash, duplicate branch, and closes modal on cancel in zh-CN', async () => {
+        await i18n.changeLanguage('zh-CN')
+        const user = userEvent.setup()
+        const onChange = vi.fn()
+        const checkoutBranch = vi.fn(async () => undefined)
+
+        render(
+            <BranchPicker
+                value="main"
+                onChange={onChange}
+                projectName="CLIProxyAPI"
+                projectPaths={['/workspace/example']}
+                loadRepo={async () => sampleRepo}
+                checkoutBranch={checkoutBranch}
+            />,
+        )
+
+        // Open menu
+        await user.click(screen.getByRole('button', { name: /选择分支|main/i }))
+
+        // Check Chinese menu item
+        const createMenuItem = screen.getByRole('option', { name: /创建并检出新分支\.\.\./i })
+        expect(createMenuItem).toBeInTheDocument()
+        await user.click(createMenuItem)
+
+        // Check Chinese modal
+        expect(screen.getByText('创建并检出分支')).toBeInTheDocument()
+        expect(screen.getByText('分支名称')).toBeInTheDocument()
+
+        const branchInput = screen.getByPlaceholderText(/输入新分支名称/i)
+        const submitBtn = screen.getByRole('button', { name: '创建并检出' })
+        const closeBtn = screen.getByRole('button', { name: '关闭' })
+
+        // Type existing branch 'dev'
+        await user.type(branchInput, 'dev')
+        expect(screen.getByText('该分支已存在')).toBeInTheDocument()
+        expect(submitBtn).toBeDisabled()
+
+        // Clear and type name ending with slash
+        await user.clear(branchInput)
+        await user.type(branchInput, 'new-branch/')
+        expect(screen.getByText('分支名不能以“/”结尾。')).toBeInTheDocument()
+        expect(submitBtn).toBeDisabled()
+
+        // Click Close
+        await user.click(closeBtn)
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+        expect(checkoutBranch).not.toHaveBeenCalled()
+    })
+
+    it('prefills branch name with branchPrefix when opened from BranchPicker', async () => {
+        const user = userEvent.setup()
+        const onChange = vi.fn()
+        const checkoutBranch = vi.fn(async () => undefined)
+
+        render(
+            <BranchPicker
+                value="main"
+                onChange={onChange}
+                projectName="CLIProxyAPI"
+                projectPaths={['/workspace/example']}
+                loadRepo={async () => sampleRepo}
+                checkoutBranch={checkoutBranch}
+                branchPrefix="codex/"
+            />,
+        )
+
+        // Open menu and click create branch
+        await user.click(screen.getByRole('button', { name: /Select branch|main/i }))
+        await user.click(screen.getByRole('option', { name: /Create and check out new branch\.\.\./i }))
+
+        // Modal input should be prefilled with "codex/"
+        const branchInput = screen.getByPlaceholderText(/Enter a new branch name/i) as HTMLInputElement
+        expect(branchInput.value).toBe('codex/')
+        expect(screen.getByText(/Branch name cannot end with/i)).toBeInTheDocument()
+    })
 })

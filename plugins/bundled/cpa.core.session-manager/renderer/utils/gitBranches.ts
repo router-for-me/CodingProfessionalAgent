@@ -187,14 +187,16 @@ export async function readGitRepo(
 export async function switchGitBranchWithDefaultRunner(
     repo: GitRepoInfo,
     branchName: string,
-    options?: { create?: boolean },
+    options?: { create?: boolean; baseBranch?: string },
     runner?: GitCommandRunner,
 ): Promise<void> {
     if (!runner) {
         throw new Error('No GitCommandRunner provided')
     }
     const args = options?.create
-        ? ['switch', '-c', branchName]
+        ? options.baseBranch
+            ? ['switch', '-c', branchName, options.baseBranch]
+            : ['switch', '-c', branchName]
         : ['switch', branchName]
     const result = await runner(repo.repoRoot, args)
     if (result.exitCode !== 0) {
