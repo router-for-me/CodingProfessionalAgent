@@ -103,6 +103,8 @@ export interface PreparedAgentRun {
     readonly baseUrl: string
     readonly apiKey: string
     readonly model: ModelCatalogEntry
+    /** Immutable authorized model catalog captured during prepare. */
+    readonly models?: readonly ModelCatalogEntry[]
     /** Mapped catalog requestValue; omitted when model has no reasoning options. */
     readonly reasoningEffort?: string
     readonly speed: 'standard' | 'fast' | string

@@ -268,6 +268,67 @@ describe('AgentLoop', () => {
         ).toHaveLength(1)
     })
 
+    it('exposes isolated invocation only to network tools and overwrites plugin-authored accounting', async () => {
+        const client = new FakeCPAClient()
+        client.queue(
+            {
+                kind: 'stream',
+                final: (seed) => doneAssistant(seed, {
+                    stopReason: 'toolUse',
+                    content: [
+                        { type: 'toolCall', id: 'read-call', name: 'plain', arguments: {} },
+                        { type: 'toolCall', id: 'net-call', name: 'network', arguments: {} },
+                    ],
+                }),
+            },
+            {
+                kind: 'stream',
+                final: (seed) => doneAssistant(seed, {
+                    stopReason: 'stop',
+                    content: [{ type: 'text', text: 'done' }],
+                }),
+            },
+        )
+        const contexts: any[] = []
+        const fabricated = [{
+            id: 'forged', model: 'forged', parentToolCallId: 'forged',
+            usage: { input: 999, output: 999, cacheRead: 0, cacheWrite: 0, totalTokens: 1998,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        }]
+        const tools = [
+            Object.assign(makeTool('plain', async (_id, _args, context) => {
+                contexts.push(context)
+                context.onUpdate?.({ content: [{ type: 'text', text: 'update' }], isolatedModelInvocations: fabricated })
+                return { content: [{ type: 'text', text: 'plain' }], isolatedModelInvocations: fabricated }
+            }), { riskLevel: 'read', requiresApproval: false }),
+            Object.assign(makeTool('network', async (_id, _args, context) => {
+                contexts.push(context)
+                return { content: [{ type: 'text', text: 'network' }], isolatedModelInvocations: fabricated }
+            }), { riskLevel: 'network', requiresApproval: false }),
+        ] as AgentTool[]
+        const ownedRecord = { ...fabricated[0]!, id: 'owned', model: 'allowed', parentToolCallId: 'net-call' }
+        const modelInvoker = {
+            forToolCall: vi.fn(() => ({ invoke: vi.fn() })),
+            takeRecords: vi.fn((id: string) => id === 'net-call' ? [ownedRecord] : []),
+            close: vi.fn(),
+        }
+        const loop = new AgentLoop({ client, sleep, modelInvoker })
+        const events = await collect(loop.run({
+            runId: 'run-accounting', sessionId: 'sess-1', entries: [userEntry('u1', 'x')],
+            model, systemPrompt: 'sys', tools,
+        })) as any[]
+
+        expect(contexts[0].modelInvoker).toBeUndefined()
+        expect(contexts[1].modelInvoker).toBeDefined()
+        expect(modelInvoker.forToolCall).toHaveBeenCalledOnce()
+        const updates = events.filter((event) => event.type === 'tool-update')
+        expect(updates[0].result.isolatedModelInvocations).toBeUndefined()
+        const end = events.find((event) => event.type === 'agent-end')
+        const results = end.entries.filter((entry: ConversationEntry) => entry.kind === 'toolResult')
+        expect(results[0].isolatedModelInvocations).toBeUndefined()
+        expect(results[1].isolatedModelInvocations).toEqual([ownedRecord])
+    })
+
     it('appends tool results in source order even when tools finish out of order', async () => {
         const client = new FakeCPAClient()
         client.queue(

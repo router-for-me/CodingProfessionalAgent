@@ -187,6 +187,9 @@ describe('AgentGenerationSnapshot & AgentProviderRegistry', () => {
         expect(prepared.generationSnapshot!.providerIds).toContain('tooling-custom-tool')
         expect(prepared.generationSnapshot!.providerIds).toContain('tooling-mw')
         expect(prepared.generationSnapshot!.providerIds).toContain('tooling-hook')
+        expect(prepared.generationSnapshot!.protocolProvider?.id).toBe('test-protocol')
+        expect(prepared.generationSnapshot!.models).toEqual([modelBase])
+        expect(Object.isFrozen(prepared.generationSnapshot!.models)).toBe(true)
 
         const run = service.streamChat({
             prepared,

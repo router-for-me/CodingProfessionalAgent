@@ -59,6 +59,7 @@ import type {
     ToolResult,
 } from './types'
 import type { AgentGenerationSnapshot } from '../providers/generationSnapshot'
+import type { ToolModelInvokerOwner } from './isolatedModelInvoker'
 
 export type { AgentRunEvent }
 
@@ -86,6 +87,8 @@ export interface AgentLoopDependencies {
     streamUpdateIntervalMs?: number
     /** Disable here when the immediate consumer creates the defensive clone. */
     cloneStreamSnapshots?: boolean
+    /** Run owner for credential-opaque isolated calls exposed only to tool executions. */
+    modelInvoker?: ToolModelInvokerOwner
 }
 
 export interface AgentRunInput {
@@ -254,11 +257,17 @@ function textToolResult(text: string, isError: boolean): ToolResult {
     }
 }
 
-function canonicalToolResult(result: ToolResult): ToolResult {
-    // Persist canonical text + image blocks; drop details.
+function canonicalToolResult(
+    result: ToolResult,
+    ownerRecords: readonly NonNullable<ToolResult['isolatedModelInvocations']>[number][] = [],
+): ToolResult {
+    // Plugins cannot author accounting fields. Only records supplied by the runtime owner survive.
     return {
         content: snapshotClone(result.content),
         isError: Boolean(result.isError),
+        ...(ownerRecords.length
+            ? { isolatedModelInvocations: snapshotClone(ownerRecords) }
+            : {}),
     }
 }
 
@@ -506,6 +515,7 @@ export class AgentLoop {
     private readonly generationSnapshot?: AgentGenerationSnapshot
     private readonly streamUpdateIntervalMs: number
     private readonly cloneStreamSnapshots: boolean
+    private readonly modelInvoker?: ToolModelInvokerOwner
 
     private activeRunId: string | null = null
     private activeToken = 0
@@ -541,6 +551,7 @@ export class AgentLoop {
             deps.streamUpdateIntervalMs ?? 0,
         )
         this.cloneStreamSnapshots = deps.cloneStreamSnapshots ?? true
+        this.modelInvoker = deps.modelInvoker
     }
 
     private getEffectiveHooks(): readonly HookContribution[] | undefined {
@@ -1781,9 +1792,10 @@ export class AgentLoop {
 
         const finish = (index: number, toolCall: AssistantToolCallBlock, result: ToolResult): void => {
             if (results[index]) return
+            // Every caller canonicalizes plugin output before reaching this sink.
             results[index] = {
                 toolCall,
-                result: canonicalToolResult(result),
+                result: snapshotClone(result),
             }
             remaining -= 1
             if (remaining <= 0) sink.close()
@@ -1820,7 +1832,11 @@ export class AgentLoop {
 
         const forceAbortSlot = (index: number, toolCall: AssistantToolCallBlock): void => {
             if (results[index]) return
-            const result = textToolResult(ABORTED_TOOL_MESSAGE, true)
+            const records = this.modelInvoker?.takeRecords(toolCall.id) ?? []
+            const result = canonicalToolResult(
+                textToolResult(ABORTED_TOOL_MESSAGE, true),
+                records,
+            )
             emitToolEnd(toolCall.id, toolCall.name, result, toolCall)
             finish(index, toolCall, result)
         }
@@ -2068,6 +2084,9 @@ export class AgentLoop {
                     cwd,
                     sessionId: scope.sessionId,
                     onUpdate,
+                    modelInvoker: selectApprovalPolicy(tool).riskLevel === 'network'
+                        ? this.modelInvoker?.forToolCall(toolCallId)
+                        : undefined,
                 })
                 // Always observe underlying execute so late settle is harmless.
                 observePromise(executePromise)
@@ -2082,7 +2101,13 @@ export class AgentLoop {
                         forceAbortSlot(index, toolCall)
                         return
                     }
-                    const errResult = textToolResult(errorMessageOf(error), true)
+                    const invocationRecords = this.modelInvoker?.takeRecords(toolCallId) ?? []
+                    const errResult: ToolResult = {
+                        ...textToolResult(errorMessageOf(error), true),
+                        ...(invocationRecords.length > 0
+                            ? { isolatedModelInvocations: invocationRecords }
+                            : {}),
+                    }
                     emitToolEnd(toolCallId, toolName, errResult, toolCall)
                     finish(index, toolCall, errResult)
                     return
@@ -2097,6 +2122,8 @@ export class AgentLoop {
                     return
                 }
 
+                // Strip plugin-authored accounting immediately, but leave owner records
+                // pending so an abort/error during post hooks can still claim them.
                 let finalResult = canonicalToolResult(result)
 
                 try {
@@ -2144,17 +2171,26 @@ export class AgentLoop {
                     // Fail open
                 }
 
+                if (results[index]) return
+                const invocationRecords = this.modelInvoker?.takeRecords(toolCallId) ?? []
+                finalResult = canonicalToolResult(finalResult, invocationRecords)
                 emitToolEnd(toolCallId, toolName, finalResult, toolCall)
                 finish(index, toolCall, finalResult)
             } catch (error) {
                 settled = true
                 if (results[index]) return
-                const result = textToolResult(
-                    isAbortError(error) || signal.aborted
-                        ? ABORTED_TOOL_MESSAGE
-                        : errorMessageOf(error),
-                    true,
-                )
+                const invocationRecords = this.modelInvoker?.takeRecords(toolCallId) ?? []
+                const result: ToolResult = {
+                    ...textToolResult(
+                        isAbortError(error) || signal.aborted
+                            ? ABORTED_TOOL_MESSAGE
+                            : errorMessageOf(error),
+                        true,
+                    ),
+                    ...(invocationRecords.length > 0
+                        ? { isolatedModelInvocations: invocationRecords }
+                        : {}),
+                }
                 emitToolEnd(toolCallId, toolName, result, toolCall)
                 finish(index, toolCall, result)
             } finally {
@@ -2241,7 +2277,14 @@ export class AgentLoop {
             toolName: toolCall.name,
             content,
             isError: Boolean(result.isError),
-        }
+            ...(result.isolatedModelInvocations?.length
+                ? {
+                      isolatedModelInvocations: snapshotClone(
+                          result.isolatedModelInvocations,
+                      ),
+                  }
+                : {}),
+        } as ToolResultEntry
     }
 }
 

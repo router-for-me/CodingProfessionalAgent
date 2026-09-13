@@ -559,7 +559,14 @@ function normalizeCanonicalEntry(
             toolName: asNonEmptyString(item.toolName) ?? 'tool',
             content: deepCloneJson(normalizeToolResultContent(item.content)),
             isError: item.isError === true,
-        }
+            ...(Array.isArray(item.isolatedModelInvocations)
+                ? {
+                      isolatedModelInvocations: deepCloneJson(
+                          item.isolatedModelInvocations,
+                      ),
+                  }
+                : {}),
+        } as ToolResultEntry
     }
 
     if (kind === 'compaction') {

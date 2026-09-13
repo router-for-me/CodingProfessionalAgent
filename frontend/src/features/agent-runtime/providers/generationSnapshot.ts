@@ -6,8 +6,10 @@
 import type {
     AgentTool,
     HookContribution,
+    ModelCatalogEntry,
     ModelCatalogProviderContribution,
     ProtocolMiddleware,
+    ProtocolProviderContribution,
     ProtocolSession,
 } from '@cpa/plugin-api'
 import type { PluginGenerationLease } from '@cpa/plugin-kernel'
@@ -26,6 +28,9 @@ export interface AgentGenerationSnapshot {
     readonly resources: ResourceSnapshot
     readonly hooks: readonly HookContribution[]
     readonly protocolSession: ProtocolSession
+    /** Exact provider object pinned by this generation; never re-resolved live. */
+    readonly protocolProvider?: ProtocolProviderContribution
+    readonly models: readonly ModelCatalogEntry[]
     readonly middleware: readonly ProtocolMiddleware[]
     readonly modelProvider: ModelCatalogProviderContribution
     readonly providerIds: readonly string[]
@@ -47,6 +52,7 @@ export function isAgentGenerationSnapshot(value: unknown): value is AgentGenerat
         Array.isArray(s.hooks) &&
         s.protocolSession !== null &&
         typeof s.protocolSession === 'object' &&
+        Array.isArray(s.models) &&
         Array.isArray(s.middleware) &&
         s.modelProvider !== null &&
         typeof s.modelProvider === 'object' &&

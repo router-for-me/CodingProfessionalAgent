@@ -3,6 +3,13 @@ import { migrateLegacyMessages } from './migration'
 import type { ConversationEntry } from './types'
 
 describe('migrateLegacyMessages', () => {
+    it('round-trips isolated accounting without adding isolated chat messages', () => {
+        const invocation = { id: 'isolated-B', model: 'model-B', parentToolCallId: 'call_A', usage: { input: 3, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 5, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }
+        const entries = migrateLegacyMessages('s1', [{ id: 'tool-A', sessionId: 's1', createdAt: 1, kind: 'toolResult', toolCallId: 'call_A', toolName: 'delegated', content: [{ type: 'text', text: 'findings' }], isError: false, isolatedModelInvocations: [invocation] }])
+        expect(entries).toHaveLength(1)
+        expect(entries[0]).toMatchObject({ kind: 'toolResult', toolCallId: 'call_A', isolatedModelInvocations: [invocation] })
+        expect(migrateLegacyMessages('s1', JSON.parse(JSON.stringify(entries)))).toEqual(entries)
+    })
     it('migrates a legacy tool result into a separate canonical entry', () => {
         const entries = migrateLegacyMessages('s1', [
             {

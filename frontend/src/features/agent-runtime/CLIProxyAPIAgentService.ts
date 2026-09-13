@@ -21,6 +21,7 @@ import {
 } from './agent/agentLoop'
 import { ApprovalController } from './agent/approvals'
 import type { AgentRunEvent, AgentTool } from './agent/types'
+import { RunScopedModelInvoker } from './agent/isolatedModelInvoker'
 import {
     compactConversation,
     type CompactConversationOptions,
@@ -41,7 +42,7 @@ import {
 import {
     agentRegistry,
 } from '@/plugins/platform/AgentPluginRuntimeHost'
-import type { ProtocolClient, ConversationEntry } from '@cpa/plugin-api'
+import type { ProtocolClient, ProtocolSession, ConversationEntry } from '@cpa/plugin-api'
 import {
     DEFAULT_SUBAGENT_SETTINGS,
     type SubagentsSettings,
@@ -906,6 +907,7 @@ export class CLIProxyAPIAgentService implements AgentService {
     ) => ProtocolClient | any
     private readonly createConnectionManager: (
         bridge: NativeBridge,
+        providerId?: string,
     ) => ProtocolConnectionManager | null | undefined
     private readonly loadResources: (
         input: LoadResourceSnapshotInput,
@@ -1283,6 +1285,7 @@ export class CLIProxyAPIAgentService implements AgentService {
                 baseUrl,
                 apiKey,
                 model: modelSnapshot,
+                models: deepFreezeData(deepCloneData(models)) as readonly ModelCatalogEntry[],
                 reasoningEffort,
                 speed,
                 requestApproval: Boolean(input.requestApproval),
@@ -1475,6 +1478,7 @@ export class CLIProxyAPIAgentService implements AgentService {
         unlink: () => void,
     ): AsyncGenerator<AgentRunEvent> {
         const { prepared, sessionId, runId } = input
+        let modelInvoker: RunScopedModelInvoker | undefined
         this.subAgents.setParentContext({
             sessionId,
             runId,
@@ -1503,6 +1507,11 @@ export class CLIProxyAPIAgentService implements AgentService {
                 connectionNamespace: namespace,
             })
 
+            modelInvoker = this.createRunModelInvoker(
+                prepared,
+                sessionId,
+                controller.signal,
+            )
             const loop = this.createLoop({
                 client,
                 approvals: this.approvals,
@@ -1515,6 +1524,7 @@ export class CLIProxyAPIAgentService implements AgentService {
                 generationSnapshot: prepared.generationSnapshot,
                 streamUpdateIntervalMs: this.streamUpdateIntervalMs,
                 cloneStreamSnapshots: false,
+                modelInvoker,
             })
 
             // Attach loop/client for abort() while we still own active.
@@ -1633,6 +1643,7 @@ export class CLIProxyAPIAgentService implements AgentService {
             unlink()
             this.subAgents.setParentContext(null)
             this.releaseActive(token)
+            await modelInvoker?.close()
             await disposeGenerationSnapshot(prepared.generationSnapshot)
         }
     }
@@ -1908,6 +1919,7 @@ export class CLIProxyAPIAgentService implements AgentService {
         // A dedicated manager keeps the child's model on its own upstream connection.
         const manager = this.createConnectionManager(this.bridge) ?? null
         const namespace = this.generateId()
+        let modelInvoker: RunScopedModelInvoker | undefined
         const op = {
             runId: request.runId,
             sessionId: request.sessionId,
@@ -1929,6 +1941,11 @@ export class CLIProxyAPIAgentService implements AgentService {
                 connectionManager: manager ?? undefined,
                 connectionNamespace: namespace,
             })
+            modelInvoker = this.createRunModelInvoker(
+                prepared,
+                request.sessionId,
+                controller.signal,
+            )
             const loop = this.createLoop({
                 client,
                 approvals: this.approvals,
@@ -1941,6 +1958,7 @@ export class CLIProxyAPIAgentService implements AgentService {
                 generationSnapshot: prepared.generationSnapshot,
                 streamUpdateIntervalMs: this.streamUpdateIntervalMs,
                 cloneStreamSnapshots: false,
+                modelInvoker,
             })
             const tracked = this.childOps.get(request.runId)
             if (tracked) {
@@ -1978,6 +1996,7 @@ export class CLIProxyAPIAgentService implements AgentService {
         } finally {
             unlink()
             this.childOps.delete(request.runId)
+            await modelInvoker?.close()
             if (manager && typeof manager.dispose === 'function') {
                 try {
                     await manager.dispose()
@@ -1986,6 +2005,74 @@ export class CLIProxyAPIAgentService implements AgentService {
                 }
             }
         }
+    }
+
+    private createRunModelInvoker(
+        prepared: PreparedAgentRun,
+        parentSessionId: string,
+        runSignal: AbortSignal,
+    ): RunScopedModelInvoker {
+        const pinnedProvider = prepared.generationSnapshot?.protocolProvider
+        const allowedModels = prepared.models ?? prepared.generationSnapshot?.models ?? [prepared.model]
+        return new RunScopedModelInvoker({
+            runSignal,
+            sessionId: parentSessionId,
+            allowedModels,
+            generateId: this.generateId,
+            now: this.now,
+            sanitizeError: (error) => {
+                // Plugin-facing invocation errors are credential-opaque. Do not
+                // disclose arbitrary transport messages or account-specific URLs.
+                const sanitized = new Error(error instanceof Error && error.name === 'AbortError'
+                    ? 'Isolated model invocation aborted'
+                    : 'Isolated model invocation failed')
+                sanitized.name = error instanceof Error ? error.name : 'Error'
+                return sanitized
+            },
+            createSession: async ({ invocationId }) => {
+                this.assertNotDisposed()
+                const providerId = prepared.protocolProviderId
+                const manager = pinnedProvider && typeof (pinnedProvider as any).createConnectionManager === 'function'
+                    ? (pinnedProvider as any).createConnectionManager(this.bridge) ?? null
+                    : this.customCreateClient
+                        ? this.createConnectionManager(this.bridge, providerId) ?? null
+                        : null
+                const options = {
+                    bridge: this.bridge,
+                    apiKey: prepared.apiKey,
+                    baseUrl: prepared.baseUrl,
+                    sessionId: `${parentSessionId}:isolated:${invocationId}`,
+                    protocolProviderId: providerId,
+                    now: this.now,
+                    generateRequestId: this.generateId,
+                    connectionManager: manager ?? undefined,
+                    connectionNamespace: this.generateId(),
+                }
+                try {
+                    let session: ProtocolSession
+                    if (this.customCreateClient) {
+                        session = this.createClientInstance(options)
+                    } else if (pinnedProvider && typeof pinnedProvider.createSession === 'function') {
+                        session = await pinnedProvider.createSession(options)
+                    } else if (pinnedProvider && typeof pinnedProvider.createClient === 'function') {
+                        session = await pinnedProvider.createClient(options) as unknown as ProtocolSession
+                    } else {
+                        throw new Error('Prepared protocol provider cannot create isolated session')
+                    }
+                    return {
+                        session,
+                        dispose: async () => {
+                            if (manager && typeof manager.dispose === 'function') await manager.dispose()
+                        },
+                    }
+                } catch (error) {
+                    if (manager && typeof manager.dispose === 'function') {
+                        try { await manager.dispose() } catch { /* preserve creation error */ }
+                    }
+                    throw error
+                }
+            },
+        })
     }
 
     private abortChildOps(): void {

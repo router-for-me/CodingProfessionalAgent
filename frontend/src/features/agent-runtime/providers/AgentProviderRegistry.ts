@@ -374,6 +374,14 @@ export class AgentProviderRegistry {
 
         const providerIds = Object.freeze(Array.from(ids).sort())
 
+        const models = Object.freeze(input.models.map((entry) => Object.freeze({
+            ...entry,
+            reasoningLevels: Object.freeze(entry.reasoningLevels.map((level) => Object.freeze({ ...level }))),
+            input: Object.freeze([...entry.input]),
+            ...(entry.cpaCapabilities
+                ? { cpaCapabilities: Object.freeze({ ...entry.cpaCapabilities }) }
+                : {}),
+        })))
         const snapshot: AgentGenerationSnapshot = Object.freeze({
             generation,
             lease,
@@ -381,6 +389,8 @@ export class AgentProviderRegistry {
             resources,
             hooks,
             protocolSession,
+            protocolProvider,
+            models,
             middleware,
             modelProvider,
             providerIds,
