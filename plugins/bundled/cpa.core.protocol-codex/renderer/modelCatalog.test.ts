@@ -67,6 +67,20 @@ describe('protocol-codex model catalog', () => {
         )
     })
 
+    it('preserves only boolean CPA web-search capabilities', () => {
+        const [supported, unsupported, unknown, malformed] = parseModelCatalog({ models: [
+            { id: 'supported', cpa_capabilities: { web_search: true, secret: 'ignored' } },
+            { id: 'unsupported', cpa_capabilities: { web_search: false } },
+            { id: 'unknown' },
+            { id: 'malformed', cpa_capabilities: { web_search: 'true' } },
+        ] })
+
+        expect(supported.cpaCapabilities).toEqual({ webSearch: true })
+        expect(unsupported.cpaCapabilities).toEqual({ webSearch: false })
+        expect(unknown).not.toHaveProperty('cpaCapabilities')
+        expect(malformed).not.toHaveProperty('cpaCapabilities')
+    })
+
     it('does not treat additional_speed_tiers alone as Fast support', () => {
         const [model] = parseModelCatalog({
             models: [

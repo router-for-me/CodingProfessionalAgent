@@ -85,24 +85,22 @@ export class CodexProtocolSession implements ProtocolSession {
         const internalController = new AbortController()
         this.activeController = internalController
 
-        let signal: AbortSignal
+        const signal = internalController.signal
         let cleanupAbort: (() => void) | undefined
 
         if (options?.signal) {
-            signal = options.signal
-            if (signal.aborted) {
-                internalController.abort()
+            const externalSignal = options.signal
+            if (externalSignal.aborted) {
+                internalController.abort(externalSignal.reason)
             } else {
                 const onExternalAbort = (): void => {
-                    internalController.abort()
+                    internalController.abort(externalSignal.reason)
                 }
-                signal.addEventListener('abort', onExternalAbort, { once: true })
+                externalSignal.addEventListener('abort', onExternalAbort, { once: true })
                 cleanupAbort = (): void => {
-                    signal.removeEventListener('abort', onExternalAbort)
+                    externalSignal.removeEventListener('abort', onExternalAbort)
                 }
             }
-        } else {
-            signal = internalController.signal
         }
 
         const codexOpts: CodexClientStreamOptions | undefined = options

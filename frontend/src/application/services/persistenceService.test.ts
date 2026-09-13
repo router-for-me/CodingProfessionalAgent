@@ -1269,6 +1269,7 @@ describe('persist pure helpers', () => {
         input: ['text'] as const,
         contextWindow: 200_000,
         maxTokens: 32_000,
+        cpaCapabilities: { webSearch: true },
       },
     ]
 

@@ -156,6 +156,80 @@ function markError(output: AssistantEntry, message: string): void {
     output.errorMessage = message
 }
 
+function jsonIdentity(value: Record<string, unknown>): string {
+    try {
+        return JSON.stringify(value)
+    } catch {
+        return ''
+    }
+}
+
+function appendAnnotation(output: AssistantEntry, value: Record<string, unknown>): void {
+    const annotation = deepCloneJson(value)
+    const identity = jsonIdentity(annotation)
+    const existing = [...(output.annotations ?? [])]
+    if (!existing.some((item) => jsonIdentity(item) === identity)) {
+        if (existing.length >= 256) throw new Error('Response annotation limit exceeded')
+        existing.push(annotation)
+        output.annotations = existing
+    }
+}
+
+const CITATION_TYPES = new Set([
+    'citation',
+    'url_citation',
+    'web_search_result_location',
+])
+
+/** Collect citation records from OpenAI and Claude-compatible response shapes. */
+function collectAnnotations(output: AssistantEntry, value: unknown, depth = 0): void {
+    if (depth > 32) throw new Error('Response metadata nesting limit exceeded')
+    if (Array.isArray(value)) {
+        for (const item of value) collectAnnotations(output, item, depth + 1)
+        return
+    }
+    if (!isRecord(value)) return
+
+    if (Array.isArray(value.annotations)) {
+        for (const annotation of value.annotations) {
+            if (isRecord(annotation)) appendAnnotation(output, annotation)
+        }
+    }
+    if (typeof value.type === 'string' && CITATION_TYPES.has(value.type)) {
+        appendAnnotation(output, value)
+    }
+    for (const [key, nested] of Object.entries(value)) {
+        if (key !== 'annotations' && key !== 'encrypted_content' && key !== 'encrypted_index') {
+            collectAnnotations(output, nested, depth + 1)
+        }
+    }
+}
+
+function upsertNativeToolCall(output: AssistantEntry, item: Record<string, unknown>): void {
+    if (item.type !== 'web_search_call') return
+    const cloned = deepCloneJson(item)
+    const existing = [...(output.nativeToolCalls ?? [])]
+    const id = asString(cloned.id)
+    const index = id
+        ? existing.findIndex((candidate) => candidate.type === cloned.type && candidate.id === id)
+        : existing.findIndex((candidate) => jsonIdentity(candidate) === jsonIdentity(cloned))
+    if (index >= 0) {
+        existing[index] = cloned
+    } else {
+        if (existing.length >= 64) throw new Error('Response native tool limit exceeded')
+        existing.push(cloned)
+    }
+    output.nativeToolCalls = existing
+}
+
+function collectTerminalOutput(output: AssistantEntry, items: readonly unknown[]): void {
+    for (const item of items) {
+        if (!isRecord(item)) continue
+        upsertNativeToolCall(output, item)
+        collectAnnotations(output, item)
+    }
+}
+
 /**
  * Parse Codex Responses websocket/SSE-shaped events into stream events.
  * Yields AssistantStreamEvent values and returns the finalized AssistantEntry.
@@ -175,6 +249,7 @@ export async function* parseCodexEvents(
     }
 
     const outputSlots = new Map<number, OutputSlot>()
+    const messageSlots = new Map<number, Extract<OutputSlot, { type: 'text' }>>()
     /** Exact copies of output_item.done raw items (fallback when response.output is absent). */
     const doneWireItems: unknown[] = []
     let sawTerminalResponseEvent = false
@@ -210,6 +285,7 @@ export async function* parseCodexEvents(
                 contentIndex: output.content.length - 1,
             }
             outputSlots.set(outputIndex, slot)
+            messageSlots.set(outputIndex, slot)
             return slot
         }
         if (itemType === 'function_call') {
@@ -289,6 +365,15 @@ export async function* parseCodexEvents(
             if (!started) {
                 started = true
                 yield { type: 'start', partial: output }
+            }
+
+            // Some Responses implementations stream annotations separately from
+            // message/output-item terminal records.
+            if (type.includes('annotation')) {
+                if (isRecord(event.annotation)) appendAnnotation(output, event.annotation)
+                if (Array.isArray(event.annotations)) {
+                    collectAnnotations(output, { annotations: event.annotations })
+                }
             }
 
             if (type === 'response.created') {
@@ -441,9 +526,11 @@ export async function* parseCodexEvents(
                 const item = isRecord(event.item) ? event.item : undefined
                 const outputIndex =
                     typeof event.output_index === 'number' ? event.output_index : undefined
-                if (!item || outputIndex === undefined) continue
-                // Preserve exact wire item for continuation fallback.
+                if (!item) continue
+                // Native items do not need an output slot, even when a backend omits its index.
                 doneWireItems.push(deepCloneJson(item))
+                collectTerminalOutput(output, [item])
+                if (outputIndex === undefined) continue
                 const itemType = asString(item.type)
                 const slot = getOrCreateSlot(outputIndex, item)
 
@@ -547,12 +634,30 @@ export async function* parseCodexEvents(
                 const response = isRecord(event.response)
                     ? (event.response as WireResponse)
                     : undefined
+                const terminalItems =
+                    Array.isArray(response?.output) && response.output.length > 0
+                        ? response.output
+                        : doneWireItems
+                collectTerminalOutput(output, terminalItems)
+                // Some backends return text only in the terminal response. Reconcile
+                // by wire output index rather than duplicating earlier text deltas.
+                if (Array.isArray(response?.output)) {
+                    response.output.forEach((item, index) => {
+                        if (!isRecord(item) || item.type !== 'message' || !Array.isArray(item.content)) return
+                        const slot = messageSlots.get(index) ?? getOrCreateSlot(index, item)
+                        if (slot?.type !== 'text') return
+                        slot.block.text = item.content.map((part) => {
+                            if (!isRecord(part)) return ''
+                            if (part.type === 'output_text') return asString(part.text) ?? ''
+                            if (part.type === 'refusal') return asString(part.refusal) ?? ''
+                            return ''
+                        }).join('')
+                        slot.block.signature = encodeTextSignatureV1(asString(item.id) ?? `msg_${slot.contentIndex}`, asString(item.phase))
+                    })
+                }
                 finalizeResponse(response, type)
                 clearPartialState(output, outputSlots)
-                const wireOutput =
-                    Array.isArray(response?.output) && response.output.length > 0
-                        ? deepCloneJson(response.output)
-                        : deepCloneJson(doneWireItems)
+                const wireOutput = deepCloneJson(terminalItems)
                 options?.onTerminal?.({
                     type: type === 'response.incomplete' ? 'incomplete' : 'completed',
                     responseId: response?.id ?? output.responseId,
@@ -578,6 +683,12 @@ export async function* parseCodexEvents(
                 if (response?.id) {
                     output.responseId = response.id
                 }
+                const failureItems =
+                    Array.isArray(response?.output) && response.output.length > 0
+                        ? response.output
+                        : doneWireItems
+                collectTerminalOutput(output, failureItems)
+                if (response?.usage) output.usage = mapUsage(response.usage)
                 const error = response?.error
                 const details = response?.incomplete_details
                 const msg = error
@@ -590,7 +701,7 @@ export async function* parseCodexEvents(
                 options?.onTerminal?.({
                     type: 'failed',
                     responseId: response?.id ?? output.responseId,
-                    responseOutput: deepCloneJson(doneWireItems),
+                    responseOutput: deepCloneJson(failureItems),
                 })
                 throw new Error(msg)
             }

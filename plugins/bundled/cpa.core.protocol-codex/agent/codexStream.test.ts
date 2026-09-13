@@ -401,6 +401,62 @@ describe('parseCodexEvents', () => {
         expect(collected).toHaveLength(1)
     })
 
+    it('preserves native web search items and citations from done and completed outputs', async () => {
+        const doneSearch = {
+            type: 'web_search_call',
+            id: 'ws_1',
+            status: 'in_progress',
+            action: { type: 'search', query: 'news' },
+        }
+        const finalSearch = {
+            type: 'web_search_call',
+            id: 'ws_1',
+            status: 'completed',
+            action: { type: 'search', query: 'news', sources: [{ url: 'https://example.test' }] },
+            results: [{ title: 'Claude result', url: 'https://example.test' }],
+        }
+        const citation = {
+            type: 'url_citation',
+            url: 'https://example.test',
+            title: 'Example',
+        }
+        const claudeCitation = {
+            type: 'web_search_result_location',
+            url: 'https://claude.test',
+        }
+        const wireEvents = [
+            { type: 'response.created', response: { id: 'resp_search', status: 'in_progress' } },
+            { type: 'response.output_item.done', output_index: 0, item: doneSearch },
+            { type: 'response.output_text.annotation.added', annotation: claudeCitation },
+            {
+                type: 'response.completed',
+                response: {
+                    id: 'resp_search',
+                    status: 'completed',
+                    output: [
+                        finalSearch,
+                        {
+                            type: 'message',
+                            id: 'msg_search',
+                            role: 'assistant',
+                            status: 'completed',
+                            content: [{ type: 'output_text', text: 'answer', annotations: [citation] }],
+                        },
+                    ],
+                    usage: { input_tokens: 2, output_tokens: 3, total_tokens: 5 },
+                },
+            },
+        ]
+
+        const { result, error } = await collect(
+            parseCodexEvents(asAsync(wireEvents), seedAssistant()),
+        )
+        expect(error).toBeUndefined()
+        expect(result?.nativeToolCalls).toEqual([finalSearch])
+        expect(result?.annotations).toEqual([claudeCitation, citation])
+        expect(result?.content.some((block) => block.type === 'toolCall')).toBe(false)
+    })
+
     it('preserves accumulated text when message output_item.done omits content', async () => {
         const events = [
             {
@@ -464,6 +520,40 @@ describe('parseCodexEvents', () => {
             type: 'text',
             text: 'accumulated text',
         })
+    })
+
+    it('hydrates terminal-only findings and does not duplicate finalized text', async () => {
+        const message = { id: 'msg-B', type: 'message', content: [{ type: 'output_text', text: 'Final findings' }] }
+        const search = { id: 'ws-B', type: 'web_search_call', status: 'completed' }
+        for (const streamed of [false, true]) {
+            const wire = [
+                ...(streamed ? [{ type: 'response.output_item.done', output_index: 1, item: message }] : []),
+                { type: 'response.completed', response: { status: 'completed', output: [search, message] } },
+            ]
+            const { result, error } = await collect(parseCodexEvents(asAsync(wire), seedAssistant()))
+            expect(error).toBeUndefined()
+            expect(result?.content.filter((block) => block.type === 'text')).toEqual([expect.objectContaining({ text: 'Final findings' })])
+            expect(result?.nativeToolCalls).toEqual([search])
+        }
+    })
+
+    it('retains native evidence without an output index and preserves failed-response usage', async () => {
+        const seed = seedAssistant()
+        const search = { id: 'ws-B', type: 'web_search_call', status: 'failed' }
+        await collect(parseCodexEvents(asAsync([
+            { type: 'response.output_item.done', item: search },
+            { type: 'response.failed', response: { status: 'failed', error: { message: 'failed' }, usage: { input_tokens: 3, output_tokens: 2, total_tokens: 5 } } },
+        ]), seed))
+        expect(seed.nativeToolCalls).toEqual([search])
+        expect(seed.usage?.totalTokens).toBe(5)
+    })
+
+    it('rejects excessive response metadata rather than unbounded citation processing', async () => {
+        const annotations = Array.from({ length: 257 }, (_, i) => ({ type: 'url_citation', url: `https://example.org/${i}` }))
+        const seed = seedAssistant()
+        await collect(parseCodexEvents(asAsync([{ type: 'response.completed', response: { output: [{ type: 'message', content: [{ type: 'output_text', text: 'text', annotations }] }] } }]), seed))
+        expect(seed.status).toBe('error')
+        expect(seed.errorMessage).toContain('annotation limit')
     })
 
     it('preserves reasoning deltas when output_item.done omits summary/content fields', async () => {

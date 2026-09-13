@@ -90,6 +90,12 @@ export type CodexFunctionTool = {
     strict: null
 }
 
+export type CodexNativeTool = {
+    type: 'web_search'
+}
+
+export type CodexTool = CodexFunctionTool | CodexNativeTool
+
 export type CodexReasoningConfig = {
     effort: string
     summary: 'auto' | string
@@ -105,9 +111,9 @@ export type CodexResponseCreate = {
     text: { verbosity: string }
     include: string[]
     prompt_cache_key: string
-    tool_choice?: 'auto'
+    tool_choice?: 'auto' | 'required' | 'none'
     parallel_tool_calls?: boolean
-    tools?: CodexFunctionTool[]
+    tools?: CodexTool[]
     reasoning?: CodexReasoningConfig
     service_tier?: 'priority'
     previous_response_id?: string

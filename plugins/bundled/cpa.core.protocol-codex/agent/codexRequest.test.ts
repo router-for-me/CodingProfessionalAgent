@@ -244,6 +244,24 @@ describe('buildCodexRequest', () => {
         expect(body.input).not.toContainEqual(expect.objectContaining({ role: 'system' }))
     })
 
+    it('serializes a standalone required native web search without function tools', () => {
+        const body = buildCodexRequest({
+            model: textOnlyModel,
+            sessionId: 'isolated-search',
+            systemPrompt: 'Search the web.',
+            entries: [],
+            nativeTools: [{ type: 'web_search' }],
+            toolChoice: 'required',
+        })
+
+        expect(body.store).toBe(false)
+        expect(body.stream).toBe(true)
+        expect(body.tools).toEqual([{ type: 'web_search' }])
+        expect(body.tool_choice).toBe('required')
+        expect(body.parallel_tool_calls).toBe(true)
+        expect(body).not.toHaveProperty('previous_response_id')
+    })
+
     it('sets max_output_tokens only when maxOutputTokens is a positive number (summary-only)', () => {
         const normal = buildCodexRequest({
             model: visionModel,

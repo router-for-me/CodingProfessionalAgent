@@ -36,6 +36,9 @@ export interface ModelCatalogEntry {
     input: readonly ModelInputModality[]
     contextWindow: number
     maxTokens: number
+    cpaCapabilities?: {
+        webSearch?: boolean
+    }
 }
 
 // --- Session and Conversation Entry Types ---
@@ -109,6 +112,18 @@ export interface AssistantEntry extends EntryBase {
     status: EntryStatus
     responseId?: string
     completedAt?: number
+    /** Raw upstream native-tool output items (never converted to function calls). */
+    nativeToolCalls?: readonly Record<string, unknown>[]
+    /** Raw upstream output annotations, including search citations. */
+    annotations?: readonly Record<string, unknown>[]
+}
+
+/** Runtime-produced accounting for an isolated model call, separate from chat usage. */
+export interface IsolatedModelInvocationRecord {
+    id: string
+    model: string
+    parentToolCallId: string
+    usage: Usage
 }
 
 export interface ToolResultEntry extends EntryBase {
@@ -117,6 +132,7 @@ export interface ToolResultEntry extends EntryBase {
     toolName: string
     content: ToolResultContentBlock[]
     isError: boolean
+    isolatedModelInvocations?: readonly IsolatedModelInvocationRecord[]
 }
 
 export interface CompactionEntry extends EntryBase {
@@ -206,6 +222,8 @@ export interface ProtocolStreamInput {
     systemPrompt: string
     entries: readonly ConversationEntry[]
     tools?: readonly ProtocolToolDefinition[]
+    nativeTools?: readonly { type: 'web_search' }[]
+    toolChoice?: 'auto' | 'required' | 'none'
     reasoningEffort?: string
     speed?: string
     seed: AssistantEntry

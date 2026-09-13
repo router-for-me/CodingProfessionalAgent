@@ -55,6 +55,28 @@ describe('model catalog service', () => {
         expect(useModelCatalogStore.getState().models.map((model) => model.id)).toEqual(['existing'])
     })
 
+    it('invalidates cached endpoint-scoped capabilities before a changed-config refresh completes', async () => {
+        const capable = { ...remoteModel('search'), cpaCapabilities: { webSearch: true } }
+        await refreshModelCatalog(
+            { baseUrl: 'http://original-endpoint', apiKey: 'original-auth' },
+            vi.fn().mockResolvedValue([capable]),
+        )
+        let rejectFetch!: (error: Error) => void
+        const fetcher = vi.fn(() => new Promise<readonly ModelCatalogEntry[]>((_resolve, reject) => {
+            rejectFetch = reject
+        }))
+
+        const refresh = refreshModelCatalog(
+            { baseUrl: 'http://other-endpoint', apiKey: 'different-auth' },
+            fetcher,
+        )
+        expect(useModelCatalogStore.getState().models[0]).not.toHaveProperty('cpaCapabilities')
+
+        rejectFetch(new Error('unavailable'))
+        await refresh
+        expect(useModelCatalogStore.getState().models[0]).not.toHaveProperty('cpaCapabilities')
+    })
+
     it('prevents an older refresh from overwriting a newer refresh', async () => {
         let resolveFirst!: (models: readonly ModelCatalogEntry[]) => void
         let resolveSecond!: (models: readonly ModelCatalogEntry[]) => void

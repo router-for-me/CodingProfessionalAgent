@@ -65,6 +65,11 @@ function positiveNumber(value: unknown, fallback: number): number {
         : fallback
 }
 
+function parseCpaCapabilities(value: unknown): ModelCatalogEntry['cpaCapabilities'] {
+    if (!isRecord(value) || typeof value.web_search !== 'boolean') return undefined
+    return { webSearch: value.web_search }
+}
+
 function reasoningOptions(value: unknown): readonly ModelReasoningOption[] {
     if (!Array.isArray(value)) return []
 
@@ -153,10 +158,12 @@ export function parseModelCatalog(payload: unknown): readonly ModelCatalogEntry[
         if (!id) return []
         const label = firstNonBlankString(rawModel.display_name, rawModel.name) ?? id
         const description = firstNonBlankString(rawModel.description, rawModel.summary)
+        const cpaCapabilities = parseCpaCapabilities(rawModel.cpa_capabilities)
         return [{
             id,
             label,
             ...(description ? { description } : {}),
+            ...(cpaCapabilities ? { cpaCapabilities } : {}),
             supportsFast: Array.isArray(rawModel.service_tiers) && rawModel.service_tiers.length > 0,
             reasoningLevels: reasoningOptions(rawModel.supported_reasoning_levels),
             input: parseInputModalities(rawModel.input_modalities),

@@ -52,6 +52,19 @@ describe('model catalog parser', () => {
         ])
     })
 
+    it('round-trips only boolean CPA web-search capabilities', () => {
+        const models = parseModelCatalog([
+            { id: 'yes', cpa_capabilities: { web_search: true, auth_id: 'ignored' } },
+            { id: 'no', cpa_capabilities: { web_search: false } },
+            { id: 'string', cpa_capabilities: { web_search: 'true' } },
+            { id: 'missing' },
+        ])
+        expect(models[0].cpaCapabilities).toEqual({ webSearch: true })
+        expect(models[1].cpaCapabilities).toEqual({ webSearch: false })
+        expect(models[2]).not.toHaveProperty('cpaCapabilities')
+        expect(models[3]).not.toHaveProperty('cpaCapabilities')
+    })
+
     it('accepts root arrays, models arrays, and data arrays', () => {
         expect(parseModelCatalog([{ id: 'root' }])).toHaveLength(1)
         expect(parseModelCatalog({ models: [{ id: 'models' }] })[0].id).toBe('models')

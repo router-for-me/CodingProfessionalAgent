@@ -6,6 +6,7 @@ import type { ConversationEntry, ModelCatalogEntry } from '@cpa/plugin-api'
 import { convertConversationToCodexInput } from './codexMessages'
 import type {
     CodexFunctionTool,
+    CodexNativeTool,
     CodexResponseCreate,
     CodexToolDefinition,
 } from './types'
@@ -18,6 +19,8 @@ export interface BuildCodexRequestInput {
     systemPrompt: string
     entries: readonly ConversationEntry[]
     tools?: readonly CodexToolDefinition[]
+    nativeTools?: readonly { type: 'web_search' }[]
+    toolChoice?: 'auto' | 'required' | 'none'
     /** Original catalog request value (not remapped). */
     reasoningEffort?: string
     speed?: CodexRequestSpeed
@@ -65,6 +68,8 @@ export function buildCodexRequest(input: BuildCodexRequestInput): CodexResponseC
         systemPrompt,
         entries,
         tools,
+        nativeTools,
+        toolChoice,
         reasoningEffort,
         speed,
         previousResponseId,
@@ -83,9 +88,13 @@ export function buildCodexRequest(input: BuildCodexRequestInput): CodexResponseC
         prompt_cache_key: sessionId,
     }
 
-    if (tools && tools.length > 0) {
-        body.tools = convertTools(tools)
-        body.tool_choice = 'auto'
+    const functionTools = tools?.length ? convertTools(tools) : []
+    const builtInTools: CodexNativeTool[] = nativeTools?.map(() => ({
+        type: 'web_search',
+    })) ?? []
+    if (functionTools.length > 0 || builtInTools.length > 0) {
+        body.tools = [...functionTools, ...builtInTools]
+        body.tool_choice = toolChoice ?? 'auto'
         body.parallel_tool_calls = true
     }
 

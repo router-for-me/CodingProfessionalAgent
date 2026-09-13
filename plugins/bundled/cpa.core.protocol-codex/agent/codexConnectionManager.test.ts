@@ -3047,6 +3047,8 @@ describe('CodexClient', () => {
                             content: [{ type: 'text', text: 'hi' }],
                         },
                     ],
+                    nativeTools: [{ type: 'web_search' }],
+                    toolChoice: 'required',
                     seed: seedAssistant(),
                 },
                 new AbortController().signal,
@@ -3071,6 +3073,13 @@ describe('CodexClient', () => {
         expect(
             (open[0]?.args[0] as { headers: Record<string, string> }).headers['session-id'],
         ).toBe('iso-1')
+        const firstSend = bridge.calls.find((call) => call.method === 'sendWebSocket')
+        const firstBody = JSON.parse(String(firstSend?.args[1])) as CodexResponseCreate
+        expect(firstBody.prompt_cache_key).toBe('iso-1')
+        expect(firstBody.tools).toEqual([{ type: 'web_search' }])
+        expect(firstBody.tool_choice).toBe('required')
+        expect(firstBody.store).toBe(false)
+        expect(firstBody.previous_response_id).toBeUndefined()
 
         bridge.queueWebSocket({
             frames: [{ kind: 'websocket-open' }, ...completedTextFrames('resp_iso2', 'again')],

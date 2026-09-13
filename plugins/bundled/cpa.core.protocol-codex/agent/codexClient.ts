@@ -46,6 +46,8 @@ export interface CodexClientStreamInput {
     systemPrompt: string
     entries: readonly ConversationEntry[]
     tools?: readonly CodexToolDefinition[]
+    nativeTools?: readonly { type: 'web_search' }[]
+    toolChoice?: 'auto' | 'required' | 'none'
     reasoningEffort?: string
     speed?: CodexRequestSpeed | string
     /** Mutable assistant entry updated by the stream parser. */
@@ -126,18 +128,22 @@ export class CodexClient {
         options?: CodexClientStreamOptions,
     ): AsyncGenerator<AssistantStreamEvent, AssistantEntry> {
         const mode: CodexConnectionMode = options?.connectionMode ?? 'session'
-        // Isolated summarization may override prompt_cache_key without touching the
-        // main session id used for connection cache identity.
+        // Every isolated turn gets an independent transport and prompt-cache identity.
+        // This prevents standalone model invocations from sharing continuation state
+        // with the owning protocol session unless a caller explicitly supplies a key.
+        const isolatedRequestId = mode === 'isolated' ? this.generateRequestId() : undefined
         const promptCacheKey =
             typeof options?.promptCacheKey === 'string' && options.promptCacheKey.length > 0
                 ? options.promptCacheKey
-                : this.sessionId
+                : isolatedRequestId ?? this.sessionId
         const buildInput: BuildCodexRequestInput = {
             model: input.model,
             sessionId: promptCacheKey,
             systemPrompt: input.systemPrompt,
             entries: input.entries,
             tools: input.tools,
+            nativeTools: input.nativeTools,
+            toolChoice: input.toolChoice,
             reasoningEffort: input.reasoningEffort,
             speed: input.speed as CodexRequestSpeed | undefined,
             maxOutputTokens: options?.maxOutputTokens,
@@ -179,7 +185,7 @@ export class CodexClient {
                     signal,
                     mode,
                     requestId:
-                        mode === 'session' ? this.sessionId : this.generateRequestId(),
+                        mode === 'session' ? this.sessionId : isolatedRequestId!,
                     connectionNamespace: this.connectionNamespace,
                 },
             )
