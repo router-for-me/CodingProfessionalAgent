@@ -103,12 +103,30 @@ CDPA 现有主模型工具循环
 
 ### 3.2 标记的依据与限制
 
-目录生成只能读取现有模型定义、已有能力元信息和已知协议路径支持情况；不新增搜索探测请求、调度策略或上游执行逻辑。
+模型能力精确到 **provider 分组下的具体 model ID**，由 `router-for-me/models` 的 `models.json` 显式维护，例如：
+
+```json
+{
+  "id": "confirmed-search-model",
+  "native_capabilities": { "web_search": true }
+}
+```
+
+`true` 表示已有模型级依据，`false` 表示已确认不支持，字段缺失表示未知。不同 provider 下的同名模型不互相借用声明。首批数据依据已有的精确 Codex 模型模板声明和可核实的官方资料，不以 provider 或模型名称前缀推断新型号能力。
+
+CPA 的最终目录标记必须同时满足：
+
+1. 实际公开模型所对应的**每一条注册记录**都明确声明支持原生搜索。
+2. 每条记录所属 provider 的现有 Responses 路径均支持原生 Web Search。
+
+已知不支持的记录或路径产生 `false`；无已知不支持但存在未知记录时保持未知；只有全部满足才输出 `true`。同一 provider 的不同账号也参与检查，不能只看最后注册的模型信息。alias / prefix 必须保留实际模型的元数据来源，不能仅凭公开别名去匹配静态目录。
+
+目录生成不新增搜索探测请求、调度策略或上游执行逻辑。新字段属于目录元数据，**不进入 Responses 请求**。
 
 现有字段不能简单等同：
 
 - `ModelInfo.SupportsWebSearch` 当前专指 Antigravity 的 `googleSearch` 能力。
-- Codex 的 `supports_search_tool` 来自客户端模板和 provider 判断，不是跨供应商通用字段。
+- Codex 的 `supports_search_tool` 来自客户端模板和 provider 判断，不是跨供应商通用字段。精确模板声明可以作为初始化数据的依据，但 CPA 运行时不能在 `native_capabilities.web_search` 缺失时退回 provider 级默认支持。
 - “上游模型原生支持搜索”不一定意味着“当前 CPA 的 Responses 路径能调用并返回搜索内容”。本功能只把后一种作为可选搜索后端。
 
 同一个模型 ID 可能对应多个 provider / auth。目录生成对已知混合、不一致的路径采用保守标记；没有足够信息时不标为支持，不能仅因其中一个账号支持就宣称所有请求都能搜索。
@@ -119,7 +137,7 @@ CDPA 现有主模型工具循环
 
 - 只对 CPA 客户端模型目录增加字段，普通模型列表和其他客户端行为保持兼容。
 - alias / prefix 保持现有公开模型 ID；目录字段不创造新的路由或账号绑定。
-- Home 等既有目录来源有可靠能力信息时附加字段，无信息则保持未知；不改 Home 调度。
+- Home 等既有目录来源必须携带自己的逐模型能力信息，再结合实际 provider 路径判断；缺少模型声明时不能仅因 section/provider 名称就标为支持，也不借本地同名模型的声明。无需修改 Home 调度。
 - 不暴露 auth ID、密钥、账号身份或上游 URL。
 - 不借本次任务重构通用 registry、修复账号调度或修改 translator。
 
@@ -397,7 +415,7 @@ plugins/bundled/cpa.core.web-search/
 
 CPA 从实施时的 `dev`（`d23ba5ee`）创建 `feat/cpa-web-search-catalog`：
 
-- `294b7f5b`：仅在 CPA 客户端模型目录增加 `cpa_capabilities.web_search`，保守处理 provider 混合、未知来源、公开前缀和 Home 目录；附带目录测试。
+- `294b7f5b`：首版仅在 CPA 客户端模型目录增加 `cpa_capabilities.web_search`，处理 provider 混合、未知来源、公开前缀和 Home 目录；附带目录测试。该首版的 provider 级支持判断须由后续的逐模型显式声明判断替代，不能作为精确模型能力的依据。
 - 未修改 scheduler、executor、translator 或 Responses 请求执行逻辑。
 
 CDPA 保持原有 `dev` 分支：
@@ -449,3 +467,42 @@ CPA 验证通过：目录模块、API、OpenAI handlers 和 registry 相关 Go �
 4. 分别验证审批拒绝、停止请求、账号不可用以及混合路由返回失败时的行为。
 
 Gemini / Antigravity / 普通 Chat 兼容路径、自动跨供应商后备列表仍不在本次实施范围内。
+
+## 13. 逐模型精度升级
+
+本轮将首版的 provider 级搜索声明替换为第 3.2 节的逐模型三态声明。`models.json` 是模型能力数据源，CPA 负责结合本实例的实际注册信息与 Responses 路径求交集，CDPA 继续只读取最终的 `cpa_capabilities.web_search === true`。
+
+### 实施记录与首批证据
+
+| 仓库 / 分支 | 提交 | 内容 |
+| --- | --- | --- |
+| models / `feat/model-web-search-capabilities`（基于 `origin/main` 的 `5001dfb`） | `0ad8ecf` | 逐模型声明、英文证据说明、证据清单与校验脚本 |
+| CPA / `feat/cpa-web-search-catalog` | `4311ae87` | 三态元数据、全部注册聚合、alias / prefix / Home 处理、更新检测与测试 |
+| CPA / `feat/cpa-web-search-catalog` | `678da561` | 同步内嵌模型数据，与 models 仓库逐字节一致 |
+
+首批共 **26 条 provider/model 记录**标为 `true`（共 9 个不同 model ID）：
+
+- Codex 四个 plan 分组共 24 条：仅匹配 `codex_client_models.json` 中同一精确 slug 的 `supports_search_tool: true`，不按 GPT 家族推断。
+- `claude/claude-opus-5`：官方 [Web search tool](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool) 文档包含该精确型号的原生搜索请求示例。
+- `xai/grok-4.6`：官方 [型号页](https://docs.x.ai/developers/grok-4-6.md) 声明 Web Search 支持，[Responses 示例](https://docs.x.ai/developers/tools/advanced-usage.md) 使用同一精确 ID。
+
+Claude / xAI 依据来自 Context7 的官方站点文档索引，非真实模型调用结果；不能把重定向到营销首页的 HTTP 响应作为支持证据。没有足够的明确不支持依据，因此本批静态数据不新增 `false`；其余记录保持未知。完整清单与来源见 models 仓库 `README.md`、`native-capabilities-evidence.json`。
+
+本轮验证：
+
+- models：26 条声明校验、7 项校验器正反例测试通过。
+- CPA：registry、Codex models、API、cliproxy SDK、OpenAI handlers 相关 Go 测试通过；registry / Codex models 的 `-race` 检查通过；server 编译通过。
+- CDPA：4 个相关测试文件共 47 项通过；消费协议未变，本轮没有修改前端实现。
+- CPA 全量 `go test ./...` **并非全绿**：`TestOpenAICompatExecutorToolResultContentByInputModalities` 的 4 个图片内容子用例失败。已在独立临时 worktree 的改动前提交 `294b7f5b` 上复现相同失败；属于基线问题，本轮未修改范围外的 executor。
+
+### 发布顺序与兼容性
+
+1. 先合并并发布 models 仓库的能力数据至 `main`，使 CPA 的远程模型更新器能够获取新增字段。
+2. 再部署支持逐模型判断的 CPA 构建；内嵌 `internal/registry/models/models.json` 同步同一份数据，作为离线 fallback。
+3. 重启 CPA 触发启动刷新（或等待既有的周期刷新），随后刷新 CDPA 模型目录并检查默认搜索模型设置。
+
+远程模型数据缺少新字段时，CPA 必须将其视为未知，不恢复 provider 级默认支持。**若先升级 CPA、却尚未发布 models 数据，成功获取到旧版远程目录后可能暂时没有搜索候选。** `--local-model` 使用内嵌目录时则不依赖远程数据发布。
+
+不具备模型级声明的 Home 目录也保持未知；不能用本地同名模型推断 Home 的实际能力。后续可在 Home 的目录数据中透传逐模型声明，但不需要修改请求调度。
+
+逐模型声明仍不等于具体账号的实网成功保证。此次更新不读取用户凭据，不进行真实上游搜索探测，也不修改 executor、scheduler 或 translator。
