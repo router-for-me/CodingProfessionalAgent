@@ -10,6 +10,8 @@ import {
     SettingsServiceToken,
     UiServiceToken,
     type AppSettings,
+    type GitReviewPresentation,
+    type GitSettings,
     type ThemeMode,
 } from '@cpa/plugin-api'
 import {
@@ -20,7 +22,11 @@ import {
     useResolvedTheme,
 } from '../utils/theme.js'
 import { ColorPickerPill } from './ColorPickerPill.js'
-import { SettingsPixelInput, ToggleSwitch } from './SettingsControls.js'
+import {
+    SegmentedControl,
+    SettingsPixelInput,
+    ToggleSwitch,
+} from './SettingsControls.js'
 import { ThemeImportDialog } from './ThemeImportDialog.js'
 
 const THEME_OPTIONS: { id: ThemeMode; labelKey: string }[] = [
@@ -49,6 +55,21 @@ export function AppearanceSection() {
     const uiFontSize = settings.uiFontSize ?? 14
     const codeFontSize = settings.codeFontSize ?? 12
     const fontSmoothing = settings.fontSmoothing ?? true
+
+    const git: GitSettings = settings.git ?? {
+        branchPrefix: 'cpa/',
+        mergeMethod: 'merge',
+        alwaysForcePush: false,
+        createDraftPr: true,
+        reviewPresentation: 'separate',
+        autoMergeWhenReady: false,
+        autoMergeInstructions: '',
+        commitInstructions: '',
+        prInstructions: '',
+    }
+    const reviewPresentation = (git.reviewPresentation ?? 'separate') as GitReviewPresentation
+    const setGitSettings = (partial: Partial<GitSettings>) =>
+        settingsService?.setGitSettings?.(partial)
 
     // Actions
     const setTheme = (val: ThemeMode) => settingsService?.setTheme?.(val)
@@ -923,6 +944,47 @@ export function AppearanceSection() {
                             checked={fontSmoothing}
                             label={t('settings.appearance.fontSmoothing')}
                             onChange={setFontSmoothing}
+                        />
+                    </div>
+
+                    {/* Review presentation */}
+                    <div className="flex items-center justify-between px-4 py-3">
+                        <div>
+                            <div className="text-[13px] font-medium text-[var(--text-primary)]">
+                                {t('settings.git.reviewPresentation', 'Review presentation')}
+                            </div>
+                            <div className="mt-0.5 text-[12px] text-[var(--text-muted)]">
+                                {t(
+                                    'settings.git.reviewPresentation.desc',
+                                    'Choose whether code review diffs are presented inline or in separate side-by-side columns',
+                                )}
+                            </div>
+                        </div>
+                        <SegmentedControl<GitReviewPresentation>
+                            ariaLabel={t(
+                                'settings.git.reviewPresentation',
+                                'Review presentation',
+                            )}
+                            value={reviewPresentation}
+                            options={[
+                                {
+                                    value: 'inline',
+                                    label: t(
+                                        'settings.git.reviewPresentation.inline',
+                                        'Inline',
+                                    ),
+                                },
+                                {
+                                    value: 'separate',
+                                    label: t(
+                                        'settings.git.reviewPresentation.separate',
+                                        'Separate',
+                                    ),
+                                },
+                            ]}
+                            onChange={(val) =>
+                                setGitSettings({ reviewPresentation: val })
+                            }
                         />
                     </div>
                 </div>

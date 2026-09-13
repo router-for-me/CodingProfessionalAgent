@@ -5,6 +5,8 @@ import * as gitDiffModule from '../utils/gitDiff.js'
 import { rendererPluginRuntime } from '@/plugins/platform/RendererPluginRuntimeHost'
 import { useProjectStore } from '@/stores/projectStore'
 import { useUiStore } from '@/stores/uiStore'
+import { useSettingsStore } from '@/stores/settingsStore'
+import { DEFAULT_SETTINGS } from '@/types/models'
 import { HostServicesProvider, I18nextProvider } from '@cpa/plugin-ui'
 import { ReviewPanelContent, matchDiffFile } from './ReviewPanelContent.js'
 
@@ -120,6 +122,12 @@ describe('ReviewPanelContent', () => {
     await i18n.changeLanguage('en')
     vi.clearAllMocks()
     useProjectStore.setState({ projects: [mockProject] })
+    useSettingsStore.setState({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        git: { ...DEFAULT_SETTINGS.git, reviewPresentation: 'separate' },
+      },
+    })
     useUiStore.setState({
       pendingSessionContext: { projectId: 'proj-1', branch: null },
       toasts: [],
@@ -150,6 +158,11 @@ describe('ReviewPanelContent', () => {
       },
       navigation: {
         navigate: mockNavigate,
+      },
+      settings: {
+        getSnapshot: () => useSettingsStore.getState().settings,
+        subscribe: (listener: any) => useSettingsStore.subscribe(listener),
+        setGitSettings: (partial: any) => useSettingsStore.getState().setGitSettings(partial),
       },
       process: {
         run: vi.fn(async () => ({ exitCode: 0, stdout: '', stderr: '' })),
@@ -346,6 +359,39 @@ describe('ReviewPanelContent', () => {
     await waitFor(() => {
       expect(container.textContent).toContain('prepared.body, _ = sjson.DeleteBytes(prepared.body, "stream")')
     })
+  })
+
+  it('binds diff view presentation style to settings.git.reviewPresentation and updates settings on toggle', async () => {
+    useSettingsStore.setState({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        git: { ...DEFAULT_SETTINGS.git, reviewPresentation: 'separate' },
+      },
+    })
+
+    render(
+      <I18nextProvider i18n={i18n}><HostServicesProvider services={mockServices}>
+        <ReviewPanelContent />
+      </HostServicesProvider></I18nextProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('diff-view-style-toggle')).toBeInTheDocument()
+    })
+
+    const toggleBtn = screen.getByTestId('diff-view-style-toggle')
+    // In separate/split mode, title prompts switching to unified view
+    expect(toggleBtn).toHaveAttribute('title', 'Unified view')
+
+    // Click toggle to switch to inline
+    fireEvent.click(toggleBtn)
+
+    expect(useSettingsStore.getState().settings.git?.reviewPresentation).toBe('inline')
+
+    // Click toggle again to switch back to separate
+    fireEvent.click(toggleBtn)
+
+    expect(useSettingsStore.getState().settings.git?.reviewPresentation).toBe('separate')
   })
 
   it('copies full diff to clipboard and shows diff copied toast', async () => {

@@ -21,6 +21,7 @@ import type { NotificationBadgeService } from '../../services/notificationBadgeS
 import type { EnvironmentWatcherService } from '../../services/environmentWatcherService.js'
 import type { ProfilingService } from '../../services/profilingService.js'
 import type { UpdateService } from '../../services/update/updateService.js'
+import type { GatewayDiscoveryService } from '../../services/gatewayDiscoveryService.js'
 import { getRequiredCapabilityForMethod } from '../../../shared/capabilityDescriptors.js'
 
 export interface PlatformRpcDescriptorOptions {
@@ -816,6 +817,20 @@ export function createPlatformRpcDescriptors(
             ipcChannel: 'update:getState',
             capability: cap('update:getState', 'system.update'),
             invoke: async (context) => getService<UpdateService>('updateService', context).getStatusSnapshot(),
+        },
+        // AI Gateway Discovery
+        {
+            method: 'gateway:discover',
+            aliases: ['GatewayDiscover'],
+            ipcChannel: 'gateway:discover',
+            capability: cap('gateway:discover', 'gateway.discover'),
+            invoke: async (context, args) => {
+                const timeoutMs = typeof args[0] === 'number' ? args[0] : 3000
+                return getService<GatewayDiscoveryService>(
+                    'gatewayDiscoveryService',
+                    context,
+                ).discover(timeoutMs)
+            },
         },
     ]
 

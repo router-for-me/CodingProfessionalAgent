@@ -17,6 +17,7 @@ import { ProfilingService } from '../../services/profilingService.js'
 import { PowerSaveService } from '../../services/powerSaveService.js'
 import { UpdateService } from '../../services/update/updateService.js'
 import { NotificationBadgeService } from '../../services/notificationBadgeService.js'
+import { GatewayDiscoveryService } from '../../services/gatewayDiscoveryService.js'
 import { PluginResourceService } from '../resources/PluginResourceService.js'
 import { PluginGraphManagementService } from '../management/PluginGraphManagementService.js'
 
@@ -40,6 +41,7 @@ export interface PlatformServiceDescriptorOptions {
     pluginResourceService?: PluginResourceService
     updateService?: UpdateService
     notificationBadgeService?: NotificationBadgeService
+    gatewayDiscoveryService?: GatewayDiscoveryService
 }
 
 export type CoreServiceDescriptorOptions = PlatformServiceDescriptorOptions
@@ -241,6 +243,11 @@ export function createPlatformServiceDescriptors(
             dispose: (service: WebServerService) => {
                 service.dispose()
             },
+        },
+        {
+            id: 'gatewayDiscoveryService',
+            dependencies: [],
+            create: () => options.gatewayDiscoveryService ?? new GatewayDiscoveryService(),
         },
         {
             id: 'powerSaveService',

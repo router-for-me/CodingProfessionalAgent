@@ -7,7 +7,6 @@ import {
 import {
     SettingsServiceToken,
     type GitMergeMethod,
-    type GitReviewPresentation,
     type GitSettings,
 } from '@cpa/plugin-api'
 import {
@@ -45,7 +44,6 @@ export function GitSection() {
     const mergeMethod = (git.mergeMethod ?? DEFAULT_GIT_SETTINGS.mergeMethod) as GitMergeMethod
     const alwaysForcePush = git.alwaysForcePush ?? DEFAULT_GIT_SETTINGS.alwaysForcePush
     const createDraftPr = git.createDraftPr ?? DEFAULT_GIT_SETTINGS.createDraftPr
-    const reviewPresentation = (git.reviewPresentation ?? DEFAULT_GIT_SETTINGS.reviewPresentation) as GitReviewPresentation
     const autoMergeWhenReady = git.autoMergeWhenReady ?? DEFAULT_GIT_SETTINGS.autoMergeWhenReady
     const autoMergeInstructions = git.autoMergeInstructions ?? ''
     const commitInstructions = git.commitInstructions ?? ''
@@ -147,42 +145,6 @@ export function GitSection() {
                             )}
                             onChange={(val) =>
                                 setGitSettings({ createDraftPr: val })
-                            }
-                        />
-                    }
-                />
-
-                <SettingsRow
-                    title={t('settings.git.reviewPresentation', 'Review presentation')}
-                    description={t(
-                        'settings.git.reviewPresentation.desc',
-                        'Launch /review in current chat where possible, or start separate review chat',
-                    )}
-                    control={
-                        <SegmentedControl<GitReviewPresentation>
-                            ariaLabel={t(
-                                'settings.git.reviewPresentation',
-                                'Review presentation',
-                            )}
-                            value={reviewPresentation}
-                            options={[
-                                {
-                                    value: 'inline',
-                                    label: t(
-                                        'settings.git.reviewPresentation.inline',
-                                        'Inline',
-                                    ),
-                                },
-                                {
-                                    value: 'separate',
-                                    label: t(
-                                        'settings.git.reviewPresentation.separate',
-                                        'Separate',
-                                    ),
-                                },
-                            ]}
-                            onChange={(val) =>
-                                setGitSettings({ reviewPresentation: val })
                             }
                         />
                     }

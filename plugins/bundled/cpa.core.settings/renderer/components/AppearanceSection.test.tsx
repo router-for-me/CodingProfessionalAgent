@@ -84,6 +84,26 @@ describe('AppearanceSection', () => {
         expect(useSettingsStore.getState().settings.fontSmoothing).toBe(false)
     })
 
+    it('renders review presentation option below font smoothing and updates git settings', async () => {
+        const user = userEvent.setup()
+        render(<AppearanceSection />)
+
+        expect(screen.getByText('Review presentation')).toBeInTheDocument()
+        const separateRadio = screen.getByRole('radio', { name: 'Separate' })
+        const inlineRadio = screen.getByRole('radio', { name: 'Inline' })
+
+        expect(separateRadio).toHaveAttribute('aria-checked', 'true')
+        expect(inlineRadio).toHaveAttribute('aria-checked', 'false')
+
+        await user.click(inlineRadio)
+        expect(useSettingsStore.getState().settings.git?.reviewPresentation).toBe('inline')
+        expect(inlineRadio).toHaveAttribute('aria-checked', 'true')
+
+        await user.click(separateRadio)
+        expect(useSettingsStore.getState().settings.git?.reviewPresentation).toBe('separate')
+        expect(separateRadio).toHaveAttribute('aria-checked', 'true')
+    })
+
     it('changes UI and Code font sizes via pixel inputs', async () => {
         const user = userEvent.setup()
         render(<AppearanceSection />)

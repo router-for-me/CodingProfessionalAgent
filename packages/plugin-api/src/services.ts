@@ -959,6 +959,27 @@ export interface PluginManagementService {
     refresh?(): Promise<void>
 }
 
+export interface DiscoveredGateway {
+    instanceName: string
+    host: string
+    port: number
+    addresses: string[]
+    primaryAddress: string
+    baseUrl: string
+    product?: string
+    version?: string
+    authRequired: boolean
+    authMethods?: string[]
+    protocols?: string[]
+    features?: string[]
+    endpoints?: Record<string, string>
+    rawTxt?: Record<string, string>
+}
+
+export interface GatewayDiscoveryService {
+    discover(timeoutMs?: number): Promise<DiscoveredGateway[]>
+}
+
 export interface ServiceToken<T = unknown> {
     readonly id: string
     readonly __serviceType?: T
@@ -991,6 +1012,7 @@ export const AgentRuntimeServiceToken = createServiceToken<AgentRunService>('hos
 export const SubAgentServiceToken = createServiceToken<SubAgentService>('host.services.subAgents')
 export const ModelCatalogServiceToken = createServiceToken<ModelCatalogService>('host.services.modelCatalog')
 export const RendererContributionsServiceToken = createServiceToken<RendererContributionsService>('host.services.rendererContributions')
+export const GatewayDiscoveryServiceToken = createServiceToken<GatewayDiscoveryService>('cpa.service.gateway-discovery')
 
 export const HOST_SERVICE_TOKENS = {
     sessions: SessionServiceToken,
@@ -1017,6 +1039,7 @@ export const HOST_SERVICE_TOKENS = {
     agentRuntime: AgentRuntimeServiceToken,
     subAgents: SubAgentServiceToken,
     rendererContributions: RendererContributionsServiceToken,
+    gatewayDiscovery: GatewayDiscoveryServiceToken,
 } as const
 
 export interface HostServices {
@@ -1042,4 +1065,5 @@ export interface HostServices {
     models?: ModelCatalogService
     rendererContributions?: RendererContributionsService
     subAgents?: SubAgentService
+    gatewayDiscovery?: GatewayDiscoveryService
 }

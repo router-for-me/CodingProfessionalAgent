@@ -132,6 +132,9 @@ export const RENDERER_CAPABILITY_DESCRIPTORS: readonly RendererCapabilityDescrip
     { name: 'UpdateCancel', method: 'update:cancel', capability: 'system.update' },
     { name: 'UpdateApply', method: 'update:apply', capability: 'system.update' },
     { name: 'UpdateGetState', method: 'update:getState', capability: 'system.update' },
+
+    // Gateway Discovery
+    { name: 'GatewayDiscover', method: 'gateway:discover', capability: 'gateway.discover' },
 ])
 
 export const rendererFacingDescriptorNames: readonly string[] = Object.freeze(

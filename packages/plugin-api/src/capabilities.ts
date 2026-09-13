@@ -2,6 +2,9 @@ import { PluginCapabilityError } from './errors.js'
 
 export type CapabilityId = string & {}
 
+/** Standard capability for AI Gateway network discovery via mDNS/DNS-SD */
+export const GATEWAY_DISCOVER_CAPABILITY = 'gateway.discover'
+
 export type CapabilityHandle = string & { readonly __capabilityHandle: unique symbol }
 
 export interface CapabilityInvocationContext {

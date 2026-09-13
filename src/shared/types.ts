@@ -55,6 +55,7 @@ import type {
   ResolvedPluginGraphDTO,
   ResolvedPluginNodeDTO,
   BlockedPluginDTO,
+  DiscoveredGateway,
 } from '@cpa/plugin-api'
 import type { UpdateStatusSnapshot } from './updateTypes.js'
 
@@ -115,6 +116,7 @@ export type {
   ResolvedPluginGraphDTO,
   ResolvedPluginNodeDTO,
   BlockedPluginDTO,
+  DiscoveredGateway,
 }
 
 export type NativeEventEncoding = 'utf8' | 'base64'
@@ -718,6 +720,9 @@ export interface ElectronBridgeApi {
   UpdateCancel(): Promise<void>
   UpdateApply(): Promise<void>
   UpdateGetState(): Promise<UpdateStatusSnapshot>
+
+  // AI Gateway Discovery
+  GatewayDiscover(timeoutMs?: number): Promise<DiscoveredGateway[]>
 
   // Event stream subscription
   onNativeEvent(callback: (event: NativeEvent) => void): () => void

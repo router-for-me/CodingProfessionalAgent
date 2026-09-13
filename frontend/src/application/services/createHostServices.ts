@@ -45,8 +45,13 @@ import type {
     ModelCatalogService,
     RendererContributionsService,
     SubAgentService,
+    GatewayDiscoveryService,
+    DiscoveredGateway,
 } from '@cpa/plugin-api'
-import { PluginManagementUnavailableError, getAppConfigDirName } from '@cpa/plugin-api'
+import {
+    PluginManagementUnavailableError,
+    getAppConfigDirName,
+} from '@cpa/plugin-api'
 import { setDefaultHostServices } from '@cpa/plugin-ui'
 import { isSessionResumable } from '@/features/agent-runtime/session/unfinished'
 import { rendererRegistry, type RendererRegistry } from '@/plugins/platform/rendererRegistry'
@@ -2276,6 +2281,13 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
 
     setWorktreeRunner(worktrees.setup)
 
+    const gatewayDiscoveryService: GatewayDiscoveryService = {
+        discover: async (timeoutMs = 3000) => {
+            const bridge = getHostBridge()
+            return (await bridge.GatewayDiscover(timeoutMs)) as DiscoveredGateway[]
+        },
+    }
+
     const hostServices: HostServices = {
         sessions,
         projects,
@@ -2312,6 +2324,7 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
         models: modelsService,
         rendererContributions,
         subAgents,
+        gatewayDiscovery: gatewayDiscoveryService,
     }
 
     setDefaultHostServices(hostServices)

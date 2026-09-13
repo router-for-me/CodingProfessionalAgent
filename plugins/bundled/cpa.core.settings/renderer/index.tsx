@@ -252,6 +252,12 @@ export const settingsRendererEntry = definePluginEntry({
                         keywords: ['font smoothing'],
                     },
                     {
+                        id: 'reviewPresentation',
+                        labelKey: 'settings.git.reviewPresentation',
+                        descriptionKey: 'settings.git.reviewPresentation.desc',
+                        keywords: ['review presentation', 'diff'],
+                    },
+                    {
                         id: 'import',
                         labelKey: 'settings.appearance.import',
                         keywords: ['import theme'],
@@ -431,12 +437,6 @@ export const settingsRendererEntry = definePluginEntry({
                         labelKey: 'settings.git.createDraftPr',
                         descriptionKey: 'settings.git.createDraftPr.desc',
                         keywords: ['draft pr'],
-                    },
-                    {
-                        id: 'reviewPresentation',
-                        labelKey: 'settings.git.reviewPresentation',
-                        descriptionKey: 'settings.git.reviewPresentation.desc',
-                        keywords: ['review presentation'],
                     },
                     {
                         id: 'monitorAndFixPr',

@@ -5,11 +5,17 @@ import {
     GitCompare,
     RefreshCw,
     useTranslation,
+    useHostService,
     useHostServices,
     useProjects,
     useSessions,
+    useSettings,
     cn,
 } from '@cpa/plugin-ui'
+import {
+    SettingsServiceToken,
+    type GitReviewPresentation,
+} from '@cpa/plugin-api'
 import { useNavigate } from '@tanstack/react-router'
 import { rendererEventBus } from '@/plugins/platform/eventBus'
 import {
@@ -136,10 +142,18 @@ export function ReviewPanelContent({
     const [compareTarget, setCompareTarget] = useState<string>(initialCompareTarget)
     const [compareMode, setCompareMode] = useState<'workingTree' | 'branch'>(initialCompareMode)
 
+    const settings = useSettings()
+    const settingsService = useHostService(SettingsServiceToken)
+    const reviewPresentation = (settings?.git?.reviewPresentation ?? 'separate') as GitReviewPresentation
+    const [fallbackSplitView, setFallbackSplitView] = useState<boolean | null>(null)
+    const isSplitView =
+        settingsService?.setGitSettings
+            ? reviewPresentation === 'separate'
+            : (fallbackSplitView ?? reviewPresentation === 'separate')
+
     const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null)
     const [sidebarOpen, setSidebarOpen] = useState(true)
     const [allExpanded, setAllExpanded] = useState(true)
-    const [isSplitView, setIsSplitView] = useState(false)
     const [userViewMode, setUserViewMode] = useState<'single' | 'all' | null>(null)
     const [compareModalOpen, setCompareModalOpen] = useState(false)
     const [flashingFilePath, setFlashingFilePath] = useState<string | null>(null)
@@ -401,6 +415,15 @@ export function ReviewPanelContent({
         }
     }
 
+    const handleToggleSplitView = useCallback(() => {
+        const nextPresentation: GitReviewPresentation = isSplitView ? 'inline' : 'separate'
+        if (settingsService?.setGitSettings) {
+            settingsService.setGitSettings({ reviewPresentation: nextPresentation })
+        } else {
+            setFallbackSplitView(!isSplitView)
+        }
+    }, [isSplitView, settingsService])
+
     const handleCopyDiff = () => {
         if (summary.rawDiff) {
             if (services?.ui?.writeClipboard) {
@@ -566,7 +589,7 @@ export function ReviewPanelContent({
                 isLoading={isLoading}
                 onToggleSidebar={() => setSidebarOpen((v) => !v)}
                 onToggleAllExpanded={() => setAllExpanded((v) => !v)}
-                onToggleSplitView={() => setIsSplitView((v) => !v)}
+                onToggleSplitView={handleToggleSplitView}
                 onToggleSingleFileMode={() =>
                     setUserViewMode(isSingleFileMode ? 'all' : 'single')
                 }

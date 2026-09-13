@@ -23,6 +23,7 @@ import { ProfilingService } from '../services/profilingService.js'
 import { PowerSaveService } from '../services/powerSaveService.js'
 import { UpdateService } from '../services/update/updateService.js'
 import { NotificationBadgeService } from '../services/notificationBadgeService.js'
+import { GatewayDiscoveryService } from '../services/gatewayDiscoveryService.js'
 import { PluginResourceService } from '../plugins/resources/PluginResourceService.js'
 import { MainContributionRegistry } from '../plugins/contributions/MainContributionRegistry.js'
 import { createPlatformServiceDescriptors } from '../plugins/contributions/serviceDescriptors.js'
@@ -51,6 +52,7 @@ export interface CreateServicesOptions {
   pluginGraphManagementService?: PluginGraphManagementService
   updateService?: UpdateService
   notificationBadgeService?: NotificationBadgeService
+  gatewayDiscoveryService?: GatewayDiscoveryService
 }
 
 export interface AppServices {
@@ -73,6 +75,7 @@ export interface AppServices {
   profilingService: ProfilingService
   powerSaveService: PowerSaveService
   updateService: UpdateService
+  gatewayDiscoveryService: GatewayDiscoveryService
   registry: MainContributionRegistry
   pluginRuntimeHost?: MainPluginRuntimeHost
   pluginActivationCoordinator?: MainPluginActivationCoordinator
@@ -201,6 +204,7 @@ export function createServices(
     pluginGraphManagementService: options?.pluginGraphManagementService,
     updateService: options?.updateService,
     notificationBadgeService: options?.notificationBadgeService,
+    gatewayDiscoveryService: options?.gatewayDiscoveryService,
   })
 
   for (const descriptor of serviceDescriptors) {
@@ -343,6 +347,7 @@ export function createServices(
     profilingService: registry.getService<ProfilingService>('profilingService'),
     powerSaveService: registry.getService<PowerSaveService>('powerSaveService'),
     updateService: registry.getService<UpdateService>('updateService'),
+    gatewayDiscoveryService: registry.getService<GatewayDiscoveryService>('gatewayDiscoveryService'),
     registry,
     pluginRuntimeHost: options?.pluginRuntimeHost,
     pluginActivationCoordinator: options?.pluginActivationCoordinator,

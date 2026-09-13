@@ -36,6 +36,8 @@ export {
     type ComposerImage,
     type ComposerRunStatus,
     type ComposerAttachmentKind,
+    type GatewayDiscoveryService,
+    type DiscoveredGateway,
     SessionServiceToken,
     ProjectServiceToken,
     SettingsServiceToken,
@@ -58,5 +60,6 @@ export {
     AgentRunServiceToken,
     AgentRuntimeServiceToken,
     SubAgentServiceToken,
+    GatewayDiscoveryServiceToken,
     HOST_SERVICE_TOKENS,
 } from '@cpa/plugin-api'

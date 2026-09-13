@@ -15,7 +15,14 @@ import { useSessionRunStore } from '@/stores/sessionRunStore'
 import { useMessageStore } from '@/stores/messageStore'
 import { useUiStore } from '@/stores/uiStore'
 import { useSkillUsageStore } from '@/stores/skillUsageStore'
-import { type HookConfiguration, PluginManagementUnavailableError } from '@cpa/plugin-api'
+import {
+    type HookConfiguration,
+    PluginManagementUnavailableError,
+    GatewayDiscoveryServiceToken,
+    type DiscoveredGateway,
+} from '@cpa/plugin-api'
+import { useHostService } from '@cpa/plugin-ui'
+import { renderHook } from '@testing-library/react'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
@@ -739,5 +746,33 @@ describe('createHostServices', () => {
         expect(session?.worktreeSetup?.status).toBe('ready')
         expect(session?.worktreeSetup?.branch).toBe('feat/test')
         expect(session?.workLocation).toBe('worktree')
+    })
+
+    it('registers gatewayDiscoveryService and delegates discover call to bridge.GatewayDiscover', async () => {
+        const mockGateways: DiscoveredGateway[] = [
+            {
+                instanceName: 'Test CPA',
+                host: 'cpa.local',
+                port: 8317,
+                addresses: ['192.168.1.100'],
+                primaryAddress: '192.168.1.100',
+                baseUrl: 'http://192.168.1.100:8317',
+                product: 'cliproxyapi',
+                authRequired: true,
+            },
+        ]
+        const gatewayDiscover = vi.fn().mockResolvedValue(mockGateways)
+        setHostBridge({ GatewayDiscover: gatewayDiscover } as any)
+
+        const services = createHostServices()
+        expect(services.gatewayDiscovery).toBeDefined()
+
+        const result = await services.gatewayDiscovery!.discover(2500)
+        expect(gatewayDiscover).toHaveBeenCalledWith(2500)
+        expect(result).toEqual(mockGateways)
+
+        // Verify GatewayDiscoveryServiceToken resolution via HostServices
+        const { result: hookResult } = renderHook(() => useHostService(GatewayDiscoveryServiceToken))
+        expect(hookResult.current).toBe(services.gatewayDiscovery)
     })
 })

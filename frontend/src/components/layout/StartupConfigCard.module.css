@@ -26,11 +26,250 @@
     gap: 0.65em;
 }
 
+.fieldHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5em;
+}
+
 .label {
     padding-inline: 0.2em;
     color: var(--text-secondary);
     font-size: 0.86em;
     letter-spacing: 0.015em;
+}
+
+.optionalBadge {
+    color: var(--text-muted);
+    font-size: 0.82em;
+    font-weight: normal;
+    margin-left: 0.4em;
+}
+
+.rescanButton {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35em;
+    padding: 0.25em 0.55em;
+    border: 1px solid var(--border-subtle);
+    border-radius: 0.55em;
+    background: transparent;
+    color: var(--text-secondary);
+    font-family: inherit;
+    font-size: 0.78em;
+    cursor: pointer;
+    transition: all 120ms ease;
+}
+
+.rescanButton:hover:not(:disabled) {
+    background: var(--bg-sidebar-hover);
+    color: var(--text-primary);
+    border-color: color-mix(in srgb, var(--accent-blue) 40%, var(--border-subtle));
+}
+
+.rescanButton:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
+.scanningIndicator {
+    display: flex;
+    align-items: center;
+    gap: 0.5em;
+    padding: 0.5em 0.75em;
+    border-radius: 0.65em;
+    background: color-mix(in srgb, var(--accent-blue) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-blue) 25%, transparent);
+    color: var(--text-secondary);
+    font-size: 0.82em;
+    line-height: 1.4;
+}
+
+.noticeRow {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5em;
+    padding: 0.45em 0.75em;
+    border-radius: 0.65em;
+    background: color-mix(in srgb, var(--text-muted) 10%, transparent);
+    color: var(--text-secondary);
+    font-size: 0.82em;
+}
+
+.noticeText {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.gatewaySelectorWrapper {
+    position: relative;
+    width: 100%;
+}
+
+.gatewayTrigger {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75em;
+    width: 100%;
+    min-height: 3.4em;
+    padding: 0.55em 0.9em;
+    border: 1px solid var(--border-subtle);
+    border-radius: 0.95em;
+    background: color-mix(in srgb, var(--bg-app) 70%, var(--bg-elevated));
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 0.93em;
+    text-align: left;
+    cursor: pointer;
+    box-shadow: inset 0 1px 2px var(--bg-card);
+    transition: border-color 150ms ease, background-color 150ms ease;
+}
+
+.gatewayTrigger:hover {
+    background: color-mix(in srgb, var(--bg-app) 50%, var(--bg-elevated));
+    border-color: color-mix(in srgb, var(--accent-blue) 50%, var(--border-subtle));
+}
+
+.gatewayTrigger:focus-visible {
+    border-color: color-mix(in srgb, var(--accent-blue) 70%, var(--border-subtle));
+    outline: 3px solid color-mix(in srgb, var(--accent-blue) 12%, transparent);
+    outline-offset: 1px;
+}
+
+.gatewayTriggerContent {
+    display: flex;
+    align-items: center;
+    gap: 0.65em;
+    min-width: 0;
+    flex: 1;
+}
+
+.gatewayTriggerMain {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15em;
+    min-width: 0;
+    flex: 1;
+}
+
+.gatewayNameRow {
+    display: flex;
+    align-items: center;
+    gap: 0.45em;
+    min-width: 0;
+}
+
+.gatewayName {
+    font-weight: var(--font-weight-ui, 500);
+    color: var(--text-primary);
+    font-size: 0.95em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.gatewayAddress {
+    color: var(--text-muted);
+    font-size: 0.8em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.gatewayBadges {
+    display: flex;
+    align-items: center;
+    gap: 0.35em;
+    flex-shrink: 0;
+}
+
+.productBadge {
+    padding: 0.15em 0.45em;
+    border-radius: 0.4em;
+    background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-secondary);
+    font-size: 0.72em;
+    font-weight: var(--font-weight-ui, 500);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    line-height: 1.2;
+}
+
+.authBadge {
+    padding: 0.15em 0.45em;
+    border-radius: 0.4em;
+    font-size: 0.72em;
+    font-weight: var(--font-weight-ui, 500);
+    line-height: 1.2;
+}
+
+.authBadgeRequired {
+    background: color-mix(in srgb, var(--accent-orange) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-orange) 30%, transparent);
+    color: var(--accent-orange);
+}
+
+.authBadgeNone {
+    background: color-mix(in srgb, var(--accent-green) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-green) 30%, transparent);
+    color: var(--accent-green);
+}
+
+.gatewayMenu {
+    position: fixed;
+    z-index: 10001;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    padding: 0.35em;
+    border: 1px solid var(--border-subtle);
+    border-radius: 0.95em;
+    background: var(--bg-elevated);
+    box-shadow: 0 12px 32px -8px rgba(0, 0, 0, 0.45), 0 4px 12px -2px rgba(0, 0, 0, 0.25);
+    backdrop-filter: blur(24px);
+}
+
+.gatewayOption {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6em;
+    width: 100%;
+    padding: 0.55em 0.75em;
+    border: 0;
+    border-radius: 0.65em;
+    background: transparent;
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 0.88em;
+    text-align: left;
+    cursor: pointer;
+    transition: background-color 100ms ease;
+}
+
+.gatewayOption:hover,
+.gatewayOption[data-highlighted="true"] {
+    background: var(--bg-sidebar-hover);
+}
+
+.gatewayOption[aria-selected="true"] {
+    background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
+}
+
+.gatewayOption[aria-selected="true"]:hover,
+.gatewayOption[aria-selected="true"][data-highlighted="true"] {
+    background: color-mix(in srgb, var(--accent-blue) 18%, transparent);
+}
+
+.gatewayDivider {
+    height: 1px;
+    margin: 0.3em 0.4em;
+    background: var(--border-subtle);
 }
 
 .inputWell {

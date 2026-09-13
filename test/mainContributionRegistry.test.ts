@@ -75,6 +75,7 @@ export const existingIpcChannelSnapshot = [
     'update:cancel',
     'update:apply',
     'update:getState',
+    'gateway:discover',
 ]
 
 export const existingRpcMethodSnapshot = [
@@ -210,6 +211,8 @@ export const existingRpcMethodSnapshot = [
     'update:getState',
     'GetUpdateState',
     'UpdateGetState',
+    'gateway:discover',
+    'GatewayDiscover',
 ]
 
 describe('MainContributionRegistry & Descriptors', () => {

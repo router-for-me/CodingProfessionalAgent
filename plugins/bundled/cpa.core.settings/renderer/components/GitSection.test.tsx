@@ -39,8 +39,8 @@ describe('GitSection', () => {
             'true',
         )
 
-        // Check review presentation
-        expect(screen.getByRole('radio', { name: 'Separate' })).toHaveAttribute('aria-checked', 'true')
+        // Review presentation should not be in Git section
+        expect(screen.queryByText('Review presentation')).not.toBeInTheDocument()
 
         // Check auto merge section
         expect(screen.getByText('Monitor and fix Pull Requests')).toBeInTheDocument()
