@@ -1,0 +1,22 @@
+{
+    "id": "cpa.core.web-search",
+    "name": "Web Search",
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "description": "Delegate web searches to an independently configured native search model",
+    "engines": { "cpa": ">=1.0.0" },
+    "entries": {
+        "agent": "./agent/index.ts",
+        "renderer": "./renderer/index.tsx"
+    },
+    "activationPriority": 170,
+    "dependencies": {
+        "cpa.core.settings": ">=1.0.0",
+        "cpa.core.protocol-codex": ">=1.0.0"
+    },
+    "capabilities": ["storage.kv", "models.invoke"],
+    "contributes": {
+        "tool-factory": ["web_search"],
+        "settings": ["web-search"]
+    }
+}

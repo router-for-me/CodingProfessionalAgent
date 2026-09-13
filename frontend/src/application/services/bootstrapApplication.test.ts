@@ -50,7 +50,7 @@ describe('bootstrapApplication', () => {
         expect(rendererRegistry.getSlotContributions('chat.message.header')).toHaveLength(1)
         expect(rendererRegistry.getSlotContributions('layout.bottom_panel.content')).toHaveLength(1)
         expect(rendererRegistry.getSlotContributions('layout.right_panel.content')).toHaveLength(1)
-        expect(rendererRegistry.getSettingsSections()).toHaveLength(14)
+        expect(rendererRegistry.getSettingsSections()).toHaveLength(15)
         expect(rendererRegistry.getSettingsSections().some((s) => s.id === 'subagents')).toBe(true)
     })
 

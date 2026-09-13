@@ -866,6 +866,37 @@ export const bundledManifests: Readonly<Record<string, PluginManifest>> = Object
                 ]
         }
 }),
+    'cpa.core.web-search': Object.freeze({
+        "id": "cpa.core.web-search",
+        "name": "Web Search",
+        "version": "1.0.0",
+        "apiVersion": "1.0.0",
+        "description": "Delegate web searches to an independently configured native search model",
+        "engines": {
+                "cpa": ">=1.0.0"
+        },
+        "entries": {
+                "agent": "./agent/index.ts",
+                "renderer": "./renderer/index.tsx"
+        },
+        "activationPriority": 170,
+        "dependencies": {
+                "cpa.core.settings": ">=1.0.0",
+                "cpa.core.protocol-codex": ">=1.0.0"
+        },
+        "capabilities": [
+                "storage.kv",
+                "models.invoke"
+        ],
+        "contributes": {
+                "tool-factory": [
+                        "web_search"
+                ],
+                "settings": [
+                        "web-search"
+                ]
+        }
+}),
 })
 
 /**
@@ -1004,6 +1035,12 @@ export const bundledRendererPackages: readonly ResolvedPluginPackage[] = Object.
         sourceRoot: 'plugins/bundled/cpa.core.memories',
         source: Object.freeze({ kind: 'bundled' as const, spec: 'bundled:cpa.core.memories' }),
     }),
+    Object.freeze({
+        manifest: bundledManifests['cpa.core.web-search'],
+        entries: bundledManifests['cpa.core.web-search'].entries ?? {},
+        sourceRoot: 'plugins/bundled/cpa.core.web-search',
+        source: Object.freeze({ kind: 'bundled' as const, spec: 'bundled:cpa.core.web-search' }),
+    }),
 ])
 
 /**
@@ -1063,6 +1100,12 @@ export const bundledAgentPackages: readonly ResolvedPluginPackage[] = Object.fre
         entries: bundledManifests['cpa.core.memories'].entries ?? {},
         sourceRoot: 'plugins/bundled/cpa.core.memories',
         source: Object.freeze({ kind: 'bundled' as const, spec: 'bundled:cpa.core.memories' }),
+    }),
+    Object.freeze({
+        manifest: bundledManifests['cpa.core.web-search'],
+        entries: bundledManifests['cpa.core.web-search'].entries ?? {},
+        sourceRoot: 'plugins/bundled/cpa.core.web-search',
+        source: Object.freeze({ kind: 'bundled' as const, spec: 'bundled:cpa.core.web-search' }),
     }),
 ])
 
@@ -1150,6 +1193,10 @@ export const bundledRendererEntryLoaders: Readonly<Record<string, BundledEntryLo
         const mod = await import('../../../../plugins/bundled/cpa.core.memories/renderer/index')
         return mod.default ?? mod.entry ?? mod
     },
+    'cpa.core.web-search': async () => {
+        const mod = await import('../../../../plugins/bundled/cpa.core.web-search/renderer/index')
+        return mod.default ?? mod.entry ?? mod
+    },
 })
 
 /**
@@ -1191,6 +1238,10 @@ export const bundledAgentEntryLoaders: Readonly<Record<string, BundledEntryLoade
     },
     'cpa.core.memories': async () => {
         const mod = await import('../../../../plugins/bundled/cpa.core.memories/agent/index')
+        return mod.default ?? mod.entry ?? mod
+    },
+    'cpa.core.web-search': async () => {
+        const mod = await import('../../../../plugins/bundled/cpa.core.web-search/agent/index')
         return mod.default ?? mod.entry ?? mod
     },
 })

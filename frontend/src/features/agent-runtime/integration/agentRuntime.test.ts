@@ -28,6 +28,7 @@ import { rendererRegistry as defaultExtensionRegistry, RendererRegistry as Exten
 import { subagentAgentEntry } from '../../../../../plugins/bundled/cpa.core.subagent/agent/index'
 import { toolsAgentEntry } from '../../../../../plugins/bundled/cpa.core.tools/agent/index'
 import { resourcesAgentEntry } from '../../../../../plugins/bundled/cpa.core.resources/agent/index'
+import { entry as webSearchAgentEntry } from '../../../../../plugins/bundled/cpa.core.web-search/agent/index'
 import type { ProtocolMiddleware } from '@cpa/plugin-api'
 import type {
     AssistantEntry,
@@ -598,6 +599,57 @@ describe('agent runtime end-to-end integration', () => {
         vi.useRealTimers()
     })
 
+    it('delegates A function call to isolated native-search B and returns findings with A call ID', async () => {
+        const searchModel = { ...textOnlyModel, id: 'native-search-B', cpaCapabilities: { webSearch: true } }
+        webSearchAgentEntry.activate({
+            capabilityClient: { invoke: async () => ({ enabled: true, modelId: searchModel.id }) },
+            getService: () => ({ getModels: () => [textOnlyModel, searchModel], getStatus: () => 'ready' }),
+            register: (contribution: any) => defaultExtensionRegistry.registerToolFactory(contribution.value),
+        } as any)
+        const { service, bridge } = createHarness()
+        seedOpenSocket(bridge)
+        seedOpenSocket(bridge)
+        bridge.queueWebSocketSendResponse(functionCallFrames('response-A', [{ callId: 'call_A', itemId: 'fc_A', name: 'web_search', args: { query: 'latest release' }, outputIndex: 0 }]))
+        bridge.queueWebSocketSendResponse([{ kind: 'websocket-text', data: JSON.stringify({ type: 'response.completed', response: {
+            id: 'response-B', status: 'completed', usage: { input_tokens: 9, output_tokens: 2, total_tokens: 11 },
+            output: [
+                { id: 'ws_B', type: 'web_search_call', status: 'completed', action: { type: 'search', sources: [{ url: 'https://example.org/releases', title: 'Release notes' }] } },
+                { id: 'msg_B', type: 'message', content: [{ type: 'output_text', text: 'The new release is available.' }] },
+            ],
+        } }) }])
+        bridge.queueWebSocketSendResponse(textFrames('response-A-final', 'Here is the latest release.', 7))
+        const prepared = await service.prepare({ baseUrl: BASE_URL, apiKey: API_KEY, modelId: textOnlyModel.id, models: [textOnlyModel, searchModel], reasoningLevel: 'medium', speed: 'standard', projectPath: PROJECT, requestApproval: false })
+        const events = await collect(service.streamChat({ prepared, runId: 'search-run', sessionId: 'search-session', entries: [], userEntry: userEntry('search-user', 'PRIVATE conversation context; get the latest release.', 'search-session') }))
+        const bodies = parseSentBodies(bridge)
+        expect(bodies).toHaveLength(3)
+        const [first, isolated, last] = bodies
+        expect(first.model).toBe(textOnlyModel.id)
+        expect(isolated.model).toBe(searchModel.id)
+        expect(isolated.tools).toEqual([{ type: 'web_search' }])
+        expect(isolated.tool_choice).toBe('required')
+        expect(isolated.store).toBe(false)
+        expect(isolated.previous_response_id).toBeUndefined()
+        expect(isolated.prompt_cache_key).not.toBe(first.prompt_cache_key)
+        expect(isolated.input).toHaveLength(1)
+        expect(JSON.stringify(isolated.input)).toContain('latest release')
+        expect(JSON.stringify(isolated)).not.toContain('PRIVATE')
+        expect(JSON.stringify(isolated)).not.toContain(PROJECT)
+        expect(last.model).toBe(textOnlyModel.id)
+        const output = last.input.find((item: any) => item.type === 'function_call_output') as any
+        expect(output.call_id).toBe('call_A')
+        expect(output.output).toContain('The new release is available.')
+        expect(output.output).not.toContain('ws_B')
+        const ended = events.find((event) => event.type === 'tool-end' && event.toolName === 'web_search')
+        expect(ended?.type).toBe('tool-end')
+        if (ended?.type === 'tool-end') {
+            expect(ended.result.isError).toBe(false)
+            expect(ended.entry?.isolatedModelInvocations).toEqual([expect.objectContaining({ model: searchModel.id, parentToolCallId: ended.toolCallId, usage: expect.objectContaining({ totalTokens: 11 }) })])
+        }
+        const final = events.filter((event) => event.type === 'assistant-end').slice(-1)[0]
+        expect(final?.type === 'assistant-end' && final.entry.content).toEqual([expect.objectContaining({ type: 'text', text: 'Here is the latest release.' })])
+        await service.dispose()
+    })
+
     it('happy path: read → edit+bash with approval → ordered outputs → final text/usage', async () => {
         const { service, bridge } = createHarness()
         const original = 'alpha line\nbeta line\n'
@@ -850,9 +902,11 @@ describe('agent runtime end-to-end integration', () => {
         )
 
         const bodies = parseSentBodies(bridge)
-        expect(bodies[0]!.tools?.map((t) => t.name)).toEqual([
-            'title',
-        ])
+        expect(
+            bodies[0]!.tools
+                ?.filter((tool): tool is Extract<typeof tool, { name: string }> => 'name' in tool)
+                .map((tool) => tool.name),
+        ).toEqual(['title'])
         expect(events.some((e) => e.type === 'assistant-end')).toBe(true)
         service.dispose()
     })
