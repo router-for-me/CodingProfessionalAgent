@@ -21,7 +21,7 @@ function runRg(pattern: string, searchPaths: string[] = ['src', 'frontend/src', 
     ]
 
     try {
-        const output = execFileSync('/opt/homebrew/bin/rg', args, { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 }).trim()
+        const output = execFileSync('rg', args, { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 }).trim()
         return output ? output.split('\n') : []
     } catch (err: any) {
         // rg exits with 1 if no matches found
