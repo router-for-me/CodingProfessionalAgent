@@ -206,6 +206,10 @@ function collectAnnotations(output: AssistantEntry, value: unknown, depth = 0): 
     }
 }
 
+function mergeReturnedItems(previous: unknown[], current: unknown[]): unknown[] {
+    return [...new Map([...previous, ...current].map((value) => [JSON.stringify(value), value])).values()]
+}
+
 function upsertNativeToolCall(output: AssistantEntry, item: Record<string, unknown>): void {
     if (item.type !== 'web_search_call') return
     const cloned = deepCloneJson(item)
@@ -215,7 +219,28 @@ function upsertNativeToolCall(output: AssistantEntry, item: Record<string, unkno
         ? existing.findIndex((candidate) => candidate.type === cloned.type && candidate.id === id)
         : existing.findIndex((candidate) => jsonIdentity(candidate) === jsonIdentity(cloned))
     if (index >= 0) {
-        existing[index] = cloned
+        const previous = existing[index]!
+        // Terminal copies can be sparse. Do not discard already-returned search
+        // results or errors when the final response repeats only the item ID/status.
+        existing[index] = {
+            ...previous,
+            ...cloned,
+            ...(isRecord(previous.action) && isRecord(cloned.action)
+                ? { action: {
+                    ...previous.action, ...cloned.action,
+                    ...(Array.isArray(previous.action.sources) && Array.isArray(cloned.action.sources)
+                        ? { sources: mergeReturnedItems(previous.action.sources, cloned.action.sources) }
+                        : {}),
+                } }
+                : {}),
+            ...(Array.isArray(previous.results) && Array.isArray(cloned.results)
+                ? { results: mergeReturnedItems(previous.results, cloned.results) }
+                : isRecord(previous.results) ? { results: previous.results } : {}),
+            ...(previous.error ? { error: previous.error } : {}),
+            ...(['failed', 'incomplete'].includes(String(previous.status))
+                ? { status: previous.status }
+                : {}),
+        }
     } else {
         if (existing.length >= 64) throw new Error('Response native tool limit exceeded')
         existing.push(cloned)

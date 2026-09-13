@@ -523,6 +523,17 @@ describe('parseCodexEvents', () => {
         })
     })
 
+    it('retains earlier native results, sources and errors when final copies are sparse', async () => {
+        const source = { url: 'https://example.org/' }
+        const nativeError = { type: 'web_search_tool_result_error', error_code: 'unavailable' }
+        const search = { id: 'ws-B', type: 'web_search_call', status: 'failed', results: [nativeError], action: { sources: [source] } }
+        const { result } = await collect(parseCodexEvents(asAsync([
+            { type: 'response.output_item.done', output_index: 0, item: search },
+            { type: 'response.completed', response: { status: 'completed', output: [{ id: 'ws-B', type: 'web_search_call', status: 'completed', results: [], action: { sources: [] } }] } },
+        ]), seedAssistant()))
+        expect(result?.nativeToolCalls).toEqual([search])
+    })
+
     it('hydrates terminal-only findings and does not duplicate finalized text', async () => {
         const message = { id: 'msg-B', type: 'message', content: [{ type: 'output_text', text: 'Final findings' }] }
         const search = { id: 'ws-B', type: 'web_search_call', status: 'completed' }
