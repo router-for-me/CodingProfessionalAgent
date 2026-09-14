@@ -1,6 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import type { ModelCatalogService, PluginCapabilityClient } from '@cpa/plugin-api'
-import { CustomSelect, useTranslation } from '@cpa/plugin-ui'
+import { Info } from 'lucide-react'
+import { CustomSelect, ToggleSwitch, useTranslation } from '@cpa/plugin-ui'
 import { parseSettings, SETTINGS_KEY, type WebSearchSettings } from '../shared/types.js'
 
 const noopSubscribe = () => () => {}
@@ -42,21 +43,67 @@ export function SearchSettings({ client, catalog }: { client?: PluginCapabilityC
         finally { setBusy(false) }
     }
 
-    return <section className="space-y-5 text-[var(--text-primary)] font-[inherit]" aria-label={t('webSearch.title')}>
-        <div>
-            <h2 className="text-[1.15em] font-[inherit]">{t('webSearch.title')}</h2>
-            <p className="mt-2 text-[var(--text-secondary)]">{t('webSearch.description')}</p>
-        </div>
-        <label className="flex items-center justify-between gap-4 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4">
-            <span>{t('webSearch.enable')}</span>
-            <input type="checkbox" checked={settings.enabled} disabled={busy || !client} onChange={(event) => { void save({ enabled: event.target.checked }) }} />
-        </label>
-        <div className="space-y-2">
-            <p>{t('webSearch.model')}</p>
-            <CustomSelect value={settings.modelId} options={options} ariaLabel={t('webSearch.model')} fullWidth disabled={busy || !client || !ready} onChange={(modelId) => { void save({ modelId }) }} />
-        </div>
-        {(!ready || !candidates.length || (settings.enabled && !valid)) && <p role="status" className="text-[var(--text-muted)]">{t('webSearch.noModels')}</p>}
-        <p className="text-[var(--text-muted)]">{t('webSearch.privacy')}</p>
-        {error && <p role="alert" className="text-[var(--text-primary)]">{t('webSearch.settingsError')}</p>}
+    return <section className="mx-auto w-full max-w-[760px] space-y-6 px-8 pb-12 pt-8 font-[inherit] text-[var(--text-primary)] select-none" aria-label={t('webSearch.title')}>
+        <header>
+            <h1 className="text-[22px] font-semibold tracking-tight text-[var(--text-primary)]">
+                {t('webSearch.title')}
+            </h1>
+            <p className="mt-1 text-[13px] leading-relaxed text-[var(--text-muted)]">
+                {t('webSearch.description')}
+            </p>
+        </header>
+
+        <section className="space-y-2">
+            <h2 className="px-0.5 text-[12px] font-medium text-[var(--text-secondary)]">
+                {t('webSearch.configuration')}
+            </h2>
+            <div className="overflow-hidden rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)]">
+                <div className="flex items-start gap-4 border-b border-[var(--border-subtle)] px-3.5 py-3">
+                    <div className="min-w-0 flex-1">
+                        <h3 className="text-[13px] font-medium text-[var(--text-primary)]">{t('webSearch.enable')}</h3>
+                        <p className="mt-0.5 text-[12px] leading-relaxed text-[var(--text-muted)]">{t('webSearch.enableHint')}</p>
+                    </div>
+                    <div className="flex shrink-0 items-center pt-0.5">
+                        <ToggleSwitch label={t('webSearch.enable')} checked={settings.enabled} disabled={busy || !client} onChange={(enabled) => { void save({ enabled }) }} />
+                    </div>
+                </div>
+
+                <div className="flex items-start gap-4 px-3.5 py-3">
+                    <div className="min-w-0 flex-1">
+                        <h3 className="text-[13px] font-medium text-[var(--text-primary)]">{t('webSearch.model')}</h3>
+                        <p className="mt-0.5 text-[12px] leading-relaxed text-[var(--text-muted)]">{t('webSearch.modelHint')}</p>
+                    </div>
+                    <CustomSelect
+                        value={settings.modelId}
+                        options={options}
+                        ariaLabel={t('webSearch.model')}
+                        className="w-[260px] shrink-0"
+                        triggerClassName="w-full justify-between"
+                        disabled={busy || !client || !ready}
+                        onChange={(modelId) => { void save({ modelId }) }}
+                    />
+                </div>
+
+                {(!ready || !candidates.length || (settings.enabled && !valid)) && <div role="status" className="flex items-start gap-2 border-t border-[var(--border-subtle)] px-3.5 py-2.5 text-[12px] leading-relaxed text-[var(--text-muted)]">
+                    <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+                    <p>{t(!ready ? 'webSearch.catalogPending' : 'webSearch.noModels')}</p>
+                </div>}
+            </div>
+        </section>
+
+        <section className="space-y-2">
+            <h2 className="px-0.5 text-[12px] font-medium text-[var(--text-secondary)]">
+                {t('webSearch.privacyTitle')}
+            </h2>
+            <aside className="space-y-1 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3.5 py-3 text-[12px] leading-relaxed text-[var(--text-muted)]" aria-label={t('webSearch.privacyTitle')}>
+                <p>{t('webSearch.privacy')}</p>
+                <p>{t('webSearch.approvalHint')}</p>
+            </aside>
+        </section>
+
+        {error && <div role="alert" className="flex items-start gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3.5 py-3 text-[12px] leading-relaxed text-[var(--text-secondary)]">
+            <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+            <p>{t('webSearch.settingsError')}</p>
+        </div>}
     </section>
 }
