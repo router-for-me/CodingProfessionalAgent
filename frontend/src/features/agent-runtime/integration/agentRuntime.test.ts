@@ -1249,11 +1249,21 @@ describe('agent runtime end-to-end integration', () => {
         const secondInput = JSON.stringify(bodies[1]!.input)
         expect(secondInput).toMatch(/function_call_output|input_image|image/)
 
+        const readEnd = events.find(
+            (e) =>
+                e.type === 'tool-end' &&
+                (e as { toolName?: string }).toolName === 'read',
+        ) as {
+            type: 'tool-end'
+            toolName: string
+            isError?: boolean
+            result: { content: Array<{ type: string; data?: string; mimeType?: string }> }
+        } | undefined
+        expect(readEnd).toBeDefined()
+        expect(readEnd!.isError).not.toBe(true)
         expect(
-            events.some(
-                (e) =>
-                    e.type === 'tool-end' &&
-                    (e as { toolName?: string }).toolName === 'read',
+            readEnd!.result.content.some(
+                (block) => block.type === 'image' && typeof block.data === 'string' && block.data.length > 0,
             ),
         ).toBe(true)
         service.dispose()

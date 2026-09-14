@@ -25,10 +25,13 @@ export function isDevEnvironment(): boolean {
 }
 
 export function getAppConfigDirName(isDev?: boolean): string {
+  if (typeof isDev === 'boolean') {
+    return isDev ? DEV_APP_CONFIG_DIR_NAME : DEFAULT_APP_CONFIG_DIR_NAME
+  }
   if (process.env.CPA_CONFIG_DIR_NAME) {
     return process.env.CPA_CONFIG_DIR_NAME
   }
-  const dev = isDev ?? isDevEnvironment()
+  const dev = isDevEnvironment()
   return dev ? DEV_APP_CONFIG_DIR_NAME : DEFAULT_APP_CONFIG_DIR_NAME
 }
 

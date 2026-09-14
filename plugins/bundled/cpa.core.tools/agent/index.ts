@@ -1,5 +1,4 @@
 import {
-    createBrowserImageProcessor,
     createCapabilityNativeAdapter,
     definePluginEntry,
 } from '@cpa/plugin-sdk'
@@ -8,6 +7,7 @@ import type {
     ToolFactoryContribution,
     ToolFactoryContext,
 } from '@cpa/plugin-api'
+import { createBrowserImageProcessor } from './image.js'
 import { createReadTool } from './read.js'
 import { createBashTool } from './bash.js'
 import { createPwshTool } from './pwsh.js'

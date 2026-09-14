@@ -88,4 +88,37 @@ describe('cpa.core.tools agent entry', () => {
         await editTool.execute('e1', { path: 'new.txt', edits: [{ oldText: 'created', newText: 'modified' }] }, { cwd: '/workspace' })
         expect(new TextDecoder().decode(await bridge.readFile('/workspace/new.txt'))).toBe('modified by tool')
     })
+
+    it('creates read tool with fallback image processor that supports process()', async () => {
+        const registered = new Map<string, ToolFactoryContribution>()
+        const fakeContext: Partial<PluginContext> = {
+            register: ((contrib: any) => {
+                if (contrib.kind === 'tool-factory') {
+                    registered.set(contrib.id, contrib.value)
+                }
+            }) as any,
+        }
+        toolsAgentEntry.activate(fakeContext as PluginContext)
+
+        const bridge = new FakeNativeBridge()
+        // A minimal 8-byte PNG header
+        const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+        bridge.setFile('/workspace/test.png', png)
+
+        const factoryCtx = {
+            cwd: '/workspace',
+            bridge,
+            platform: 'darwin' as const,
+            services: {} as any,
+            // Notice: imageProcessor is explicitly omitted so default fallback is used.
+        }
+
+        const readTool = await registered.get('read')!.create(factoryCtx)
+        // Execute read on the image file — this must not throw "imageProcessor.process is not a function".
+        const result = await readTool.execute('r-img', { path: 'test.png' }, { cwd: '/workspace' })
+        expect(result).toBeDefined()
+        expect(result.content.length).toBeGreaterThanOrEqual(1)
+        const textBlock = result.content.find((c: any) => c.type === 'text')
+        expect(textBlock?.text).toContain('Read image file [image/png]')
+    })
 })

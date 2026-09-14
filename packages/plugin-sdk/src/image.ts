@@ -9,19 +9,52 @@ export interface ProcessedImage {
     resizedBytes?: number
 }
 
+export type ImageProcessResult =
+    | {
+          ok: true
+          data: string
+          mimeType: string
+          hints: string[]
+          wasResized: boolean
+          originalWidth?: number
+          originalHeight?: number
+          width?: number
+          height?: number
+      }
+    | {
+          ok: false
+          message: string
+      }
+
 export interface ImageProcessor {
-    processImage(bytes: Uint8Array, mimeType: string): Promise<ProcessedImage>
+    process(bytes: Uint8Array, mimeType: string): Promise<ImageProcessResult>
+    processImage?(bytes: Uint8Array, mimeType: string): Promise<ProcessedImage>
 }
 
 /**
- * Creates a browser-compatible image processor that passes through or converts base64.
+ * Creates a browser-compatible image processor that passes through base64.
  */
 export function createBrowserImageProcessor(): ImageProcessor {
     return {
+        async process(bytes: Uint8Array, mimeType: string): Promise<ImageProcessResult> {
+            let binary = ''
+            const chunkSize = 0x8000
+            for (let offset = 0; offset < bytes.byteLength; offset += chunkSize) {
+                const slice = bytes.subarray(offset, offset + chunkSize)
+                binary += String.fromCharCode(...slice)
+            }
+            return {
+                ok: true,
+                data: btoa(binary),
+                mimeType,
+                hints: [],
+                wasResized: false,
+            }
+        },
         async processImage(bytes: Uint8Array, mimeType: string): Promise<ProcessedImage> {
             let binary = ''
             const chunkSize = 0x8000
-            for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+            for (let offset = 0; offset < bytes.byteLength; offset += chunkSize) {
                 const slice = bytes.subarray(offset, offset + chunkSize)
                 binary += String.fromCharCode(...slice)
             }
@@ -29,8 +62,8 @@ export function createBrowserImageProcessor(): ImageProcessor {
             return {
                 mediaType: mimeType,
                 base64Data,
-                originalBytes: bytes.length,
-                resizedBytes: bytes.length,
+                originalBytes: bytes.byteLength,
+                resizedBytes: bytes.byteLength,
             }
         },
     }
