@@ -59,17 +59,21 @@ export type StopAgentArgs = {
     agent_id: string
 } & Record<string, unknown>
 
-function requireString(input: unknown, field: string): string {
+function requireString(input: unknown, field: string, retryHint?: string): string {
+    const hint = retryHint ? ` ${retryHint}` : ''
     if (!input || typeof input !== 'object') {
-        throw new Error(`${field} is required`)
+        throw new Error(`${field} is required.${hint}`)
     }
     const value = (input as Record<string, unknown>)[field]
+    if (value === undefined || value === null) {
+        throw new Error(`${field} is required and must be a non-empty string.${hint}`)
+    }
     if (typeof value !== 'string') {
-        throw new Error(`${field} must be a string`)
+        throw new Error(`${field} must be a string.${hint}`)
     }
     const trimmed = value.trim()
     if (!trimmed) {
-        throw new Error(`${field} must be a non-empty string`)
+        throw new Error(`${field} must be a non-empty string.${hint}`)
     }
     return trimmed
 }
@@ -128,7 +132,8 @@ export function createSpawnAgentTool(
             properties: {
                 prompt: {
                     type: 'string',
-                    description: 'Task instructions for the sub-agent',
+                    description:
+                        'Required. Full task instructions for the sub-agent. Never omit this field.',
                 },
                 name: {
                     type: 'string',
@@ -154,7 +159,11 @@ export function createSpawnAgentTool(
             additionalProperties: false,
         },
         validate(input: unknown): SpawnAgentArgs {
-            const prompt = requireString(input, 'prompt')
+            const prompt = requireString(
+                input,
+                'prompt',
+                'Retry spawn_agent once with the complete task instructions in prompt; do not omit prompt.',
+            )
             const name = requireString(input, 'name')
             const raw = input as Record<string, unknown>
             const role =
@@ -222,7 +231,8 @@ export function createSendMessageTool(
                 },
                 message: {
                     type: 'string',
-                    description: 'Follow-up instructions for the sub-agent',
+                    description:
+                        'Required. Follow-up instructions for the sub-agent. Never omit this field.',
                 },
             },
             required: ['agent_id', 'message'],
@@ -231,7 +241,11 @@ export function createSendMessageTool(
         validate(input: unknown): SendMessageArgs {
             return {
                 agent_id: requireString(input, 'agent_id'),
-                message: requireString(input, 'message'),
+                message: requireString(
+                    input,
+                    'message',
+                    'Retry send_message with the follow-up text in message; do not omit message.',
+                ),
             }
         },
         async execute(

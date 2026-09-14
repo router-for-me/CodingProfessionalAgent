@@ -656,7 +656,10 @@ export class SubAgentHost {
     ): Promise<ReturnType<typeof textResult>> {
         const trimmed = prompt.trim()
         if (!trimmed) {
-            return textResult('spawn_agent requires a non-empty prompt', true)
+            return textResult(
+                'spawn_agent requires a non-empty prompt. Retry spawn_agent once with the complete task instructions in prompt; do not omit prompt.',
+                true,
+            )
         }
         const requestedName = normalizeAgentName(options.name)
         if (!requestedName) {
@@ -987,7 +990,10 @@ export class SubAgentHost {
     ): Promise<ReturnType<typeof textResult>> {
         const trimmed = message.trim()
         if (!trimmed) {
-            return textResult('send_message requires a non-empty message', true)
+            return textResult(
+                'send_message requires a non-empty message. Retry send_message with the follow-up text in message; do not omit message.',
+                true,
+            )
         }
         const record = this.agents.get(agentId)
         if (!record) {

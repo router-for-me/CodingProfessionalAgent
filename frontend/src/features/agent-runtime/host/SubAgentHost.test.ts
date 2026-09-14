@@ -421,6 +421,20 @@ describe('SubAgentHost', () => {
         )
     })
 
+    it('returns a retry hint when send_message text is empty', async () => {
+        const host = new SubAgentHost({
+            generateId: () => 'x',
+            now: () => 1,
+            run: async function* () {},
+        })
+        const result = await host.sendMessage('any-id', '   ')
+        expect(result.isError).toBe(true)
+        expect(result.content[0]).toMatchObject({
+            type: 'text',
+            text: 'send_message requires a non-empty message. Retry send_message with the follow-up text in message; do not omit message.',
+        })
+    })
+
     it('stop aborts a running agent', async () => {
         let startedResolve!: () => void
         const started = new Promise<void>((resolve) => {
@@ -477,6 +491,20 @@ describe('SubAgentHost', () => {
         expect(result).toMatchObject({
             isError: true,
             content: [{ type: 'text', text: 'spawn_agent requires a non-empty name' }],
+        })
+    })
+
+    it('returns a retry hint when spawn prompt is empty', async () => {
+        const host = new SubAgentHost({
+            generateId: () => 'x',
+            now: () => 1,
+            run: async function* () {},
+        })
+        const result = await host.spawn('   ', { name: 'Reviewer' })
+        expect(result.isError).toBe(true)
+        expect(result.content[0]).toMatchObject({
+            type: 'text',
+            text: 'spawn_agent requires a non-empty prompt. Retry spawn_agent once with the complete task instructions in prompt; do not omit prompt.',
         })
     })
 

@@ -48,6 +48,36 @@ describe('sub-agent tools', () => {
         expect(() => stop?.validate({})).toThrow(/agent_id/)
     })
 
+    it('returns retry instructions when spawn prompt or send message is missing', () => {
+        const coordinator = createMockCoordinator()
+        const [spawn, send] = createSubAgentTools(coordinator)
+
+        expect(() =>
+            spawn?.validate({
+                name: 'issue-reviewer',
+                model: 'gpt-6-astra',
+                role: 'role-reviewer',
+            }),
+        ).toThrow(
+            'prompt is required and must be a non-empty string. Retry spawn_agent once with the complete task instructions in prompt; do not omit prompt.',
+        )
+        expect(() =>
+            spawn?.validate({
+                prompt: '   ',
+                name: 'issue-reviewer',
+                model: 'gpt-6-astra',
+            }),
+        ).toThrow(
+            'prompt must be a non-empty string. Retry spawn_agent once with the complete task instructions in prompt; do not omit prompt.',
+        )
+        expect(() => send?.validate({ agent_id: 'a1' })).toThrow(
+            'message is required and must be a non-empty string. Retry send_message with the follow-up text in message; do not omit message.',
+        )
+        expect(() => send?.validate({ agent_id: 'a1', message: '   ' })).toThrow(
+            'message must be a non-empty string. Retry send_message with the follow-up text in message; do not omit message.',
+        )
+    })
+
     it('exposes tools in spawn / send / stop order', () => {
         const coordinator = createMockCoordinator()
         const tools = createSubAgentTools(coordinator)
