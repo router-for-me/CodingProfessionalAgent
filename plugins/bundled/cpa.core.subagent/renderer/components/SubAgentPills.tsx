@@ -26,6 +26,24 @@ function fallbackName(part: SpawnToolPart): string {
   return 'Agent'
 }
 
+function hasNonEmptyPrompt(args: Record<string, unknown> | undefined): boolean {
+  const prompt = args?.prompt
+  return typeof prompt === 'string' && prompt.trim().length > 0
+}
+
+function isInFlightSpawnStatus(status: unknown): boolean {
+  return status === 'running' || status === 'queued' || status === 'awaiting_approval'
+}
+
+/** Failed / incomplete spawn_agent calls never created a sub-agent and must not render badges. */
+function shouldShowSpawnPill(
+  part: SpawnToolPart,
+  record: { id: string } | undefined,
+): boolean {
+  if (record) return true
+  return isInFlightSpawnStatus(part.status) && hasNonEmptyPrompt(part.args)
+}
+
 export function SubAgentPills(props: {
   parts?: readonly SpawnToolPart[]
   parentSessionId?: string
@@ -53,7 +71,7 @@ export function SubAgentPills(props: {
   const { t } = useTranslation()
   const agents = useSubAgents(parentSessionId)
 
-  const pills = parts.map((part) => {
+  const pills = parts.flatMap((part) => {
     const normalized = normalizeToolCallId(part.id)
     const record = agents.find(
       (agent) =>
@@ -61,18 +79,19 @@ export function SubAgentPills(props: {
         agent.parentToolCallId &&
         normalizeToolCallId(agent.parentToolCallId) === normalized,
     )
+    if (!shouldShowSpawnPill(part, record)) return []
     const isQueued = record?.status === 'queued'
     const isRunning =
       record?.status === 'running' ||
       isQueued ||
       part.status === 'running'
-    return {
+    return [{
       part,
       record,
       name: record?.name ?? fallbackName(part),
       isRunning,
       isQueued,
-    }
+    }]
   })
 
   if (pills.length === 0) return null

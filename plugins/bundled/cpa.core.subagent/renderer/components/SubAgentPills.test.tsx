@@ -230,7 +230,123 @@ describe('SubAgentPills', () => {
     expect(mockOpenTab).toHaveBeenCalledWith('sess-1', 'ag-3')
   })
 
-  it('does not open sidebar or tab when pill has no matching record', async () => {
+  it('hides spawn pills that never created a sub-agent because prompt is missing', () => {
+    const mockServices = {
+      subAgents: {
+        getAgents: () => EMPTY_AGENTS,
+      },
+      ui: {},
+    }
+
+    const { container } = render(
+      <HostServicesProvider services={mockServices as any}>
+        <SubAgentPills
+          parentSessionId="sess-1"
+          parts={[
+            {
+              id: 'call-unmatched',
+              name: 'spawn_agent',
+              args: { name: 'UnmatchedAgent' },
+              status: 'error',
+            },
+          ]}
+        />
+      </HostServicesProvider>,
+    )
+
+    expect(screen.queryByTestId('subagent-pills')).toBeNull()
+    expect(screen.queryByText('UnmatchedAgent')).toBeNull()
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it('hides a pile of failed spawn_agent calls that omitted prompt', () => {
+    const mockServices = {
+      subAgents: {
+        getAgents: () => EMPTY_AGENTS,
+      },
+    }
+
+    const parts = Array.from({ length: 12 }, (_, index) => ({
+      id: `call-23857bfb-${118 + index}|fc_a97423dd_${index}`,
+      name: 'spawn_agent',
+      args: {
+        name: 'issue-reviewer',
+        model: 'gpt-6-astra',
+        reasoning_effort: 'medium',
+        role: 'role-reviewer',
+        thinking: 'medium',
+      },
+      status: 'error',
+    }))
+
+    render(
+      <HostServicesProvider services={mockServices as any}>
+        <SubAgentPills parentSessionId="sess-flood" parts={parts} />
+      </HostServicesProvider>,
+    )
+
+    expect(screen.queryByTestId('subagent-pills')).toBeNull()
+    expect(screen.queryAllByText('issue-reviewer')).toHaveLength(0)
+  })
+
+  it('still shows the real sub-agent when failed prompt-less calls are mixed in', () => {
+    const mockAgents: readonly SubAgentRecord[] = [
+      {
+        id: 'ag-real',
+        name: 'astra-review',
+        color: '#9b7dff',
+        icon: 'sparkle',
+        parentSessionId: 'sess-mix',
+        sessionId: 'ag-real',
+        modelId: 'gpt-6-astra',
+        status: 'completed',
+        createdAt: 1,
+        updatedAt: 1,
+        parentToolCallId: 'call-real',
+      },
+    ]
+
+    const mockServices = {
+      subAgents: {
+        getAgents: () => mockAgents,
+      },
+    }
+
+    render(
+      <HostServicesProvider services={mockServices as any}>
+        <SubAgentPills
+          parentSessionId="sess-mix"
+          parts={[
+            {
+              id: 'call-missing-prompt',
+              name: 'spawn_agent',
+              args: { name: 'issue-reviewer', model: 'gpt-6-astra' },
+              status: 'error',
+            },
+            {
+              id: 'call-real',
+              name: 'spawn_agent',
+              args: { name: 'astra-review', prompt: 'review independently' },
+              status: 'done',
+            },
+            {
+              id: 'call-empty-args',
+              name: 'spawn_agent',
+              args: {},
+              status: 'error',
+            },
+          ]}
+        />
+      </HostServicesProvider>,
+    )
+
+    expect(screen.getByTestId('subagent-pills')).toBeInTheDocument()
+    expect(screen.getByText('astra-review')).toBeInTheDocument()
+    expect(screen.queryByText('issue-reviewer')).toBeNull()
+    expect(screen.queryByText('Agent')).toBeNull()
+  })
+
+  it('does not open sidebar or tab when in-flight pill has no matching record', async () => {
     const mockOpenTab = vi.fn()
     const mockOpenRightPanelTab = vi.fn()
     const mockSetRightSidebarCollapsed = vi.fn()
@@ -254,7 +370,7 @@ describe('SubAgentPills', () => {
             {
               id: 'call-unmatched',
               name: 'spawn_agent',
-              args: { name: 'UnmatchedAgent' },
+              args: { name: 'UnmatchedAgent', prompt: 'review the fix' },
               status: 'running',
             },
           ]}
@@ -285,7 +401,7 @@ describe('SubAgentPills', () => {
             {
               id: 'call-running',
               name: 'spawn_agent',
-              args: { name: 'Worker' },
+              args: { name: 'Worker', prompt: 'do work' },
               status: 'running',
             },
           ]}
