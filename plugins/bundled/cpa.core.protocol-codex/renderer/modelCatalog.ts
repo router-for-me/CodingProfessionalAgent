@@ -1,4 +1,5 @@
 import type { ModelCatalogEntry, ModelInputModality, ModelReasoningOption } from '@cpa/plugin-api'
+import { isGeminiModelId } from '../shared/gemini.js'
 
 const MODEL_CATALOG_TIMEOUT_MS = 60_000
 
@@ -158,7 +159,11 @@ export function parseModelCatalog(payload: unknown): readonly ModelCatalogEntry[
         if (!id) return []
         const label = firstNonBlankString(rawModel.display_name, rawModel.name) ?? id
         const description = firstNonBlankString(rawModel.description, rawModel.summary)
-        const cpaCapabilities = parseCpaCapabilities(rawModel.cpa_capabilities)
+        // CPA advertises Responses-path support here, which excludes Gemini.
+        // This provider uses Gemini's native protocol for isolated web search.
+        const cpaCapabilities = isGeminiModelId(id)
+            ? { webSearch: true }
+            : parseCpaCapabilities(rawModel.cpa_capabilities)
         return [{
             id,
             label,

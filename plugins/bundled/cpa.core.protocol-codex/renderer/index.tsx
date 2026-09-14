@@ -5,6 +5,7 @@ import { ModelsSection } from './components/ModelsSection.js'
 import { fetchModelCatalogDirect } from './modelCatalog.js'
 import { CodexConnectionManager } from '../agent/codexConnectionManager.js'
 import { CodexProtocolSession } from '../agent/CodexProtocolSession.js'
+import { createGeminiSearchTransport } from '../agent/geminiSearch.js'
 
 export { ModelsSection, fetchModelCatalogDirect }
 
@@ -39,6 +40,7 @@ export const protocolCodexRendererEntry = definePluginEntry({
             ],
         })
 
+        const geminiSearchTransport = createGeminiSearchTransport(context.capabilityClient)
         context.registerProtocolProvider?.({
             id: 'codex-responses-ws',
             name: 'CLIProxyAPI Codex Responses WebSocket',
@@ -47,10 +49,10 @@ export const protocolCodexRendererEntry = definePluginEntry({
                 return new CodexConnectionManager(bridge as any)
             },
             createSession: (options: ProtocolSessionContext) => {
-                return new CodexProtocolSession(options)
+                return new CodexProtocolSession({ ...options, geminiSearchTransport })
             },
             createClient: (options: ProtocolSessionContext) => {
-                return new CodexProtocolSession(options)
+                return new CodexProtocolSession({ ...options, geminiSearchTransport })
             },
         })
 

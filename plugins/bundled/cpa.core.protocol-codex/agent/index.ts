@@ -5,6 +5,7 @@ import type {
     ProtocolSessionContext,
 } from '@cpa/plugin-api'
 import { CodexProtocolSession } from './CodexProtocolSession.js'
+import { createGeminiSearchTransport } from './geminiSearch.js'
 import { CodexClient, type CodexClientOptions, type CodexClientStreamInput, type CodexClientStreamOptions } from './codexClient.js'
 import {
     canonicalizeBaseUrl,
@@ -80,6 +81,7 @@ export type {
 export const protocolCodexAgentEntry = definePluginEntry({
     runtime: 'agent',
     activate(context: PluginContext) {
+        const geminiSearchTransport = createGeminiSearchTransport(context.capabilityClient)
         context.register<ProtocolProviderContribution>({
             kind: 'protocol',
             id: 'codex-responses-ws',
@@ -91,10 +93,10 @@ export const protocolCodexAgentEntry = definePluginEntry({
                     return new CodexConnectionManager(bridge as any)
                 },
                 createSession: (options: ProtocolSessionContext) => {
-                    return new CodexProtocolSession(options)
+                    return new CodexProtocolSession({ ...options, geminiSearchTransport })
                 },
                 createClient: (options: ProtocolSessionContext) => {
-                    return new CodexProtocolSession(options)
+                    return new CodexProtocolSession({ ...options, geminiSearchTransport })
                 },
             },
         })

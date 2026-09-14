@@ -18,12 +18,15 @@ import {
 } from './codexConnectionManager.js'
 import type { CodexRequestSpeed } from './codexRequest.js'
 import type { NativeBridge } from './types.js'
+import { isGeminiModelId } from '../shared/gemini.js'
+import { requestGeminiSearch, type GeminiSearchTransport } from './geminiSearch.js'
 
 export interface CodexProtocolSessionOptions extends ProtocolSessionContext {
     bridge?: unknown
     connectionManager?: CodexConnectionManager
     generateRequestId?: () => string
     now?: () => number
+    geminiSearchTransport?: GeminiSearchTransport
 }
 
 function resolveNativeBridge(contextBridge?: unknown): NativeBridge {
@@ -40,6 +43,7 @@ export class CodexProtocolSession implements ProtocolSession {
     private readonly client: CodexClient
     private readonly manager: CodexConnectionManager
     private readonly ownsManager: boolean
+    private readonly searchConfig: { baseUrl: string; apiKey: string; transport?: GeminiSearchTransport }
     private activeController: AbortController | null = null
     private disposed = false
 
@@ -47,6 +51,7 @@ export class CodexProtocolSession implements ProtocolSession {
         this.id = options.sessionId
         const bridge = resolveNativeBridge(options.bridge)
         const canonicalBaseUrl = canonicalizeBaseUrl(options.baseUrl)
+        this.searchConfig = { baseUrl: canonicalBaseUrl, apiKey: options.apiKey, transport: options.geminiSearchTransport }
 
         if (
             options.connectionManager &&
@@ -119,6 +124,16 @@ export class CodexProtocolSession implements ProtocolSession {
         }
 
         try {
+            if (options?.connectionMode === 'isolated' && isGeminiModelId(input.model.id) &&
+                input.nativeTools?.some((tool) => tool.type === 'web_search') && input.toolChoice !== 'none') {
+                const message = await requestGeminiSearch(input, this.searchConfig, signal, options.maxOutputTokens)
+                if (message.stopReason === 'error') {
+                    yield { type: 'error', reason: 'error', error: message }
+                } else {
+                    yield { type: 'done', reason: message.stopReason === 'length' ? 'length' : 'stop', message }
+                }
+                return
+            }
             const rawStream = this.client.stream(
                 clientInput,
                 signal,

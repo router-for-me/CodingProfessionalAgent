@@ -81,6 +81,16 @@ describe('protocol-codex model catalog', () => {
         expect(malformed).not.toHaveProperty('cpaCapabilities')
     })
 
+    it('enables native Gemini search despite Responses-only CPA capability flags', () => {
+        const models = parseModelCatalog({ models: [
+            { id: 'gemini-2.5-flash', cpa_capabilities: { web_search: false } },
+            { id: 'models/gemini-3-pro-preview' },
+            { id: 'team/gemini-3-flash(high)' },
+            { id: 'ordinary', display_name: 'Gemini Flash', cpa_capabilities: { web_search: false } },
+        ] })
+        expect(models.map((model) => model.cpaCapabilities?.webSearch)).toEqual([true, true, true, false])
+    })
+
     it('does not treat additional_speed_tiers alone as Fast support', () => {
         const [model] = parseModelCatalog({
             models: [
