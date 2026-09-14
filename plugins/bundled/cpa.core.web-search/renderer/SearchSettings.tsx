@@ -48,9 +48,6 @@ export function SearchSettings({ client, catalog }: { client?: PluginCapabilityC
             <h1 className="text-[22px] font-semibold tracking-tight text-[var(--text-primary)]">
                 {t('webSearch.title')}
             </h1>
-            <p className="mt-1 text-[13px] leading-relaxed text-[var(--text-muted)]">
-                {t('webSearch.description')}
-            </p>
         </header>
 
         <section className="space-y-2">

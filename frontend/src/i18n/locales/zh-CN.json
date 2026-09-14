@@ -1,7 +1,6 @@
 {
   "app.name": "CPA",
   "webSearch.title": "联网搜索",
-  "webSearch.description": "通过独立的原生搜索模型检索网络，不改变当前会话模型。",
   "webSearch.configuration": "搜索设置",
   "webSearch.enable": "启用联网搜索",
   "webSearch.enableHint": "更改将在下一次运行时生效。",

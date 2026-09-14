@@ -1,7 +1,6 @@
 {
   "app.name": "CPA",
   "webSearch.title": "Web Search",
-  "webSearch.description": "Let the current model search through a separate native-search model without changing the conversation model.",
   "webSearch.configuration": "Search settings",
   "webSearch.enable": "Enable Web Search",
   "webSearch.enableHint": "Changes take effect on the next run.",
