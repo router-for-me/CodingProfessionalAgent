@@ -90,7 +90,7 @@ export const toolsAgentEntry = definePluginEntry({
                 id: 'read',
                 name: 'read',
                 label: 'Read File',
-                description: 'Read the contents of a file. Supports text files and images (jpg, png, gif, webp, bmp).',
+                description: 'Read the contents of a file. Supports text files & images (jpg, png, gif, webp, bmp).',
                 parameters: READ_TOOL_PARAMETERS as unknown as Record<string, unknown>,
                 order: 10,
                 targets: ['main', 'subagent', 'all'],
