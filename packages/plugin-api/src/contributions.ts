@@ -1,4 +1,4 @@
-import type { ComponentType } from 'react'
+import type { ComponentType, ExoticComponent, ReactElement } from 'react'
 import type { PluginIdentity } from './manifest.js'
 import type { CapabilityId, CapabilityInvocationContext } from './capabilities.js'
 import type { HostServices } from './services.js'
@@ -275,6 +275,13 @@ export interface ComposerControlContribution {
     isAvailable?(context: ComposerControlProps): boolean
 }
 
+export interface AttachmentProviderSubmenuProps {
+    /** Return to the top-level attach menu without closing it. */
+    onBack(): void
+    /** Close the entire attach menu. */
+    onClose(): void
+}
+
 export interface AttachmentProvider {
     id: string
     order: number
@@ -282,7 +289,9 @@ export interface AttachmentProvider {
     labelKey?: string
     description?: string
     descKey?: string
-    icon?: ComponentType<any> | any
+    icon?: ReactElement | ComponentType<any> | ExoticComponent<any>
+    /** Optional quick configuration view displayed inside the attach menu. */
+    submenu?: ComponentType<AttachmentProviderSubmenuProps>
     select?(context: AttachmentContext): Promise<readonly ComposerAttachment[]>
 }
 

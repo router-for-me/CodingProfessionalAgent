@@ -1,7 +1,8 @@
 import i18n from '@/i18n'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createRef } from 'react'
+import { createRef, memo, type SVGProps } from 'react'
+import { Globe } from '@cpa/plugin-ui'
 import { AttachMenu, computeAttachMenuPosition } from './AttachMenu.js'
 
 describe('AttachMenu', () => {
@@ -72,6 +73,76 @@ describe('AttachMenu', () => {
         const filesOption = screen.getByText('Files & folders').closest('button')!
         fireEvent.mouseDown(filesOption)
         expect(onSelect).toHaveBeenCalledWith('files')
+    })
+
+    it('renders the web-search contribution forwardRef icon', () => {
+        render(
+            <AttachMenu
+                activeIndex={0}
+                onActiveIndexChange={() => undefined}
+                onSelect={() => undefined}
+                onClose={() => undefined}
+                providers={[{
+                    id: 'web-search-quick',
+                    order: 20,
+                    label: 'Web Search',
+                    icon: Globe,
+                }]}
+            />,
+        )
+
+        expect(screen.getByRole('option', { name: 'Web Search' }).querySelector('svg')).toBeInTheDocument()
+    })
+
+    it('renders element-instance, function, and memo provider icons', () => {
+        const FunctionIcon = (props: SVGProps<SVGSVGElement>) => <svg data-testid="function-icon" {...props} />
+        const MemoIcon = memo((props: SVGProps<SVGSVGElement>) => <svg data-testid="memo-icon" {...props} />)
+
+        render(
+            <AttachMenu
+                activeIndex={0}
+                onActiveIndexChange={() => undefined}
+                onSelect={() => undefined}
+                onClose={() => undefined}
+                providers={[
+                    { id: 'element', order: 10, label: 'Element', icon: <svg data-testid="element-icon" /> },
+                    { id: 'function', order: 20, label: 'Function', icon: FunctionIcon },
+                    { id: 'memo', order: 30, label: 'Memo', icon: MemoIcon },
+                ]}
+            />,
+        )
+
+        expect(screen.getByTestId('element-icon')).toBeInTheDocument()
+        expect(screen.getByTestId('function-icon')).toHaveClass('size-4')
+        expect(screen.getByTestId('memo-icon')).toHaveClass('size-4')
+    })
+
+    it('opens a contributed quick submenu without selecting or closing the menu', () => {
+        const onSelect = vi.fn()
+        const onClose = vi.fn()
+        render(
+            <AttachMenu
+                activeIndex={0}
+                onActiveIndexChange={() => undefined}
+                onSelect={onSelect}
+                onClose={onClose}
+                providers={[{
+                    id: 'web-search',
+                    order: 20,
+                    label: 'Web search',
+                    submenu: () => <div>Global search controls</div>,
+                }]}
+            />,
+        )
+
+        const option = screen.getByRole('option', { name: /Web search/ })
+        expect(option).toHaveAttribute('aria-haspopup', 'dialog')
+        fireEvent.mouseDown(option)
+        expect(screen.getByRole('dialog', { name: 'Web search' })).toHaveTextContent('Global search controls')
+        expect(onSelect).not.toHaveBeenCalled()
+        expect(onClose).not.toHaveBeenCalled()
+        fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+        expect(screen.getByRole('option', { name: /Web search/ })).toBeInTheDocument()
     })
 
     it('triggers onActiveIndexChange on mouse enter', () => {

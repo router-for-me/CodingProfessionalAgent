@@ -952,7 +952,8 @@ export class RendererRegistry {
                 description: raw?.description,
                 descKey: raw?.descKey,
                 icon: raw?.icon,
-                select: raw?.select ?? raw,
+                submenu: raw?.submenu,
+                select: raw?.select ?? (typeof raw === 'function' ? raw : undefined),
             } as AttachmentProvider
         })
         mapped.sort((a, b) => (a.order ?? 100) - (b.order ?? 100))

@@ -12,11 +12,13 @@
     "activationPriority": 170,
     "dependencies": {
         "cpa.core.settings": ">=1.0.0",
-        "cpa.core.protocol-codex": ">=1.0.0"
+        "cpa.core.protocol-codex": ">=1.0.0",
+        "cpa.core.composer": ">=1.0.0"
     },
     "capabilities": ["storage.kv", "models.invoke"],
     "contributes": {
         "tool-factory": ["web_search"],
-        "settings": ["web-search"]
+        "settings": ["web-search"],
+        "composer": ["web-search-quick"]
     }
 }

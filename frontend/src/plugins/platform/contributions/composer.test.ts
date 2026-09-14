@@ -40,7 +40,7 @@ describe('composer contribution selectors and pipeline', () => {
         ])
 
         const attachmentProviders = selectAttachmentProviders(registry)
-        expect(attachmentProviders.map((item) => item.id)).toEqual(['files'])
+        expect(attachmentProviders.map((item) => item.id)).toEqual(['files', 'web-search-quick'])
 
         const preprocessors = selectSubmitPreprocessors(registry)
         expect(preprocessors.map((item) => item.id)).toEqual([

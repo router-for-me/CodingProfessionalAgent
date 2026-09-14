@@ -75,11 +75,7 @@ import {
 } from './SlashMenu.js'
 import { QuickModelPicker } from './QuickModelPicker.js'
 import { isTurnCompleted } from '../utils/turnCompletion.js'
-import {
-    AttachMenu,
-    ATTACH_MENU_ITEMS,
-    type AttachMenuItemId,
-} from './AttachMenu.js'
+import { AttachMenu, type AttachMenuItemId } from './AttachMenu.js'
 import { rendererEventBus } from '@/plugins/platform/eventBus'
 import {
     useComposerControls,
@@ -935,38 +931,6 @@ const BaseComposer = memo(function BaseComposer({
     const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
         if (event.nativeEvent.isComposing || event.keyCode === 229) return
 
-        if (attachMenuOpen) {
-            if (event.key === 'ArrowDown') {
-                event.preventDefault()
-                setAttachMenuActiveIndex(
-                    (index) => (index + 1) % ATTACH_MENU_ITEMS.length,
-                )
-                return
-            }
-            if (event.key === 'ArrowUp') {
-                event.preventDefault()
-                setAttachMenuActiveIndex(
-                    (index) =>
-                        (index - 1 + ATTACH_MENU_ITEMS.length) %
-                        ATTACH_MENU_ITEMS.length,
-                )
-                return
-            }
-            if (event.key === 'Enter' || event.key === 'Tab') {
-                event.preventDefault()
-                const selected = ATTACH_MENU_ITEMS[attachMenuActiveIndex]
-                if (selected) {
-                    handleSelectAttachMenuItem(selected.id)
-                }
-                return
-            }
-            if (event.key === 'Escape') {
-                event.preventDefault()
-                setAttachMenuOpen(false)
-                return
-            }
-        }
-
         if (quickModelPickerOpen) {
             if (event.key === 'ArrowDown') {
                 event.preventDefault()
@@ -1507,6 +1471,7 @@ const BaseComposer = memo(function BaseComposer({
                             onActiveIndexChange={setAttachMenuActiveIndex}
                             onSelect={handleSelectAttachMenuItem}
                             onClose={() => setAttachMenuOpen(false)}
+                            providers={attachmentProviders}
                         />
                     ) : null}
 

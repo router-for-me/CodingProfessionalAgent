@@ -1,7 +1,8 @@
-import { ModelCatalogServiceToken, type SettingsSectionContribution } from '@cpa/plugin-api'
+import { ModelCatalogServiceToken, type AttachmentProvider, type SettingsSectionContribution } from '@cpa/plugin-api'
 import { definePluginEntry } from '@cpa/plugin-sdk'
 import { Globe } from '@cpa/plugin-ui'
 import { SearchSettings } from './SearchSettings.js'
+import { WebSearchQuickMenu } from './WebSearchQuickMenu.js'
 
 export const entry = definePluginEntry({
     runtime: 'renderer',
@@ -13,6 +14,16 @@ export const entry = definePluginEntry({
                 labelKey: 'webSearch.title', icon: Globe,
                 keywords: ['web', 'search', '搜索', '联网'],
                 component: () => <SearchSettings client={context.capabilityClient} catalog={context.getService(ModelCatalogServiceToken)} />,
+            },
+        })
+        context.register<AttachmentProvider>({
+            kind: 'composer', id: 'web-search-quick', target: 'attachment',
+            value: {
+                id: 'web-search-quick', order: 20,
+                label: 'Web Search', labelKey: 'webSearch.quick.menuLabel',
+                description: 'Global toggle and search model', descKey: 'webSearch.quick.menuDescription',
+                icon: Globe,
+                submenu: (props) => <WebSearchQuickMenu {...props} client={context.capabilityClient} catalog={context.getService(ModelCatalogServiceToken)} />,
             },
         })
     },

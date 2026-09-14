@@ -883,7 +883,8 @@ export const bundledManifests: Readonly<Record<string, PluginManifest>> = Object
         "activationPriority": 170,
         "dependencies": {
                 "cpa.core.settings": ">=1.0.0",
-                "cpa.core.protocol-codex": ">=1.0.0"
+                "cpa.core.protocol-codex": ">=1.0.0",
+                "cpa.core.composer": ">=1.0.0"
         },
         "capabilities": [
                 "storage.kv",
@@ -895,6 +896,9 @@ export const bundledManifests: Readonly<Record<string, PluginManifest>> = Object
                 ],
                 "settings": [
                         "web-search"
+                ],
+                "composer": [
+                        "web-search-quick"
                 ]
         }
 }),
