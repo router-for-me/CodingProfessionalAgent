@@ -477,6 +477,45 @@ describe('PluginPlatformCoordinator', () => {
             expect(coordinator.isReady()).toBe(false)
         })
 
+        it('fails prepare when Main getPreparedState rejects instead of committing a missing generation', async () => {
+            const pkg = createAuthoritativePkg('cpa.core.mainstatefail', {
+                contributes: {
+                    view: ['msf-view'],
+                },
+            })
+
+            const rendererHost = new RendererPluginRuntimeHost({
+                bundledPackages: [pkg],
+                defaultDefinitions: {
+                    'cpa.core.mainstatefail': {
+                        runtime: 'renderer',
+                        activate() {},
+                    },
+                },
+            })
+            const agentHost = new AgentPluginRuntimeHost({
+                bundledPackages: [pkg],
+            })
+            const graph = createGraphDTO([pkg])
+            const coordinator = new PluginPlatformCoordinator({
+                rendererHost,
+                agentHost,
+                mainParticipant: {
+                    async getPreparedState() {
+                        throw new Error('native module bridge not ready')
+                    },
+                    async commit() {
+                        throw new Error('should not commit')
+                    },
+                    async rollback() {},
+                },
+            })
+
+            await expect(coordinator.prepareGeneration(graph)).rejects.toThrow(
+                'native module bridge not ready',
+            )
+        })
+
         it('rolls back local prepared generations if Main participant commit throws', async () => {
             const pkg = createAuthoritativePkg('cpa.core.maincommitfail', {
                 contributes: {

@@ -62,6 +62,8 @@ export class MainPluginActivationCoordinator {
     // generation -> Set of document keys that have already been issued grant tickets
     private readonly issuedDocumentsByGen = new Map<number, Set<string>>()
     private readonly commitListeners = new Set<() => void>()
+    private lastStageError: Error | null = null
+    private ensurePreparedInFlight: Promise<void> | null = null
 
     constructor(options: MainPluginActivationCoordinatorOptions) {
         this.host = options.host
@@ -269,10 +271,35 @@ export class MainPluginActivationCoordinator {
             this.graphDTO = input as ResolvedPluginGraphDTO
         }
 
-        const prepared = await this.coordinator.prepareGeneration(input, options)
-        this.pendingGeneration = prepared
+        try {
+            const prepared = await this.coordinator.prepareGeneration(input, options)
+            this.pendingGeneration = prepared
+            this.lastStageError = null
+            return prepared
+        } catch (err) {
+            this.lastStageError = err instanceof Error ? err : new Error(String(err))
+            throw this.lastStageError
+        }
+    }
 
-        return prepared
+    /**
+     * Ensure a prepared generation exists for the initial handshake.
+     * Retries staging when startup stage() was skipped or failed and nothing is active yet.
+     */
+    async ensurePrepared(): Promise<void> {
+        if (this.pendingGeneration || this.getGeneration() > 0) {
+            return
+        }
+        if (this.ensurePreparedInFlight) {
+            await this.ensurePreparedInFlight
+            return
+        }
+        this.ensurePreparedInFlight = this.stage().then(() => undefined)
+        try {
+            await this.ensurePreparedInFlight
+        } finally {
+            this.ensurePreparedInFlight = null
+        }
     }
 
     /**
@@ -302,6 +329,12 @@ export class MainPluginActivationCoordinator {
                 (!revision || currentRev === revision)
             ) {
                 return
+            }
+            if (this.lastStageError) {
+                throw new Error(
+                    `No pending prepared plugin generation to commit (active: ${currentRev}@${currentGen}, requested: ${revision}@${generation}): ${this.lastStageError.message}`,
+                    { cause: this.lastStageError },
+                )
             }
             throw new Error(
                 `No pending prepared plugin generation to commit (active: ${currentRev}@${currentGen}, requested: ${revision}@${generation})`,

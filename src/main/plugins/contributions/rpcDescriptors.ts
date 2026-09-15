@@ -559,12 +559,14 @@ export function createPlatformRpcDescriptors(
             ipcChannel: 'plugins:getPreparedState',
             capability: 'plugins.read',
             invoke: async (context) => {
-                try {
-                    const coordinator = getServiceOptional<any>('pluginActivationCoordinator', context)
-                    return coordinator?.getPreparedState?.(context) ?? null
-                } catch {
+                const coordinator = getServiceOptional<any>('pluginActivationCoordinator', context)
+                if (!coordinator) {
                     return null
                 }
+                if (typeof coordinator.ensurePrepared === 'function') {
+                    await coordinator.ensurePrepared()
+                }
+                return coordinator.getPreparedState?.(context) ?? null
             },
         },
         {
@@ -738,18 +740,12 @@ export function createPlatformRpcDescriptors(
             ipcChannel: 'plugins:commitGeneration',
             capability: 'plugins.manage',
             invoke: async (context, args) => {
-                try {
-                    const managementService = getServiceOptional<any>('pluginGraphManagementService', context)
-                    if (managementService?.commitTransaction) {
-                        await managementService.commitTransaction(args[0] as string)
-                        return { ok: true }
-                    }
-                } catch {
-                    // Fall back to coordinator
-                }
                 const coordinator = getServiceOptional<any>('pluginActivationCoordinator', context)
                 if (!coordinator) {
                     throw new Error('pluginActivationCoordinator is unavailable')
+                }
+                if (typeof coordinator.ensurePrepared === 'function') {
+                    await coordinator.ensurePrepared()
                 }
                 await coordinator.commitPrepared(args[0] as string, args[1] as number)
                 return { ok: true }

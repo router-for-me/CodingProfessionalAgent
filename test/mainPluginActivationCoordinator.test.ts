@@ -544,4 +544,99 @@ describe('MainPluginActivationCoordinator (Staging & Production Handshake)', () 
             ),
         ).rejects.toThrow('Invalid or expired capability handle')
     })
+
+    it('retries staging via ensurePrepared after the initial stage() failure', async () => {
+        let attempts = 0
+        const pkg = createPkg('cpa.core.retry-stage', { contributes: { service: ['retry-svc'] } })
+        const graph = createGraphDTO([pkg])
+        const registry = new ContributionRegistry()
+        const host = new MainPluginRuntimeHost({
+            contributionRegistry: registry,
+            bundledPackages: [pkg],
+            moduleLoader: new MainPluginModuleLoader(undefined, {
+                'cpa.core.retry-stage': {
+                    runtime: 'main',
+                    activate(ctx) {
+                        attempts += 1
+                        if (attempts === 1) {
+                            throw new Error('native module bridge not ready')
+                        }
+                        ctx.register({ kind: 'service', id: 'retry-svc', value: { ok: true } })
+                    },
+                },
+            }),
+        })
+        const coordinator = new MainPluginActivationCoordinator({ host, graph })
+
+        await expect(coordinator.stage()).rejects.toThrow(/native module bridge not ready/)
+        expect(coordinator.getPendingGeneration()).toBeNull()
+        expect(coordinator.getGeneration()).toBe(0)
+
+        await coordinator.ensurePrepared()
+        expect(coordinator.getPendingGeneration()?.generation).toBe(1)
+        expect(attempts).toBe(2)
+
+        await coordinator.commitPrepared(graph.revision, 1)
+        expect(coordinator.getGeneration()).toBe(1)
+        expect(registry.get('service', 'retry-svc')).toEqual({ ok: true })
+    })
+
+    it('surfaces the last stage error when committing with no pending generation', async () => {
+        const pkg = createPkg('cpa.core.stage-error', { contributes: { service: ['err-svc'] } })
+        const graph = createGraphDTO([pkg])
+        const host = new MainPluginRuntimeHost({
+            contributionRegistry: new ContributionRegistry(),
+            bundledPackages: [pkg],
+            moduleLoader: new MainPluginModuleLoader(undefined, {
+                'cpa.core.stage-error': {
+                    runtime: 'main',
+                    activate() {
+                        throw new Error('native module bridge not ready')
+                    },
+                },
+            }),
+        })
+        const coordinator = new MainPluginActivationCoordinator({ host, graph })
+
+        await expect(coordinator.stage()).rejects.toThrow(/native module bridge not ready/)
+        await expect(coordinator.commitPrepared(graph.revision, 1)).rejects.toThrow(
+            /No pending prepared plugin generation to commit.*native module bridge not ready/,
+        )
+    })
+
+    it('getPreparedState and commitGeneration RPCs restage when startup stage was skipped', async () => {
+        const pkg = createPkg('cpa.core.rpc-restage', { contributes: { service: ['rpc-restage-svc'] } })
+        const graph = createGraphDTO([pkg])
+        const registry = new ContributionRegistry()
+        const host = new MainPluginRuntimeHost({
+            contributionRegistry: registry,
+            bundledPackages: [pkg],
+            moduleLoader: new MainPluginModuleLoader(undefined, {
+                'cpa.core.rpc-restage': {
+                    runtime: 'main',
+                    activate(ctx) {
+                        ctx.register({ kind: 'service', id: 'rpc-restage-svc', value: { ok: true } })
+                    },
+                },
+            }),
+        })
+        const coordinator = new MainPluginActivationCoordinator({ host, graph })
+        const services = createServices(() => null, {
+            pluginRuntimeHost: host,
+            pluginActivationCoordinator: coordinator,
+        } as any)
+
+        const stateRes = await services.handleMethod('plugins:getPreparedState', [])
+        expect(stateRes).toMatchObject({
+            phase: 'prepared',
+            revision: graph.revision,
+            generation: 1,
+            graph,
+        })
+
+        const commitRes = await services.handleMethod('plugins:commitGeneration', [graph.revision, 1])
+        expect(commitRes).toEqual({ ok: true })
+        expect(coordinator.getGeneration()).toBe(1)
+        expect(registry.get('service', 'rpc-restage-svc')).toEqual({ ok: true })
+    })
 })

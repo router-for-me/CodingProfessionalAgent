@@ -133,11 +133,7 @@ export class PluginPlatformCoordinator {
         let mainState: MainGenerationPreparedState | null = null
 
         if (participant) {
-            try {
-                mainState = await participant.getPreparedState()
-            } catch (err) {
-                console.warn('Warning: Failed to fetch prepared state from main participant:', err)
-            }
+            mainState = await participant.getPreparedState()
         }
 
         const targetGeneration =

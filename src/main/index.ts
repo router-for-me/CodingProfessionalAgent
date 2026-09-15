@@ -90,6 +90,7 @@ function getAppIcon(isDevMode: boolean = isDev): Electron.NativeImage | undefine
     path.resolve(process.cwd(), 'build/appicon.png'),
     path.resolve(app.getAppPath?.() || '', 'build/appicon.png'),
     path.resolve(process.resourcesPath || '', 'build/appicon.png'),
+    path.resolve(__dirname, '../../../../frontend/dist/appicon.png'),
     path.resolve(__dirname, '../../../frontend/dist/appicon.png'),
     path.resolve(__dirname, '../../frontend/dist/appicon.png'),
     path.resolve(process.cwd(), 'frontend/dist/appicon.png'),
@@ -114,6 +115,7 @@ function getAppIcon(isDevMode: boolean = isDev): Electron.NativeImage | undefine
 
 function getRendererHtmlPath(): string {
   const candidates = [
+    path.resolve(__dirname, '../../../../frontend/dist/index.html'),
     path.resolve(__dirname, '../../../frontend/dist/index.html'),
     path.resolve(__dirname, '../../frontend/dist/index.html'),
     path.resolve(process.cwd(), 'frontend/dist/index.html'),
@@ -281,6 +283,17 @@ async function bootstrap(): Promise<void> {
       pluginActivationCoordinator: coordinator,
       pluginResourceService: bootstrapResult.resourceService,
     })
+
+    // Retry staging after host services exist. The first attempt can fail after a
+    // hot update (native bridges / plugin activate) and is otherwise swallowed,
+    // leaving generation 0 with nothing to commit.
+    if (!coordinator.getPendingGeneration() && coordinator.getGeneration() <= 0) {
+      try {
+        await coordinator.ensurePrepared()
+      } catch (err) {
+        console.error('Failed to restage plugin runtime host after services initialized:', err)
+      }
+    }
 
     const devUrl = process.env.VITE_DEV_SERVER_URL || process.env.ELECTRON_RENDERER_URL
     const rendererPath = getRendererHtmlPath()
