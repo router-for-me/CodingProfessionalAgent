@@ -62,7 +62,9 @@
       "**/node-pty/prebuilds/**/*",
       "**/better-sqlite3/build/**/*",
       "**/better-sqlite3/prebuilds/**/*",
-      "**/better-sqlite3/lib/binding/**/*"
+      "**/better-sqlite3/lib/binding/**/*",
+      "**/node_modules/bindings/**/*",
+      "**/node_modules/file-uri-to-path/**/*"
     ],
     "files": [
       "dist-electron/**/*",

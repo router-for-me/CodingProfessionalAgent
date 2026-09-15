@@ -12,6 +12,68 @@ export interface ResolveMainEntryOptions {
     resourcesPath?: string
 }
 
+const fallbackModulePaths: string[] = []
+let fallbackResolverInstalled = false
+
+function isBareModuleRequest(request: string): boolean {
+    return (
+        typeof request === 'string' &&
+        request.length > 0 &&
+        !request.startsWith('.') &&
+        !request.startsWith('node:') &&
+        !path.isAbsolute(request)
+    )
+}
+
+function isModuleNotFoundError(err: unknown): boolean {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code
+    if (code === 'MODULE_NOT_FOUND') return true
+    return /cannot find module/i.test(String((err as Error | undefined)?.message || ''))
+}
+
+/**
+ * NODE_PATH / Module.globalPaths are ignored by Electron's CJS loader for files
+ * living in app.asar.unpacked (and by ESM entirely). Patch Module._resolveFilename
+ * so `require('bindings')` from unpacked better-sqlite3 can still resolve to the
+ * copy shipped inside the base app.asar/node_modules.
+ */
+function installFallbackModuleResolver(pathsToAdd: string[]): void {
+    for (const p of pathsToAdd) {
+        if (p && !fallbackModulePaths.includes(p)) {
+            fallbackModulePaths.push(p)
+        }
+    }
+    if (fallbackResolverInstalled) return
+
+    const originalResolveFilename = (Module as any)._resolveFilename
+    if (typeof originalResolveFilename !== 'function') return
+
+    fallbackResolverInstalled = true
+    ;(Module as any)._resolveFilename = function cpaFallbackResolveFilename(
+        request: string,
+        parent: NodeModule | undefined,
+        isMain: boolean,
+        options: unknown,
+    ) {
+        try {
+            return originalResolveFilename.call(this, request, parent, isMain, options)
+        } catch (err) {
+            if (!isModuleNotFoundError(err) || !isBareModuleRequest(request)) {
+                throw err
+            }
+            for (const fallbackDir of fallbackModulePaths) {
+                const candidate = path.join(fallbackDir, request)
+                try {
+                    return originalResolveFilename.call(this, candidate, parent, isMain, options)
+                } catch {
+                    // Try the next fallback directory
+                }
+            }
+            throw err
+        }
+    }
+}
+
 /**
  * Configures fallback module lookup paths pointing to the base application's
  * resources/app.asar/node_modules and resources/app.asar.unpacked/node_modules.
@@ -61,6 +123,10 @@ export function addFallbackModulePaths(fallbackPaths: string[]): void {
     } catch {
         // Ignore environment manipulation errors
     }
+
+    // 4. Patch CJS resolution so unpacked native-module JS can find companion
+    //    packages (bindings, file-uri-to-path) that remain inside app.asar.
+    installFallbackModuleResolver(fallbackPaths)
 }
 
 /**
@@ -152,16 +218,23 @@ export function ensureNativeModuleBridges(runtimeDir: string, resourcesPath?: st
             const asarModDir = path.join(asarModulesDir, modName)
             const directModDir = path.join(directModulesDir, modName)
 
-            // Resolve target entry, preferring JS wrapper over raw .node binary
-            let targetEntry = findModuleEntry(unpackedModDir)
-            if (!targetEntry || targetEntry.endsWith('.node')) {
-                const asarEntry = findModuleEntry(asarModDir)
-                if (asarEntry) {
-                    targetEntry = asarEntry
+            // Prefer the asar JS wrapper: electron-builder unpacks native modules
+            // without their CJS companion deps (better-sqlite3 requires `bindings`,
+            // which lives in app.asar/node_modules). Loading JS from unpacked makes
+            // require() walk unpacked/node_modules and fail with MODULE_NOT_FOUND.
+            // Fall back to unpacked/direct JS when asar has no JS entry.
+            const asarEntry = findModuleEntry(asarModDir)
+            const unpackedEntry = findModuleEntry(unpackedModDir)
+            const directEntry = findModuleEntry(directModDir)
+            let targetEntry: string | null = null
+            for (const candidate of [asarEntry, unpackedEntry, directEntry]) {
+                if (candidate && !candidate.endsWith('.node')) {
+                    targetEntry = candidate
+                    break
                 }
             }
             if (!targetEntry) {
-                targetEntry = findModuleEntry(directModDir)
+                targetEntry = asarEntry || unpackedEntry || directEntry
             }
 
             if (!targetEntry) continue

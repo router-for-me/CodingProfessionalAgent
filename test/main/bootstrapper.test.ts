@@ -4,7 +4,7 @@ import * as path from 'node:path'
 import * as os from 'node:os'
 import { execSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
-import Module from 'node:module'
+import Module, { createRequire } from 'node:module'
 import {
     resolveMainEntry,
     resolveMainScriptToExecute,
@@ -246,5 +246,97 @@ console.log('ESM_BRIDGE_WALK_SUCCESS');
 
         const bridgeIndexJs = path.join(tempDir, 'node_modules', 'better-sqlite3', 'index.js')
         expect(fs.existsSync(bridgeIndexJs)).toBe(true)
+    })
+
+    it('prefers asar JS entry over unpacked JS so sibling CJS deps like bindings resolve', () => {
+        const mockResources = path.join(tempDir, 'mock-resources')
+        const asarSqlite = path.join(mockResources, 'app.asar', 'node_modules', 'better-sqlite3')
+        const unpackedSqlite = path.join(mockResources, 'app.asar.unpacked', 'node_modules', 'better-sqlite3')
+
+        fs.mkdirSync(path.join(asarSqlite, 'lib'), { recursive: true })
+        fs.writeFileSync(
+            path.join(asarSqlite, 'package.json'),
+            JSON.stringify({ name: 'better-sqlite3', main: './lib/index.js' }),
+            'utf8',
+        )
+        fs.writeFileSync(
+            path.join(asarSqlite, 'lib', 'index.js'),
+            'module.exports = function AsarDatabase() {};',
+            'utf8',
+        )
+
+        fs.mkdirSync(path.join(unpackedSqlite, 'lib'), { recursive: true })
+        fs.writeFileSync(
+            path.join(unpackedSqlite, 'package.json'),
+            JSON.stringify({ name: 'better-sqlite3', main: './lib/index.js' }),
+            'utf8',
+        )
+        fs.writeFileSync(
+            path.join(unpackedSqlite, 'lib', 'index.js'),
+            'module.exports = function UnpackedDatabase() {};',
+            'utf8',
+        )
+
+        const bridged = ensureNativeModuleBridges(tempDir, mockResources)
+        expect(bridged).toContain('better-sqlite3')
+
+        const bridgeJs = fs.readFileSync(path.join(tempDir, 'node_modules', 'better-sqlite3', 'index.js'), 'utf8')
+        const asarUrl = pathToFileURL(path.join(asarSqlite, 'lib', 'index.js')).href
+        const unpackedUrl = pathToFileURL(path.join(unpackedSqlite, 'lib', 'index.js')).href
+        expect(bridgeJs).toContain(asarUrl)
+        expect(bridgeJs).not.toContain(unpackedUrl)
+    })
+
+    it('resolves CJS require of companion deps from unpacked native modules via fallback module paths', () => {
+        const companionName = 'cpa-test-native-companion'
+        const asarModules = path.join(tempDir, 'app.asar', 'node_modules')
+        const unpackedLib = path.join(tempDir, 'app.asar.unpacked', 'node_modules', 'better-sqlite3', 'lib')
+
+        fs.mkdirSync(path.join(asarModules, companionName), { recursive: true })
+        fs.writeFileSync(
+            path.join(asarModules, companionName, 'package.json'),
+            JSON.stringify({ name: companionName, main: './index.js' }),
+            'utf8',
+        )
+        fs.writeFileSync(
+            path.join(asarModules, companionName, 'index.js'),
+            'module.exports = function companion() { return { fromAsar: true }; };',
+            'utf8',
+        )
+
+        fs.mkdirSync(unpackedLib, { recursive: true })
+        const databaseJs = path.join(unpackedLib, 'database.js')
+        fs.writeFileSync(
+            databaseJs,
+            `'use strict';
+const companion = require(${JSON.stringify(companionName)});
+module.exports = function Database() { return { addon: companion() }; };
+`,
+            'utf8',
+        )
+
+        const reqBefore = createRequire(databaseJs)
+        expect(() => reqBefore(companionName)).toThrow(/Cannot find module/)
+
+        addFallbackModulePaths([asarModules])
+
+        // Simulate Electron ignoring NODE_PATH / globalPaths for unpacked CJS.
+        const savedNodePath = process.env.NODE_PATH
+        try {
+            delete process.env.NODE_PATH
+            ;(Module as any)._initPaths?.()
+
+            const reqAfter = createRequire(databaseJs)
+            const Database = reqAfter(databaseJs)
+            const instance = Database()
+            expect(instance.addon).toEqual({ fromAsar: true })
+        } finally {
+            if (savedNodePath === undefined) {
+                delete process.env.NODE_PATH
+            } else {
+                process.env.NODE_PATH = savedNodePath
+            }
+            ;(Module as any)._initPaths?.()
+        }
     })
 })
