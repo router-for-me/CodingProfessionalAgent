@@ -122,6 +122,20 @@ describe('UpdateService', () => {
         expect(snapshot.errorMessage).toBeUndefined()
     })
 
+    it('automatically picks activeVersion from storage when currentVersion is not provided', () => {
+        storage.recordPendingVersion('1.0.4', 'versions/1.0.4/app.asar')
+        storage.activatePendingVersion()
+
+        const activeService = new UpdateService({
+            storage,
+            electronVersion: '44.0.0',
+            nodeAbiVersion: '130',
+        })
+
+        const snapshot = activeService.getStatusSnapshot()
+        expect(snapshot.currentVersion).toBe('1.0.4')
+    })
+
     it('detects available hot update when remote version is higher and compatible', async () => {
         const fetcher = vi.fn().mockResolvedValue(sampleHotManifest)
         const customService = new UpdateService({

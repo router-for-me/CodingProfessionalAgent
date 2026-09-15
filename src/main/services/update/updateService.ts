@@ -20,6 +20,7 @@ import { AsarHotUpdater } from './asarHotUpdater.js'
 import { FullUpdateProvider } from './fullUpdateProvider.js'
 import { decideUpdateType } from './updateDecision.js'
 import { verifyFileSha256 } from './checksum.js'
+import { getAppVersion } from '../../utils/version.js'
 
 export interface UpdateServiceOptions {
     storage?: UpdateStateStorage
@@ -84,10 +85,12 @@ export class UpdateService {
         this.storage = options?.storage || new UpdateStateStorage()
         this.hotUpdater = options?.hotUpdater || new AsarHotUpdater(this.storage)
         this.fullProvider = options?.fullProvider || new FullUpdateProvider()
-        this.currentVersion =
-            options?.currentVersion ||
+        const defaultVersion =
+            this.storage.loadState().activeVersion ||
+            getAppVersion() ||
             (typeof electron !== 'undefined' && electron.app?.getVersion?.()) ||
             '1.0.0'
+        this.currentVersion = options?.currentVersion || defaultVersion
         this.electronVersion =
             options?.electronVersion ||
             (typeof process !== 'undefined' && process.versions?.electron) ||
@@ -181,7 +184,14 @@ export class UpdateService {
                 this.storage.saveState(state)
             } catch {}
 
-            if (semver.gt(manifest.version, this.currentVersion)) {
+            const isSemverCurrent = Boolean(semver.valid(this.currentVersion))
+            const isSemverManifest = Boolean(semver.valid(manifest.version))
+            const isNewer =
+                isSemverCurrent && isSemverManifest
+                    ? semver.gt(manifest.version, this.currentVersion)
+                    : false
+
+            if (isNewer) {
                 this.availableManifest = manifest
                 this.resolvedUpdateType = decideUpdateType(manifest, {
                     electronVersion: this.electronVersion,

@@ -22,6 +22,7 @@ import { MainPluginRuntimeHost } from './plugins/runtime/MainPluginRuntimeHost.j
 import { MainPluginActivationCoordinator } from './plugins/runtime/MainPluginActivationCoordinator.js'
 import { rotateNativeImage45 } from './utils/imageRotate.js'
 import { registerWin32AppUserModelId } from './services/notificationBadgeService.js'
+import { getAppVersion } from './utils/version.js'
 
 // Prevent unhandled EPIPE errors when stdout/stderr or IPC pipes close abruptly
 process.stdout?.on?.('error', (err: NodeJS.ErrnoException) => {
@@ -252,7 +253,12 @@ async function bootstrap(): Promise<void> {
       }
     }
 
-    const cpaVersion = typeof app.getVersion === 'function' ? app.getVersion() : '1.0.0'
+    const cpaVersion = getAppVersion()
+    if (typeof (app as any).setVersion === 'function') {
+      try {
+        ;(app as any).setVersion(cpaVersion)
+      } catch {}
+    }
     const homeDir = typeof app.getPath === 'function' ? app.getPath('home') : ''
 
     const bootstrapResult = await bootstrapPluginGraph({

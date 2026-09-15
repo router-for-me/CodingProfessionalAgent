@@ -20,6 +20,7 @@ import { NotificationBadgeService } from '../../services/notificationBadgeServic
 import { GatewayDiscoveryService } from '../../services/gatewayDiscoveryService.js'
 import { PluginResourceService } from '../resources/PluginResourceService.js'
 import { PluginGraphManagementService } from '../management/PluginGraphManagementService.js'
+import { getAppVersion } from '../../utils/version.js'
 
 import type { MainPluginRuntimeHost } from '../runtime/MainPluginRuntimeHost.js'
 import type { MainPluginActivationCoordinator } from '../runtime/MainPluginActivationCoordinator.js'
@@ -173,10 +174,7 @@ export function createPlatformServiceDescriptors(
 
                 let fallbackVersion = '1.0.0'
                 try {
-                    const electronApp = Reflect.get(electron, 'app')
-                    if (electronApp && typeof electronApp.getVersion === 'function') {
-                        fallbackVersion = electronApp.getVersion()
-                    }
+                    fallbackVersion = getAppVersion()
                 } catch {}
 
                 const homeDir = options.homeDir || fallbackHomeDir

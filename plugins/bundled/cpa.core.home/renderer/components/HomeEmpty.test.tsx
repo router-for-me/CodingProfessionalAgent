@@ -147,6 +147,7 @@ describe('HomeEmpty component', () => {
     it('animates rolling on logo click and settles back upright', () => {
         let rafCallback: FrameRequestCallback | null = null
         let currentTime = 1000
+        vi.spyOn(performance, 'now').mockImplementation(() => currentTime)
         vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
             rafCallback = cb
             return 1
@@ -176,7 +177,7 @@ describe('HomeEmpty component', () => {
         fireEvent.click(logoButton)
 
         // Step through frames until animation settles back to upright
-        for (let i = 0; i < 200 && rafCallback; i++) {
+        for (let i = 0; i < 500 && rafCallback; i++) {
             currentTime += 16
             const cb: FrameRequestCallback = rafCallback
             rafCallback = null

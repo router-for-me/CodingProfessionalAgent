@@ -340,6 +340,12 @@ export function resolveMainEntry(baseDefaultMainPath: string, options?: ResolveM
                 ensureNativeModuleBridges(asarParentDir, resourcesPath)
             }
 
+            if (state.activeVersion && typeof electron !== 'undefined' && typeof (electron.app as any)?.setVersion === 'function') {
+                try {
+                    ;(electron.app as any).setVersion(state.activeVersion)
+                } catch {}
+            }
+
             return targetEntry
         }
     }

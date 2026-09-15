@@ -130,7 +130,13 @@ export function resolvePluginGraph(input: ResolvePluginGraphInput): ResolvedPlug
         const id = pkg.manifest.id
         const cpaEngine = pkg.manifest.engines?.cpa
 
-        if (!cpaEngine || !semver.satisfies(cpaVersion, cpaEngine, { includePrerelease: true })) {
+        const isDev = cpaVersion === 'dev' || cpaVersion === '0.0.0-dev' || cpaVersion === '0.0.0'
+        const isEngineSatisfied =
+            !cpaEngine ||
+            isDev ||
+            (Boolean(semver.valid(cpaVersion)) && semver.satisfies(cpaVersion, cpaEngine, { includePrerelease: true }))
+
+        if (!isEngineSatisfied) {
             blockedMap.set(id, {
                 pluginId: id,
                 reason: 'incompatible-version',

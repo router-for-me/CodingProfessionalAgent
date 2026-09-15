@@ -149,6 +149,16 @@ describe('DependencyResolver', () => {
             expect(graph.blocked).toEqual([])
         })
 
+        it('accepts any CPA engine versions when cpaVersion is dev mode', () => {
+            const graph = resolvePluginGraph({
+                packages: [createPkg('valid-plugin', { cpaEngine: '^1.0.0' })],
+                enabledPluginIds: new Set(['valid-plugin']),
+                cpaVersion: 'dev',
+            })
+            expect(graph.activationOrder.map((p) => p.manifest.id)).toEqual(['valid-plugin'])
+            expect(graph.blocked).toEqual([])
+        })
+
         it('blocks plugins with incompatible CPA engine version', () => {
             const graph = resolvePluginGraph({
                 packages: [createPkg('incompatible-plugin', { cpaEngine: '^2.0.0' })],
