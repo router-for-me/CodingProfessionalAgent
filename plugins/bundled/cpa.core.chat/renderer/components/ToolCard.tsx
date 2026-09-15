@@ -6,6 +6,7 @@ import type {
   ToolCardPart,
   ToolCardStatus,
 } from '../types.js'
+import { toolDisplayName } from '../utils/toolActivity.js'
 
 export type { ToolCardDetails, ToolCardImage, ToolCardPart, ToolCardStatus }
 
@@ -125,8 +126,8 @@ export const ToolCard = memo(function ToolCard(props: ToolCardProps) {
           className="size-3.5 shrink-0 text-[var(--accent-blue)]"
           aria-hidden
         />
-        <span className="truncate font-mono text-[13px] text-[var(--text-primary)]">
-          {part.name}
+        <span className="truncate text-[13px] text-[var(--text-primary)]">
+          {toolDisplayName(part.name ?? '', t)}
         </span>
         <span
           className={cn(

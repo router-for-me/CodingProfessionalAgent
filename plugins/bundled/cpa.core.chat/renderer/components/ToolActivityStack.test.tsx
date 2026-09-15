@@ -46,6 +46,21 @@ function sessionTitlePart(
   }
 }
 
+function namedToolPart(
+  id: string,
+  name: string,
+  args: Record<string, unknown> = {},
+  status: 'running' | 'done' = 'done',
+): Extract<DisplayMessagePart, { type: 'tool_call' }> {
+  return {
+    type: 'tool_call',
+    id,
+    name,
+    args,
+    status,
+  }
+}
+
 describe('ToolActivityStack', () => {
   beforeEach(async () => {
     await i18n.changeLanguage('en')
@@ -294,5 +309,39 @@ describe('ToolActivityStack', () => {
 
     expect(screen.getByTestId('tool-activity-latest')).toHaveTextContent('Set session title to Fix session title display')
     expect(screen.queryByText('Used set_session_title')).not.toBeInTheDocument()
+  })
+
+  it('shows localized copy for built-in memory and web search tools', () => {
+    render(
+      <ToolActivityStack
+        parts={[namedToolPart('t1', 'memories_search', { queries: ['preference'] })]}
+        onApproveTool={() => undefined}
+        onRejectTool={() => undefined}
+      />,
+    )
+
+    expect(screen.getByTestId('tool-activity-latest')).toHaveTextContent('Searched memories')
+    expect(screen.queryByText(/memories_search/)).not.toBeInTheDocument()
+  })
+
+  it('shows Chinese copy for built-in tools instead of function names', async () => {
+    await i18n.changeLanguage('zh-CN')
+    render(
+      <ToolActivityStack
+        parts={[
+          namedToolPart('t1', 'memories_list'),
+          namedToolPart('t2', 'web_search', { query: 'latest release' }, 'running'),
+        ]}
+        onApproveTool={() => undefined}
+        onRejectTool={() => undefined}
+      />,
+    )
+
+    expect(screen.getByTestId('tool-activity-latest')).toHaveTextContent('正在在线搜索')
+    expect(screen.queryByText(/web_search/)).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('tool-activity-expand'))
+    expect(screen.getByTestId('tool-activity-history')).toHaveTextContent('已列出记忆')
+    expect(screen.queryByText(/memories_list/)).not.toBeInTheDocument()
   })
 })

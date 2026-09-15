@@ -151,6 +151,30 @@ describe('ToolCard', () => {
     expect(screen.getByTestId('tool-result')).toHaveTextContent('x'.repeat(40))
   })
 
+  it('shows localized built-in tool names instead of function names', async () => {
+    const first = render(
+      <ToolCard
+        part={part({ name: 'memories_search', args: { queries: ['preference'] }, status: 'done' })}
+        onApprove={() => undefined}
+        onReject={() => undefined}
+      />,
+    )
+    expect(screen.getByText('Memory search')).toBeInTheDocument()
+    expect(screen.queryByText('memories_search')).not.toBeInTheDocument()
+    first.unmount()
+
+    await i18n.changeLanguage('zh-CN')
+    render(
+      <ToolCard
+        part={part({ name: 'web_search', args: { query: 'latest release' }, status: 'running' })}
+        onApprove={() => undefined}
+        onReject={() => undefined}
+      />,
+    )
+    expect(screen.getByText('在线搜索')).toBeInTheDocument()
+    expect(screen.queryByText('web_search')).not.toBeInTheDocument()
+  })
+
   it('never uses dangerouslySetInnerHTML for tool payloads', () => {
     const { container } = render(
       <ToolCard

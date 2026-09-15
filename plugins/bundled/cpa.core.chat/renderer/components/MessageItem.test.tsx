@@ -655,7 +655,7 @@ describe('MessageItem contribution rendering and custom override dispatching', (
 
     // Should fall back to default ToolCard
     expect(screen.getByTestId('tool-status')).toHaveAttribute('data-tool-status', 'done')
-    expect(screen.getByText('read')).toBeInTheDocument()
+    expect(screen.getByText('Read file')).toBeInTheDocument()
     expect(consoleError).toHaveBeenCalled()
     consoleError.mockRestore()
   })

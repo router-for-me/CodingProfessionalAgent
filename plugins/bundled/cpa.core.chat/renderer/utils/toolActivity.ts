@@ -13,6 +13,76 @@ export type ToolActivityKind =
   | 'ask'
   | 'other'
 
+const TOOL_DISPLAY_ALIASES: Record<string, string> = {
+  bash: 'shell',
+  pwsh: 'shell',
+  powershell: 'shell',
+  ask_user: 'ask',
+  manage_todo_list: 'todo',
+  set_session_title: 'title',
+  memory_search: 'memories_search',
+  memory_store: 'memories_add_ad_hoc_note',
+  send_input: 'send_message',
+  delegate_agent: 'spawn_agent',
+  subagent: 'spawn_agent',
+}
+
+const BUILTIN_TOOL_SUMMARIES: Record<
+  string,
+  { kind: ToolActivityKind; running: string; done: string }
+> = {
+  memories_list: {
+    kind: 'read',
+    running: 'tool.summary.listingMemories',
+    done: 'tool.summary.listedMemories',
+  },
+  memories_read: {
+    kind: 'read',
+    running: 'tool.summary.readingMemory',
+    done: 'tool.summary.readMemory',
+  },
+  memories_search: {
+    kind: 'read',
+    running: 'tool.summary.searchingMemories',
+    done: 'tool.summary.searchedMemories',
+  },
+  memories_add_ad_hoc_note: {
+    kind: 'write',
+    running: 'tool.summary.writingMemory',
+    done: 'tool.summary.wroteMemory',
+  },
+  web_search: {
+    kind: 'other',
+    running: 'tool.summary.searchingWeb',
+    done: 'tool.summary.searchedWeb',
+  },
+  spawn_agent: {
+    kind: 'other',
+    running: 'tool.summary.spawningAgent',
+    done: 'tool.summary.spawnedAgent',
+  },
+  send_message: {
+    kind: 'other',
+    running: 'tool.summary.sendingMessage',
+    done: 'tool.summary.sentMessage',
+  },
+  stop_agent: {
+    kind: 'other',
+    running: 'tool.summary.stoppingAgent',
+    done: 'tool.summary.stoppedAgent',
+  },
+  session_search: {
+    kind: 'other',
+    running: 'tool.summary.searchingSessions',
+    done: 'tool.summary.searchedSessions',
+  },
+  create_session: {
+    kind: 'other',
+    running: 'tool.summary.creatingSession',
+    done: 'tool.summary.createdSession',
+  },
+}
+
 export interface ToolActivityPart {
   id: string
   name: string
@@ -94,6 +164,17 @@ export function isToolRunning(status: string): boolean {
     status === 'running' ||
     status === 'awaiting_approval'
   )
+}
+
+function canonicalToolDisplayKey(name: string): string {
+  return TOOL_DISPLAY_ALIASES[name] ?? name
+}
+
+export function toolDisplayName(name: string, t: TFunction): string {
+  const canonical = canonicalToolDisplayKey(name)
+  const translated = t(`tool.display.${canonical}`, { defaultValue: '' })
+  if (typeof translated === 'string' && translated.trim()) return translated
+  return humanizeToken(name) || name
 }
 
 export function summarizeToolActivity(
@@ -210,12 +291,22 @@ export function summarizeToolActivity(
     }
   }
 
+  const builtin = BUILTIN_TOOL_SUMMARIES[canonicalToolDisplayKey(part.name)]
+  if (builtin) {
+    return {
+      kind: builtin.kind,
+      running,
+      text: t(running ? builtin.running : builtin.done),
+    }
+  }
+
+  const displayName = toolDisplayName(part.name, t)
   return {
     kind: 'other',
     running,
     text: running
-      ? t('tool.summary.using', { name: part.name })
-      : t('tool.summary.used', { name: part.name }),
+      ? t('tool.summary.using', { name: displayName })
+      : t('tool.summary.used', { name: displayName }),
   }
 }
 

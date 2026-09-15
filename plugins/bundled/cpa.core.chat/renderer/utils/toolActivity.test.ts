@@ -7,6 +7,7 @@ import {
   skillDisplayName,
   summarizeToolActivity,
   titleFromArgs,
+  toolDisplayName,
   trailingAssistantText,
 } from './toolActivity.js'
 
@@ -29,17 +30,39 @@ describe('skill detection', () => {
 })
 
 describe('summarizeToolActivity', () => {
+  const translations: Record<string, string> = {
+    'tool.summary.skillRead': 'Read {{name}} skill',
+    'tool.summary.runningCommand': 'Running {{command}}',
+    'tool.summary.loadedCommand': 'Loaded tools and ran a command',
+    'tool.summary.readingFile': 'Reading {{name}}',
+    'tool.summary.settingSessionTitle': 'Setting session title to {{title}}',
+    'tool.summary.settingSessionTitleGeneric': 'Setting session title',
+    'tool.summary.setSessionTitle': 'Set session title to {{title}}',
+    'tool.summary.setSessionTitleGeneric': 'Set session title',
+    'tool.summary.updatingTodoList': 'Updating todo list',
+    'tool.summary.listingMemories': 'Listing memories',
+    'tool.summary.listedMemories': 'Listed memories',
+    'tool.summary.readingMemory': 'Reading memory',
+    'tool.summary.readMemory': 'Read memory',
+    'tool.summary.searchingMemories': 'Searching memories',
+    'tool.summary.searchedMemories': 'Searched memories',
+    'tool.summary.writingMemory': 'Writing memory',
+    'tool.summary.wroteMemory': 'Wrote memory',
+    'tool.summary.searchingWeb': 'Searching the web',
+    'tool.summary.searchedWeb': 'Searched the web',
+    'tool.summary.using': 'Using {{name}}',
+    'tool.summary.used': 'Used {{name}}',
+    'tool.display.memories_search': 'Memory search',
+    'tool.display.memories_add_ad_hoc_note': 'Write memory',
+    'tool.display.web_search': 'Web search',
+  }
   const t: any = (key: string, options?: any) => {
-    if (key === 'tool.summary.skillRead') return `Read ${options?.name} skill`
-    if (key === 'tool.summary.runningCommand') return `Running ${options?.command}`
-    if (key === 'tool.summary.loadedCommand') return 'Loaded tools and ran a command'
-    if (key === 'tool.summary.readingFile') return `Reading ${options?.name}`
-    if (key === 'tool.summary.settingSessionTitle') return `Setting session title to ${options?.title}`
-    if (key === 'tool.summary.settingSessionTitleGeneric') return 'Setting session title'
-    if (key === 'tool.summary.setSessionTitle') return `Set session title to ${options?.title}`
-    if (key === 'tool.summary.setSessionTitleGeneric') return 'Set session title'
-    if (key === 'tool.summary.updatingTodoList') return 'Updating todo list'
-    return options?.defaultValue ?? key
+    const template = translations[key]
+    if (!template) return options?.defaultValue ?? key
+    return template.replace(/\{\{(\w+)\}\}/g, (_match, name: string) => {
+      const value = options?.[name]
+      return value == null ? '' : String(value)
+    })
   }
 
   it('summarizes a completed skill read', () => {
@@ -171,6 +194,87 @@ describe('summarizeToolActivity', () => {
       t,
     )
     expect(doneNoTitle.text).toBe('Set session title')
+  })
+
+  it('summarizes built-in memory and web search tools without function names', () => {
+    const runningSearch = summarizeToolActivity(
+      {
+        id: 'm1',
+        name: 'memories_search',
+        args: { queries: ['preference'] },
+        status: 'running',
+      },
+      t,
+    )
+    expect(runningSearch.kind).toBe('read')
+    expect(runningSearch.text).toBe('Searching memories')
+    expect(runningSearch.text).not.toContain('memories_search')
+
+    const listed = summarizeToolActivity(
+      {
+        id: 'm2',
+        name: 'memories_list',
+        args: {},
+        status: 'done',
+      },
+      t,
+    )
+    expect(listed.text).toBe('Listed memories')
+
+    const wrote = summarizeToolActivity(
+      {
+        id: 'm3',
+        name: 'memories_add_ad_hoc_note',
+        args: { filename: 'note.md', note: 'remember this' },
+        status: 'done',
+      },
+      t,
+    )
+    expect(wrote.kind).toBe('write')
+    expect(wrote.text).toBe('Wrote memory')
+
+    const aliasSearch = summarizeToolActivity(
+      {
+        id: 'm4',
+        name: 'memory_search',
+        args: {},
+        status: 'done',
+      },
+      t,
+    )
+    expect(aliasSearch.text).toBe('Searched memories')
+
+    const webSearch = summarizeToolActivity(
+      {
+        id: 'w1',
+        name: 'web_search',
+        args: { query: 'latest release' },
+        status: 'running',
+      },
+      t,
+    )
+    expect(webSearch.text).toBe('Searching the web')
+    expect(webSearch.text).not.toContain('web_search')
+  })
+
+  it('uses localized display names for unknown tools instead of raw function names', () => {
+    const summary = summarizeToolActivity(
+      {
+        id: 'u1',
+        name: 'custom_plugin_tool',
+        args: {},
+        status: 'done',
+      },
+      t,
+    )
+    expect(summary.text).toBe('Used Custom Plugin Tool')
+    expect(summary.text).not.toContain('custom_plugin_tool')
+  })
+
+  it('localizes built-in tool display names', () => {
+    expect(toolDisplayName('memories_search', t)).toBe('Memory search')
+    expect(toolDisplayName('web_search', t)).toBe('Web search')
+    expect(toolDisplayName('memory_store', t)).toBe('Write memory')
   })
 
   it('extracts and trims title from args with length truncation', () => {
