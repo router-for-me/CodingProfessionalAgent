@@ -44,11 +44,12 @@ export class NpmPluginSource {
                 continue
             }
 
-            const spec = typeof entry.source === 'string' ? entry.source.trim() : ''
-            if (!spec || !spec.startsWith('npm:')) {
+            const rawSpec = typeof entry.source === 'string' ? entry.source.trim() : ''
+            if (!rawSpec) {
                 continue
             }
 
+            const spec = rawSpec.startsWith('npm:') ? rawSpec : `npm:${rawSpec}`
             const installed = await this.installer.install(spec as `npm:${string}`)
 
             const pkg = await loadPluginPackageFromDirectory({

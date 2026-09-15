@@ -131,8 +131,20 @@ export function normalizePluginSourceConfig(raw: unknown): PluginSourceConfig {
         }
         const itemObj = item as Record<string, unknown>
         if (typeof itemObj.source === 'string' && itemObj.source.trim().length > 0) {
+            let sourceStr = itemObj.source.trim()
+            if (
+                !sourceStr.startsWith('npm:') &&
+                !sourceStr.startsWith('path:') &&
+                !sourceStr.startsWith('.') &&
+                !sourceStr.startsWith('/') &&
+                !sourceStr.startsWith('~') &&
+                (sourceStr.startsWith('@') || sourceStr.includes('@'))
+            ) {
+                sourceStr = `npm:${sourceStr}`
+            }
+
             const entry: PluginSourceConfigEntry = {
-                source: itemObj.source.trim() as PluginSourceSpec,
+                source: sourceStr as PluginSourceSpec,
             }
             if (typeof itemObj.enabled === 'boolean') {
                 entry.enabled = itemObj.enabled

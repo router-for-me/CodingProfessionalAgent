@@ -49,12 +49,22 @@ export class ConfiguredPluginSource {
 
             let targetDir: string
             let installedIntegrity: string | undefined
+            const isExplicitPath =
+                spec.startsWith('path:') ||
+                spec.startsWith('.') ||
+                spec.startsWith('/') ||
+                spec.startsWith('~') ||
+                path.isAbsolute(spec)
+
             if (spec.startsWith('path:')) {
                 const rawPath = spec.slice(5)
                 targetDir = path.isAbsolute(rawPath)
                     ? path.resolve(rawPath)
                     : path.resolve(this.baseDir, rawPath)
-            } else if (spec.startsWith('npm:')) {
+            } else if (
+                spec.startsWith('npm:') ||
+                (!isExplicitPath && this.installer && (spec.startsWith('@') || spec.includes('@')))
+            ) {
                 if (!this.installer) {
                     continue
                 }

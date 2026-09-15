@@ -542,5 +542,53 @@ describe('Plugin Sources & Catalog Discovery', () => {
 
             expect(packages[0].entries.main).toBe(await fs.realpath(path.join(pluginDir, 'main.js')))
         })
+
+        it('throws PluginManifestError when directory does not exist for loadPluginPackageFromDirectory', async () => {
+            const { loadPluginPackageFromDirectory } = await import(
+                '../src/main/plugins/sources/loadPluginPackage.js'
+            )
+            const missingDir = path.join(tempRoot, 'non-existent-plugin-dir')
+            await expect(
+                loadPluginPackageFromDirectory({
+                    directory: missingDir,
+                    sourceKind: 'global-config',
+                    sourceSpec: 'path:./missing',
+                }),
+            ).rejects.toThrow(PluginManifestError)
+        })
+
+        it('supports bare npm spec in configured sources when installer is provided', async () => {
+            const { ManagedNpmInstaller } = await import(
+                '../src/main/plugins/packages/ManagedNpmInstaller.js'
+            )
+            const installer = new ManagedNpmInstaller({
+                pluginsDir: globalPluginsDir,
+                fetchManifest: async () => ({
+                    name: '@custom/bare-source-pkg',
+                    version: '1.0.0',
+                    dist: { integrity: 'sha512-test==' },
+                }),
+                extractPackage: async (_spec, dest) => {
+                    await createPluginFixture(dest, {
+                        id: 'bare-source-plugin',
+                        name: 'Bare Source Plugin',
+                        version: '1.0.0',
+                    })
+                },
+            })
+
+            const packages = await createPluginCatalog({
+                homeDir,
+                bundledPackages: [],
+                npmInstaller: installer,
+                globalConfig: {
+                    sources: [{ source: '@custom/bare-source-pkg@1.0.0' }],
+                },
+            })
+
+            expect(packages.length).toBe(1)
+            expect(packages[0].manifest.id).toBe('bare-source-plugin')
+            expect(packages[0].source.kind).toBe('global-config')
+        })
     })
 })

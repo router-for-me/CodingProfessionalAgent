@@ -26,7 +26,15 @@ export async function loadPluginPackageFromDirectory(
     options: LoadPluginOptions,
 ): Promise<ResolvedPluginPackage> {
     const { directory, sourceKind, sourceSpec, overrideCapabilities } = options
-    const realSourceRoot = await fs.realpath(directory)
+    let realSourceRoot: string
+    try {
+        realSourceRoot = await fs.realpath(directory)
+    } catch (err: any) {
+        throw new PluginManifestError(
+            `Plugin directory does not exist or cannot be resolved: '${directory}' (${err.message})`,
+            { cause: err },
+        )
+    }
 
     let rawManifest: Record<string, unknown> | null = null
     const manifestPath = path.join(realSourceRoot, 'manifest.json')

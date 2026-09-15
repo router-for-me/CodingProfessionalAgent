@@ -321,6 +321,70 @@ describe('PluginGraphManagementService & Graph Transactions', () => {
         expect(listAfterUninstall.plugins.some((p) => p.manifest.id === 'managed-test')).toBe(false)
     })
 
+    it('handles installing npm plugin with bare specifier (without npm: prefix) and removes from disabled list', async () => {
+        const fixtureManifest = {
+            name: 'cpa-bare-plugin',
+            version: '1.0.0',
+            dist: { integrity: 'sha512-bareHash==' },
+        }
+        const extractSpy = vi.fn(async (_spec: string, dest: string) => {
+            await createTestPlugin(dest, 'bare-plugin-id', '1.0.0')
+        })
+
+        const customInstaller = new ManagedNpmInstaller({
+            pluginsDir: globalPluginsDir,
+            fetchManifest: async () => fixtureManifest,
+            extractPackage: extractSpy,
+        })
+
+        // Pre-configure global settings with the plugin disabled
+        const globalSettingsPath = path.join(homeDir, '.coding-professional-agent', 'settings.json')
+        await fs.writeFile(
+            globalSettingsPath,
+            JSON.stringify({
+                plugins: {
+                    version: 1,
+                    sources: [],
+                    disabled: ['bare-plugin-id'],
+                },
+            }),
+            'utf-8',
+        )
+
+        const service = new PluginGraphManagementService({
+            homeDir,
+            projectPath: projectDir,
+            resourceService,
+            coordinator,
+            npmInstaller: customInstaller,
+        })
+
+        // Prepare install with bare spec (no 'npm:' prefix) in global scope
+        const installCandidate = await service.prepareInstall('cpa-bare-plugin@1.0.0', {
+            scope: 'global',
+        })
+        expect(installCandidate.candidateRevision).toBeTruthy()
+        expect(installCandidate.graph.plugins.some((p) => p.id === 'bare-plugin-id')).toBe(true)
+
+        // Commit install
+        await service.commitTransaction(installCandidate.candidateRevision)
+
+        const listAfterInstall = await service.list()
+        const found = listAfterInstall.plugins.find((p) => p.manifest.id === 'bare-plugin-id')
+        expect(found).toBeDefined()
+        expect(found?.status).toBe('active')
+
+        // Verify settings.json on disk has normalized npm: source and removed from disabled
+        const savedSettings = JSON.parse(await fs.readFile(globalSettingsPath, 'utf-8'))
+        expect(savedSettings.plugins.sources).toEqual([
+            expect.objectContaining({
+                source: 'npm:cpa-bare-plugin@1.0.0',
+                enabled: true,
+            }),
+        ])
+        expect(savedSettings.plugins.disabled).toEqual([])
+    })
+
     it('does NOT commit runtime coordinator if disk prepare fails', async () => {
         const bundledDir = path.join(tempRoot, 'bundled')
         await createTestPlugin(path.join(bundledDir, 'cpa.core.bundled'), 'cpa.core.bundled')

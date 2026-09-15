@@ -1,8 +1,10 @@
+import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import {
     type CapabilityInvocationContext,
     type PluginCriticality,
     type PluginManifest,
+    type PluginSourceSpec,
     type PluginSummary,
     type ResolvedPluginGraphDTO,
     type ResolvedPluginPackage,
@@ -352,22 +354,47 @@ export class PluginGraphManagementService {
         } else if (type === 'install') {
             const spec = targetIdOrSpec
             // Install managed package
-            await this.npmInstaller.install(spec, { strictExact: true })
+            const installed = await this.npmInstaller.install(spec, { strictExact: true })
+            const canonicalSpec: PluginSourceSpec = spec.startsWith('npm:')
+                ? (spec as PluginSourceSpec)
+                : `npm:${installed.name}@${installed.version}`
 
             const entry: PluginSourceConfigEntry = {
-                source: spec,
+                source: canonicalSpec,
                 enabled: true,
             }
 
+            // Ensure newly installed plugin is not in disabled list
+            try {
+                const manifestPath = path.join(installed.packageRoot, 'manifest.json')
+                const manifestContent = await fs.readFile(manifestPath, 'utf-8')
+                const parsedManifest = JSON.parse(manifestContent)
+                const pluginId = parsedManifest.id ?? installed.name
+                candidateGlobal.disabled = (candidateGlobal.disabled ?? []).filter(
+                    (id) => id !== pluginId && id !== installed.name,
+                )
+                if (candidateProject) {
+                    candidateProject.disabled = (candidateProject.disabled ?? []).filter(
+                        (id) => id !== pluginId && id !== installed.name,
+                    )
+                }
+            } catch {
+                // Best effort manifest inspection
+            }
+
             if (scope === 'project' && candidateProject) {
-                const existingIdx = candidateProject.sources.findIndex((s) => s.source === spec)
+                const existingIdx = candidateProject.sources.findIndex(
+                    (s) => s.source === canonicalSpec || s.source === spec,
+                )
                 if (existingIdx !== -1) {
                     candidateProject.sources[existingIdx] = entry
                 } else {
                     candidateProject.sources.push(entry)
                 }
             } else {
-                const existingIdx = candidateGlobal.sources.findIndex((s) => s.source === spec)
+                const existingIdx = candidateGlobal.sources.findIndex(
+                    (s) => s.source === canonicalSpec || s.source === spec,
+                )
                 if (existingIdx !== -1) {
                     candidateGlobal.sources[existingIdx] = entry
                 } else {
@@ -376,13 +403,21 @@ export class PluginGraphManagementService {
             }
         } else if (type === 'uninstall') {
             const pluginId = targetIdOrSpec
+            // Remove from disabled lists
+            candidateGlobal.disabled = (candidateGlobal.disabled ?? []).filter((id) => id !== pluginId)
+            if (candidateProject) {
+                candidateProject.disabled = (candidateProject.disabled ?? []).filter(
+                    (id) => id !== pluginId,
+                )
+            }
+
             // Remove from configured sources
             candidateGlobal.sources = candidateGlobal.sources.filter((s) => {
-                return !(typeof s.source === 'string' && s.source.includes(pluginId))
+                return !(typeof s.source === 'string' && (s.source === pluginId || s.source.includes(pluginId)))
             })
             if (candidateProject) {
                 candidateProject.sources = candidateProject.sources.filter((s) => {
-                    return !(typeof s.source === 'string' && s.source.includes(pluginId))
+                    return !(typeof s.source === 'string' && (s.source === pluginId || s.source.includes(pluginId)))
                 })
             }
         }
