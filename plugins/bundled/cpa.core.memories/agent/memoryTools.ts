@@ -6,7 +6,7 @@
 import type { AgentToolContribution } from '@cpa/plugin-api'
 import {
     LocalMemoriesBackend,
-    type ElectronBridgeLike,
+    type MemoriesBridge,
 } from './localMemoriesBackend'
 import type {
     AddAdHocNoteRequest,
@@ -31,7 +31,7 @@ export const MEMORIES_SEARCH_DESCRIPTION =
     'Search across memory files within the memory store.'
 
 export const MEMORIES_ADD_AD_HOC_NOTE_DESCRIPTION =
-    'Add an ad-hoc memory note into extensions/ad_hoc/notes/. Only call when explicitly requested by user.'
+    'Add an ad-hoc memory note into extensions/ad_hoc/notes/. Call to record completed task summaries, learned user preferences, project conventions, or when explicitly requested by user.'
 
 export const MEMORIES_LIST_PARAMETERS: Record<string, unknown> = {
     type: 'object',
@@ -143,7 +143,7 @@ export interface CreateMemoryToolsOptions {
     backend?: LocalMemoriesBackend
     rootDir?: string
     memoryRoot?: string
-    bridge?: ElectronBridgeLike
+    bridge?: MemoriesBridge
 }
 
 /**

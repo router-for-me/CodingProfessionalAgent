@@ -33,9 +33,46 @@ export interface ElectronBridgeLike {
     RealPath?(path: string): Promise<string>
 }
 
+/**
+ * Lowercase NativeBridge surface used by the agent runtime.
+ * File payloads are raw bytes, not base64 strings.
+ */
+export interface NativeBridgeLike {
+    runtimeInfo?(): Promise<{
+        platform?: string
+        homeDir?: string
+        userConfigDir?: string
+        tempDir?: string
+        isDebug?: boolean
+        appConfigDirName?: string
+    }>
+    readFile?(path: string): Promise<Uint8Array | { dataBase64: string } | string>
+    writeFile?(path: string, data: Uint8Array): Promise<void>
+    mkdirAll?(path: string): Promise<void>
+    removeFile?(path: string): Promise<void>
+    stat?(path: string): Promise<{
+        name?: string
+        size?: number
+        sizeBytes?: number
+        mode?: number
+        isDir?: boolean
+        isSymbolicLink?: boolean
+        isSymlink?: boolean
+    }>
+    readDir?(path: string): Promise<ReadonlyArray<{
+        name: string
+        isDir: boolean
+        isSymbolicLink?: boolean
+        isSymlink?: boolean
+    }> | null>
+    realPath?(path: string): Promise<string>
+}
+
+export type MemoriesBridge = ElectronBridgeLike | NativeBridgeLike
+
 export interface LocalMemoriesBackendOptions {
     memoryRoot?: string
-    bridge?: ElectronBridgeLike
+    bridge?: MemoriesBridge
 }
 
 const AD_HOC_NOTE_FILENAME_MAX_BYTES = 128
@@ -43,11 +80,22 @@ const AD_HOC_NOTE_SLUG_MAX_BYTES = 80
 const TIMESTAMP_PREFIX_LEN = 20
 const APPROX_BYTES_PER_TOKEN = 4
 
-/**
- * Encode string to base64 using UTF-8 safe TextEncoder.
- */
-export function stringToBase64(str: string): string {
-    const bytes = new TextEncoder().encode(str)
+function toUint8Array(data: unknown): Uint8Array {
+    if (data instanceof Uint8Array) {
+        return data
+    }
+    if (typeof ArrayBuffer !== 'undefined' && data instanceof ArrayBuffer) {
+        return new Uint8Array(data)
+    }
+    if (ArrayBuffer.isView(data)) {
+        const view = data as ArrayBufferView
+        return new Uint8Array(view.buffer, view.byteOffset, view.byteLength)
+    }
+    throw new TypeError('Expected binary data as Uint8Array')
+}
+
+function uint8ArrayToBase64(data: Uint8Array): string {
+    const bytes = toUint8Array(data)
     let binary = ''
     const chunkSize = 0x8000
     for (let i = 0; i < bytes.length; i += chunkSize) {
@@ -56,21 +104,137 @@ export function stringToBase64(str: string): string {
     return btoa(binary)
 }
 
+function base64ToUint8Array(b64: string): Uint8Array {
+    if (!b64) return new Uint8Array()
+    const binary = atob(b64)
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i += 1) {
+        bytes[i] = binary.charCodeAt(i)
+    }
+    return bytes
+}
+
+/**
+ * Encode string to base64 using UTF-8 safe TextEncoder.
+ */
+export function stringToBase64(str: string): string {
+    return uint8ArrayToBase64(new TextEncoder().encode(str))
+}
+
 /**
  * Decode base64 to UTF-8 string.
  */
 export function base64ToString(b64: string): string {
     if (!b64) return ''
     try {
-        const binary = atob(b64)
-        const bytes = new Uint8Array(binary.length)
-        for (let i = 0; i < binary.length; i += 1) {
-            bytes[i] = binary.charCodeAt(i)
-        }
-        return new TextDecoder().decode(bytes)
+        return new TextDecoder().decode(base64ToUint8Array(b64))
     } catch {
         return ''
     }
+}
+
+function decodeReadFileResult(raw: unknown): { dataBase64: string } {
+    if (raw && typeof raw === 'object' && !ArrayBuffer.isView(raw) && 'dataBase64' in (raw as object)) {
+        const dataBase64 = (raw as { dataBase64?: unknown }).dataBase64
+        return { dataBase64: typeof dataBase64 === 'string' ? dataBase64 : '' }
+    }
+    if (typeof raw === 'string') {
+        return { dataBase64: stringToBase64(raw) }
+    }
+    return { dataBase64: uint8ArrayToBase64(toUint8Array(raw)) }
+}
+
+function mapStatResult(
+    raw: {
+        name?: string
+        size?: number
+        sizeBytes?: number
+        mode?: number
+        isDir?: boolean
+        isSymbolicLink?: boolean
+        isSymlink?: boolean
+    },
+): { name: string; size: number; mode: number; isDir: boolean; isSymbolicLink?: boolean } {
+    return {
+        name: raw.name ?? '',
+        size: typeof raw.size === 'number'
+            ? raw.size
+            : typeof raw.sizeBytes === 'number'
+                ? raw.sizeBytes
+                : 0,
+        mode: typeof raw.mode === 'number' ? raw.mode : 0,
+        isDir: Boolean(raw.isDir),
+        isSymbolicLink: Boolean(raw.isSymbolicLink ?? raw.isSymlink),
+    }
+}
+
+/**
+ * Normalize NativeBridge (lowercase + Uint8Array) and ElectronBridgeLike
+ * (capitalized + base64) into a single backend contract.
+ */
+export function normalizeToElectronBridge(bridge: MemoriesBridge): ElectronBridgeLike {
+    const src = bridge as ElectronBridgeLike & NativeBridgeLike
+    const normalized: ElectronBridgeLike = {}
+
+    if (typeof src.RuntimeInfo === 'function') {
+        normalized.RuntimeInfo = src.RuntimeInfo.bind(src)
+    } else if (typeof src.runtimeInfo === 'function') {
+        normalized.RuntimeInfo = src.runtimeInfo.bind(src)
+    }
+
+    if (typeof src.ReadFile === 'function') {
+        normalized.ReadFile = src.ReadFile.bind(src)
+    } else if (typeof src.readFile === 'function') {
+        normalized.ReadFile = async (path: string) => decodeReadFileResult(await src.readFile!(path))
+    }
+
+    if (typeof src.WriteFile === 'function') {
+        normalized.WriteFile = src.WriteFile.bind(src)
+    } else if (typeof src.writeFile === 'function') {
+        normalized.WriteFile = async (path: string, dataBase64: string) => {
+            await src.writeFile!(path, base64ToUint8Array(dataBase64))
+        }
+    }
+
+    if (typeof src.MkdirAll === 'function') {
+        normalized.MkdirAll = src.MkdirAll.bind(src)
+    } else if (typeof src.mkdirAll === 'function') {
+        normalized.MkdirAll = src.mkdirAll.bind(src)
+    }
+
+    if (typeof src.RemoveFile === 'function') {
+        normalized.RemoveFile = src.RemoveFile.bind(src)
+    } else if (typeof src.removeFile === 'function') {
+        normalized.RemoveFile = src.removeFile.bind(src)
+    }
+
+    if (typeof src.Stat === 'function') {
+        normalized.Stat = src.Stat.bind(src)
+    } else if (typeof src.stat === 'function') {
+        normalized.Stat = async (path: string) => mapStatResult(await src.stat!(path))
+    }
+
+    if (typeof src.ReadDir === 'function') {
+        normalized.ReadDir = src.ReadDir.bind(src)
+    } else if (typeof src.readDir === 'function') {
+        normalized.ReadDir = async (path: string) => {
+            const entries = await src.readDir!(path)
+            if (!entries) return null
+            return entries.map((entry) => ({
+                name: entry.name,
+                isDir: Boolean(entry.isDir),
+                isSymbolicLink: Boolean(entry.isSymbolicLink ?? entry.isSymlink),
+            }))
+        }
+    }
+
+    if (typeof src.RealPath === 'function') {
+        normalized.RealPath = src.RealPath.bind(src)
+    } else if (typeof src.realPath === 'function') {
+        normalized.RealPath = src.realPath.bind(src)
+    }
+
+    return normalized
 }
 
 /**
@@ -313,7 +477,7 @@ export async function resolveMemoryRoot(options?: LocalMemoriesBackendOptions): 
     if (options?.memoryRoot) {
         return options.memoryRoot
     }
-    const bridge = options?.bridge
+    const bridge = options?.bridge ? normalizeToElectronBridge(options.bridge) : undefined
     if (bridge?.RuntimeInfo) {
         try {
             const info = await bridge.RuntimeInfo()
@@ -335,11 +499,11 @@ export async function resolveMemoryRoot(options?: LocalMemoriesBackendOptions): 
 export async function resolveBackendContext(
     options?: LocalMemoriesBackendOptions,
 ): Promise<{ root: string; bridge: ElectronBridgeLike }> {
-    const bridge = options?.bridge
-    if (!bridge) {
+    if (!options?.bridge) {
         throw new Error('bridge is unavailable')
     }
-    const root = await resolveMemoryRoot(options)
+    const bridge = normalizeToElectronBridge(options.bridge)
+    const root = await resolveMemoryRoot({ ...options, bridge })
     return { root, bridge }
 }
 
@@ -437,6 +601,14 @@ export async function listMemories(
 
     const metadata = await metadataOrNull(bridge, scopedPath)
     if (!metadata) {
+        if (!request.path || request.path.trim() === '') {
+            return {
+                path: request.path,
+                entries: [],
+                nextCursor: undefined,
+                truncated: false,
+            }
+        }
         throw new Error(`path '${request.path ?? ''}' was not found`)
     }
     if (metadata.isSymbolicLink || (metadata.mode && (metadata.mode & 0o170000) === 0o120000)) {
@@ -806,6 +978,16 @@ export async function searchMemories(
     const scopedPath = await resolveScopedPath(root, bridge, request.path)
     const metadata = await metadataOrNull(bridge, scopedPath)
     if (!metadata) {
+        if (!request.path || request.path.trim() === '') {
+            return {
+                queries,
+                matchMode,
+                path: request.path,
+                matches: [],
+                nextCursor: undefined,
+                truncated: false,
+            }
+        }
         throw new Error(`path '${request.path ?? ''}' was not found`)
     }
     if (metadata.isSymbolicLink || (metadata.mode && (metadata.mode & 0o170000) === 0o120000)) {
@@ -928,13 +1110,15 @@ export async function addAdHocNote(
  */
 export async function deleteLocalMemory(options?: LocalMemoriesBackendOptions): Promise<void> {
     // Destructive operations must not guess a home after runtime lookup fails.
-    if (!options?.memoryRoot) {
-        const info = await options?.bridge?.RuntimeInfo?.()
+    const normalizedBridge = options?.bridge ? normalizeToElectronBridge(options.bridge) : undefined
+    let resolvedOptions: LocalMemoriesBackendOptions = { ...options, bridge: normalizedBridge }
+    if (!resolvedOptions.memoryRoot) {
+        const info = await normalizedBridge?.RuntimeInfo?.()
         if (!info?.homeDir) throw new Error('Memory home directory is unavailable')
         const dirName = (info as any).appConfigDirName || getAppConfigDirName((info as any).isDebug)
-        options = { ...options, memoryRoot: joinPath(info.homeDir, dirName, 'memories') }
+        resolvedOptions = { ...resolvedOptions, memoryRoot: joinPath(info.homeDir, dirName, 'memories') }
     }
-    const { root, bridge } = await resolveBackendContext(options)
+    const { root, bridge } = await resolveBackendContext(resolvedOptions)
     if (!bridge.Stat) throw new Error('Stat is unavailable')
     let stat: Awaited<ReturnType<NonNullable<ElectronBridgeLike['Stat']>>>
     try {
@@ -995,7 +1179,7 @@ export async function deleteLocalMemory(options?: LocalMemoriesBackendOptions): 
 export class LocalMemoriesBackend {
     constructor(private options?: LocalMemoriesBackendOptions) {}
 
-    static fromMemoryRoot(root: string, bridge?: ElectronBridgeLike): LocalMemoriesBackend {
+    static fromMemoryRoot(root: string, bridge?: MemoriesBridge): LocalMemoriesBackend {
         return new LocalMemoriesBackend({ memoryRoot: root, bridge })
     }
 

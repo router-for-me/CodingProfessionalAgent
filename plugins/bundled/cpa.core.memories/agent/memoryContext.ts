@@ -26,33 +26,59 @@ export interface LoadMemoryReadPathContextOptions {
  */
 export function buildMemoryReadPathInstructions(
     basePath: string,
-    memorySummary: string,
+    memorySummary?: string,
 ): string {
     const normBase = normalizeSeparators(basePath).replace(/\/+$/, '')
-    const trimmedSummary = memorySummary.trim()
+    const trimmedSummary = (memorySummary ?? '').trim()
 
     return `## Memory
 
-You have access to a memory folder with guidance from prior runs. It can save
-time and help you stay consistent. Use it whenever it is likely to help.
+Local memory is enabled. You have access to persistent local memories and memory tools (memories_search, memories_read, memories_list, memories_add_ad_hoc_note). Memory allows you to preserve context, follow user preferences, and maintain consistency across sessions. Use it actively to stay consistent, adhere to user preferences, and build on prior work.
+
+Task initiation: retrieve user memories at the start of every task
+
+- At the beginning of each task or new request, actively search and retrieve the user's memories before diving deep into repo exploration or planning.
+- Use \`memories_search\` with queries matching relevant keywords, including the task topic, technologies, workflow conventions, and general user preferences (e.g. \`queries: ["preferences", "conventions", "<topic>"]\`).
+- Check for existing notes in ${normBase}/extensions/ad_hoc/notes/ or records in ${normBase}/MEMORY.md.
+- Apply any discovered user preferences, coding habits, conventions, and past architectural decisions directly to your plan and solution.
+- Only skip memory retrieval when the request is clearly self-contained and trivial (such as current date/time, simple word translation, or isolated formatting). If unsure, always do a quick memory pass first.
 
 Decision boundary: should you use memory for a new user query?
 
+- By default, retrieve user memory at the start of tasks.
 - Skip memory ONLY when the request is clearly self-contained and does not need
   workspace history, conventions, or prior decisions.
 - Hard skip examples: current time/date, simple translation, simple sentence
   rewrite, one-line shell command, trivial formatting.
 - Use memory by default when ANY of these are true:
+  - starting a new task, feature, bug fix, or refactor,
   - the query mentions workspace/repo/module/path/files in MEMORY_SUMMARY below,
   - the user asks for prior context / consistency / previous decisions,
-  - the task is ambiguous and could depend on earlier project choices,
-  - the ask is a non-trivial and related to MEMORY_SUMMARY below.
+  - the task is ambiguous and could depend on earlier project choices or user preferences,
+  - the ask is non-trivial and related to prior work.
 - If unsure, do a quick memory pass.
+
+Task completion: synthesize completed tasks and record user preferences
+
+- Proactively persist memories upon task completion; do not wait for the user to explicitly ask you to save memory.
+- When you complete a task or non-trivial development step, summarize and synthesize the outcome into memory:
+  - Document what was accomplished and key changes made.
+  - Record architectural decisions, technical approaches, problem workarounds, or conventions established.
+- **Specially prioritize User Preferences**:
+  - Whenever the user expresses or demonstrates a preference (coding style, language choices, tool selections, design patterns, testing habits, architectural constraints, communication style, or explicit instructions like "always do X" or "never do Y"), you MUST record it into memory.
+  - Highlight user preferences clearly so future runs will automatically retrieve and adhere to them.
+- How to record memory notes:
+  - Call the \`memories_add_ad_hoc_note\` tool.
+  - The note file will be saved in ${normBase}/extensions/ad_hoc/notes/
+  - \`filename\` MUST strictly follow the format \`YYYY-MM-DDTHH-MM-SS-<slug>.md\` (e.g. \`2026-09-15T14-30-00-user-preferences.md\` or \`2026-09-15T14-30-00-task-summary.md\`), where the slug contains only lowercase letters, digits, and hyphens (up to 80 bytes).
+  - \`note\` should be clean Markdown with clear headings (e.g. \`## User Preferences\`, \`## Task Summary\`, \`## Key Decisions\`).
+  - Do not try to edit existing memory files directly; always record updates by adding an ad-hoc note via \`memories_add_ad_hoc_note\`.
 
 Memory layout (general -> specific):
 
 - ${normBase}/memory_summary.md (already provided below; do NOT open again)
 - ${normBase}/MEMORY.md (searchable registry; primary file to query)
+- ${normBase}/extensions/ad_hoc/notes/ (ad-hoc user notes, task summaries, and user preferences)
 - ${normBase}/skills/<skill-name>/ (skill folder)
   - SKILL.md (entrypoint instructions)
   - scripts/ (optional helper scripts)
@@ -149,14 +175,13 @@ rollout_summaries/2026-02-17T21-23-02-LN3m-example.md:10-12|note=[weekly report 
 
 Updating memories:
 
-You can update the memories **only** when explicitly asked by the user. This must always come from a direct request from the user.
 - Write your update in ${normBase}/extensions/ad_hoc/notes/
 - Each update must be one small file containing what you want to add/delete/update from the memories.
 - The name of this file must be \`<timestamp>-<short slug>.md\`
 - Do not try to edit the memory files yourself, only add one update note in ${normBase}/extensions/ad_hoc/notes/
 
 ========= MEMORY_SUMMARY BEGINS =========
-${trimmedSummary}
+${trimmedSummary || 'No prior memory summary recorded yet.'}
 ========= MEMORY_SUMMARY ENDS =========
 
 When memory is likely relevant, start with the quick memory pass above before
@@ -165,7 +190,7 @@ deep repo exploration.`
 
 /**
  * Loads read-path memory summary from disk and generates memory instructions.
- * Returns null if memory is disabled, memory_summary.md is missing or empty.
+ * Returns null if memory is disabled or bridge is unavailable.
  */
 export async function loadMemoryReadPathContext(
     options?: LoadMemoryReadPathContextOptions,
@@ -242,21 +267,16 @@ export async function loadMemoryReadPathContext(
             }
         }
     } catch {
-        return null
+        // If memory_summary.md is missing, proceed with empty summary.
     }
 
-    if (!rawSummary || rawSummary.trim().length === 0) {
-        return null
-    }
-
-    const truncated = truncateMiddleWithTokenBudget(
-        rawSummary.trim(),
-        MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_SUMMARY_TOKEN_LIMIT,
-    )
-
-    const memorySummary = truncated.content.trim()
-    if (!memorySummary) {
-        return null
+    let memorySummary = ''
+    if (rawSummary && rawSummary.trim().length > 0) {
+        const truncated = truncateMiddleWithTokenBudget(
+            rawSummary.trim(),
+            MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_SUMMARY_TOKEN_LIMIT,
+        )
+        memorySummary = truncated.content.trim()
     }
 
     return buildMemoryReadPathInstructions(memoryRoot, memorySummary)

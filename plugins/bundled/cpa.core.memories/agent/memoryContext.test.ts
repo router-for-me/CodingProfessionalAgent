@@ -106,7 +106,7 @@ describe('loadMemoryReadPathContext', () => {
         expect(result).toBeNull()
     })
 
-    it('returns null when memory_summary.md does not exist', async () => {
+    it('generates memory instructions when memory_summary.md does not exist', async () => {
         const bridge = new MockBridge()
         const result = await loadMemoryReadPathContext({
             homeDir: '/home/test',
@@ -114,10 +114,15 @@ describe('loadMemoryReadPathContext', () => {
             localMemoryEnabled: true,
         })
 
-        expect(result).toBeNull()
+        expect(result).not.toBeNull()
+        expect(result).toContain('## Memory')
+        expect(result).toContain('Task initiation: retrieve user memories at the start of every task')
+        expect(result).toContain('Task completion: synthesize completed tasks and record user preferences')
+        expect(result).toContain('Specially prioritize User Preferences')
+        expect(result).toContain('No prior memory summary recorded yet.')
     })
 
-    it('returns null when memory_summary.md is whitespace only', async () => {
+    it('generates memory instructions when memory_summary.md is whitespace only', async () => {
         const bridge = new MockBridge()
         bridge.files.set(
             '/home/test/.coding-professional-agent/memories/memory_summary.md',
@@ -130,7 +135,9 @@ describe('loadMemoryReadPathContext', () => {
             localMemoryEnabled: true,
         })
 
-        expect(result).toBeNull()
+        expect(result).not.toBeNull()
+        expect(result).toContain('## Memory')
+        expect(result).toContain('No prior memory summary recorded yet.')
     })
 
     it('loads and generates instructions from memory_summary.md using homeDir', async () => {
@@ -192,5 +199,17 @@ describe('loadMemoryReadPathContext', () => {
         expect(result).not.toBeNull()
         expect(result).toContain('## Memory')
         expect(result).toContain('tokens truncated')
+    })
+
+    it('injects instructions with task initiation retrieval, task completion synthesis, and user preference persistence', async () => {
+        const instructions = buildMemoryReadPathInstructions('/test/memories', '')
+
+        expect(instructions).toContain('Task initiation: retrieve user memories at the start of every task')
+        expect(instructions).toContain('memories_search')
+        expect(instructions).toContain('Task completion: synthesize completed tasks and record user preferences')
+        expect(instructions).toContain('Specially prioritize User Preferences')
+        expect(instructions).toContain('memories_add_ad_hoc_note')
+        expect(instructions).toContain('YYYY-MM-DDTHH-MM-SS-<slug>.md')
+        expect(instructions).not.toContain('You can update the memories only when explicitly asked by the user')
     })
 })

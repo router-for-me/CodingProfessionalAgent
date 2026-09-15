@@ -159,6 +159,60 @@ class MockElectronBridge implements ElectronBridgeLike {
     }
 }
 
+/**
+ * Lowercase NativeBridge used by the agent runtime.
+ * writeFile expects Uint8Array and reproduces the renderer bytesToBase64 path.
+ */
+class MockNativeBridge {
+    constructor(private inner: MockElectronBridge) {}
+
+    async runtimeInfo() {
+        return this.inner.RuntimeInfo()
+    }
+
+    async readFile(path: string): Promise<Uint8Array> {
+        const { dataBase64 } = await this.inner.ReadFile(path)
+        const binary = atob(dataBase64)
+        const bytes = new Uint8Array(binary.length)
+        for (let i = 0; i < binary.length; i += 1) {
+            bytes[i] = binary.charCodeAt(i)
+        }
+        return bytes
+    }
+
+    async writeFile(path: string, data: Uint8Array): Promise<void> {
+        if (typeof data?.subarray !== 'function') {
+            throw new TypeError('bytes.subarray is not a function')
+        }
+        let binary = ''
+        const chunkSize = 0x8000
+        for (let offset = 0; offset < data.length; offset += chunkSize) {
+            binary += String.fromCharCode(...data.subarray(offset, offset + chunkSize))
+        }
+        await this.inner.WriteFile(path, btoa(binary))
+    }
+
+    async mkdirAll(path: string) {
+        return this.inner.MkdirAll(path)
+    }
+
+    async removeFile(path: string) {
+        return this.inner.RemoveFile(path)
+    }
+
+    async stat(path: string) {
+        return this.inner.Stat(path)
+    }
+
+    async readDir(path: string) {
+        return this.inner.ReadDir(path)
+    }
+
+    async realPath(path: string) {
+        return this.inner.RealPath(path)
+    }
+}
+
 describe('LocalMemoriesBackend', () => {
     let mockBridge: MockElectronBridge
     const memoryRoot = '/test-memories'
@@ -354,6 +408,16 @@ describe('LocalMemoriesBackend', () => {
             await expect(backend.listMemories({ path: 'nonexistent' })).rejects.toThrow(
                 /path 'nonexistent' was not found/,
             )
+        })
+
+        it('returns empty entries when root directory does not exist on disk and path is not specified', async () => {
+            const freshBridge = new MockElectronBridge('/nonexistent-root')
+            freshBridge.dirs.clear()
+            const backend = LocalMemoriesBackend.fromMemoryRoot('/nonexistent-root', freshBridge)
+            const res = await backend.listMemories({})
+            expect(res.entries).toEqual([])
+            expect(res.nextCursor).toBeUndefined()
+            expect(res.truncated).toBe(false)
         })
     })
 
@@ -623,6 +687,16 @@ describe('LocalMemoriesBackend', () => {
                 }),
             ).rejects.toThrow(/all_within_lines.line_count must be a positive integer/)
         })
+
+        it('returns empty matches when root directory does not exist on disk and path is not specified', async () => {
+            const freshBridge = new MockElectronBridge('/nonexistent-root')
+            freshBridge.dirs.clear()
+            const backend = LocalMemoriesBackend.fromMemoryRoot('/nonexistent-root', freshBridge)
+            const res = await backend.searchMemories({ queries: ['preferences'] })
+            expect(res.matches).toEqual([])
+            expect(res.nextCursor).toBeUndefined()
+            expect(res.truncated).toBe(false)
+        })
     })
 
     describe('validateAdHocFilename', () => {
@@ -724,6 +798,62 @@ describe('LocalMemoriesBackend', () => {
             const backend = LocalMemoriesBackend.fromMemoryRoot(memoryRoot, mockBridge)
             const filename = '2026-05-26T13-42-08-duplicate.md'
             mockBridge.addFile(`extensions/ad_hoc/notes/${filename}`, 'existing')
+
+            await expect(
+                backend.addAdHocNote({
+                    filename,
+                    note: 'new content',
+                }),
+            ).rejects.toThrow(/already exists/)
+        })
+    })
+
+    describe('NativeBridge (lowercase Uint8Array) compatibility', () => {
+        it('writes ad-hoc notes through writeFile(Uint8Array) without subarray errors', async () => {
+            const backend = LocalMemoriesBackend.fromMemoryRoot(
+                memoryRoot,
+                new MockNativeBridge(mockBridge),
+            )
+            const filename = '2026-05-26T13-42-08-native-bridge.md'
+            const note = 'Remember native bridge encoding. 中文'
+
+            const response = await backend.addAdHocNote({
+                filename,
+                note,
+            })
+            expect(response).toEqual({
+                success: true,
+                path: `extensions/ad_hoc/notes/${filename}`,
+            })
+
+            const readBack = await backend.readMemory({
+                path: `extensions/ad_hoc/notes/${filename}`,
+            })
+            expect(readBack.content).toBe(note)
+        })
+
+        it('lists and searches memories through NativeBridge APIs', async () => {
+            mockBridge.addFile('MEMORY.md', 'prefer concise reviews')
+            const backend = LocalMemoriesBackend.fromMemoryRoot(
+                memoryRoot,
+                new MockNativeBridge(mockBridge),
+            )
+
+            const listed = await backend.listMemories({})
+            expect(listed.entries.some((entry) => entry.path === 'MEMORY.md')).toBe(true)
+
+            const search = await backend.searchMemories({ queries: ['concise'] })
+            expect(search.matches.length).toBeGreaterThan(0)
+            expect(search.matches[0]?.content).toContain('concise')
+        })
+
+        it('rejects duplicate ad-hoc notes when only lowercase stat exists', async () => {
+            const filename = '2026-05-26T13-42-08-native-dup.md'
+            mockBridge.addFile(`extensions/ad_hoc/notes/${filename}`, 'existing')
+            const backend = LocalMemoriesBackend.fromMemoryRoot(
+                memoryRoot,
+                new MockNativeBridge(mockBridge),
+            )
 
             await expect(
                 backend.addAdHocNote({
