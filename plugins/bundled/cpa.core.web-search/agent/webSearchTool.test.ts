@@ -117,6 +117,22 @@ describe('web search tool', () => {
         expect(JSON.stringify(result)).not.toContain('secret')
         expect(invoke).toHaveBeenCalledTimes(1)
     })
+    it.each([
+        ['TimeoutError', 'search_request_timeout'],
+        ['AbortError', 'search_request_failed'],
+    ])('reports an upstream %s as a failure when the caller has not cancelled', async (name, code) => {
+        const { tool, invoke, context } = setup()
+        const controller = new AbortController()
+        const error = new Error('https://secret:password@example.org secret-key')
+        error.name = name
+        invoke.mockRejectedValue(error)
+        const result = await tool.execute('call_A', { query: 'query' }, { ...context, signal: controller.signal })
+        expect(result.isError).toBe(true)
+        expect(JSON.parse((result.content[0] as { text: string }).text).error.code).toBe(code)
+        expect(JSON.stringify(result)).not.toContain('secret')
+        expect(controller.signal.aborted).toBe(false)
+        expect(invoke).toHaveBeenCalledTimes(1)
+    })
     it('propagates abort and ignores a late response', async () => {
         const { tool, invoke, context } = setup()
         const controller = new AbortController()

@@ -30,6 +30,7 @@ describe('HttpService', () => {
   })
 
   afterEach(async () => {
+    server.closeAllConnections()
     await new Promise<void>((resolve) => server.close(() => resolve()))
   })
 
@@ -49,6 +50,21 @@ describe('HttpService', () => {
     expect(json.headers['user-agent']).toBe(getUserAgent())
     expect(json.headers['user-agent']).not.toContain('(Electron)')
     expect(res.headers['x-custom-header']).toContain('custom-value')
+  })
+
+  it.each(['headers', 'body'])('reports a timeout, not user cancellation, while waiting for %s', async (phase) => {
+    server.removeAllListeners('request')
+    server.on('request', (_req, res) => {
+      if (phase === 'body') {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.write('{')
+      }
+      // Intentionally do not finish the response.
+    })
+    const pending = service.request({
+      urlString: `http://127.0.0.1:${port}/slow`, method: 'GET', headers: {}, body: '', timeoutMs: 100,
+    })
+    await expect(pending).rejects.toMatchObject({ name: 'TimeoutError', message: 'HTTP request timed out after 100ms' })
   })
 
   it('sends HTTP POST requests with body', async () => {

@@ -23,7 +23,7 @@ import {
 import { getAppConfigDirName } from '@cpa/plugin-api'
 
 export interface ElectronBridgeLike {
-    RuntimeInfo?(): Promise<{ platform?: string; userConfigDir?: string; tempDir?: string; homeDir: string }>
+    RuntimeInfo?(): Promise<{ platform?: string; userConfigDir?: string; tempDir?: string; homeDir?: string }>
     ReadFile?(path: string): Promise<{ dataBase64: string }>
     WriteFile?(path: string, dataBase64: string): Promise<void>
     MkdirAll?(path: string): Promise<void>

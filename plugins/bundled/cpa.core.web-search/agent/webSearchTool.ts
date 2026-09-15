@@ -57,7 +57,11 @@ export function createWebSearchTool(deps: SearchDependencies): AgentTool<{ query
                 return toolResult(normalizeSearchResponse(query, modelId, response))
             } catch (error) {
                 context.signal?.throwIfAborted()
-                if (error instanceof Error && error.name === 'AbortError') throw error
+                // Only the caller's signal proves cancellation. Transport deadlines
+                // (including older HTTP hosts) may reject with AbortError too.
+                if (error instanceof Error && error.name === 'TimeoutError') {
+                    return toolResult(failedSearch(query, modelId, 'search_request_timeout', 'The search model did not respond before the request deadline. Retry or select a faster search model; no fallback was attempted.'))
+                }
                 // Never forward arbitrary transport messages (which can contain credentials
                 // or URLs) into the parent model's tool output.
                 return toolResult(failedSearch(query, modelId, 'search_request_failed', 'The isolated search request failed. Check the selected model and connection; no fallback was attempted.'))

@@ -35,7 +35,7 @@ const collect = async (s: CodexProtocolSession, data = input, options = { connec
     return events
 }
 
-afterEach(() => vi.restoreAllMocks())
+afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers() })
 
 describe('Gemini search protocol', () => {
     it.each([
@@ -91,6 +91,24 @@ describe('Gemini search protocol', () => {
         await collect(s, data)
         expect(websocket).toHaveBeenCalledOnce()
         expect(http).not.toHaveBeenCalled()
+        await s.dispose()
+    })
+
+    it('allows grounded searches taking longer than the old 60-second HTTP timeout', async () => {
+        vi.useFakeTimers()
+        const http = transport()
+        http.mockImplementation((request) => new Promise((resolve, reject) => {
+            const deadline = setTimeout(() => reject(new DOMException('HTTP request timed out', 'TimeoutError')), request.timeoutMs)
+            setTimeout(() => {
+                clearTimeout(deadline)
+                resolve({ status: 200, body: JSON.stringify(grounded()) })
+            }, 65_000)
+        }))
+        const s = session(http)
+        const pending = collect(s).then((events) => ({ events }), (error) => ({ error }))
+        await vi.advanceTimersByTimeAsync(65_000)
+        expect(await pending).toHaveProperty('events', [{ type: 'done', reason: 'stop', message: expect.objectContaining({ status: 'done' }) }])
+        expect(http.mock.calls[0][0].timeoutMs).toBe(180_000)
         await s.dispose()
     })
 

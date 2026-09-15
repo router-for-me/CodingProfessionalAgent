@@ -1,5 +1,9 @@
 import type { AssistantEntry, PluginCapabilityClient, ProtocolStreamInput, Usage } from '@cpa/plugin-api'
 
+// generateContent returns only after grounding and generation finish. Give
+// reasoning/search models time to complete rather than aborting at 60 seconds.
+export const GEMINI_SEARCH_TIMEOUT_MS = 180_000
+
 export interface GeminiSearchHttpRequest {
     urlString: string
     method: string
@@ -142,7 +146,7 @@ export async function requestGeminiSearch(
             // Search. Require actual grounding evidence in the returned result.
             generationConfig: { candidateCount: 1, ...(maxOutputTokens ? { maxOutputTokens } : {}) },
         }),
-        timeoutMs: 60_000,
+        timeoutMs: GEMINI_SEARCH_TIMEOUT_MS,
     }), signal)
     signal.throwIfAborted()
     if (response.status < 200 || response.status >= 300) throw new Error(`Gemini search request failed (${response.status})`)

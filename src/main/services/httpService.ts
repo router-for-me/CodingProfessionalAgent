@@ -19,7 +19,11 @@ export class HttpService {
     const controller = new AbortController()
     let timeoutId: NodeJS.Timeout | undefined
     if (timeoutMs > 0) {
-      timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+      timeoutId = setTimeout(() => {
+        const error = new Error(`HTTP request timed out after ${timeoutMs}ms`)
+        error.name = 'TimeoutError'
+        controller.abort(error)
+      }, timeoutMs)
     }
 
     const mergedHeaders: Record<string, string> = {
@@ -50,6 +54,12 @@ export class HttpService {
         headers: responseHeaders,
         body: responseBody,
       }
+    } catch (error) {
+      // Reading the body can throw AbortError even when fetch was aborted with
+      // a TimeoutError reason. Preserve the deadline failure across capability
+      // serialization so callers do not mistake it for user cancellation.
+      if (controller.signal.aborted) throw controller.signal.reason
+      throw error
     } finally {
       if (timeoutId) {
         clearTimeout(timeoutId)

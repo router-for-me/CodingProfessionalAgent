@@ -8,6 +8,42 @@ import { createWebSearchTool } from '../../../../../plugins/bundled/cpa.core.web
 // Exercise the real catalog -> search tool -> isolated invoker -> registered
 // protocol provider path, including capability wiring and host-owned accounting.
 describe('isolated Gemini web search integration', () => {
+    it.each([
+        ['TimeoutError', 'search_request_timeout'],
+        ['AbortError', 'search_request_failed'],
+    ])('returns an HTTP %s as a tool failure rather than aborting the tool', async (name, code) => {
+        const [model] = parseModelCatalog({ models: [{ id: 'gemini-2.5-flash' }] })
+        const error = new Error('private upstream error')
+        error.name = name
+        const http = vi.fn().mockRejectedValue(error)
+        let provider!: ProtocolProviderContribution
+        await protocolCodexAgentEntry.activate({
+            capabilityClient: { has: (id: string) => id === 'network.http', invoke: http },
+            register: (contribution: { value: ProtocolProviderContribution }) => { provider = contribution.value },
+        } as unknown as PluginContext)
+        const controller = new AbortController()
+        const owner = new RunScopedModelInvoker({
+            runSignal: controller.signal, sessionId: 'parent', allowedModels: [model],
+            createSession: async () => ({ session: await provider.createSession!({
+                sessionId: 'isolated', baseUrl: 'https://proxy.test/v1', apiKey: 'private-key', bridge: {},
+            }) }),
+        })
+        const tool = createWebSearchTool({
+            getSettings: async () => ({ enabled: true, modelId: model.id }), getModels: () => [model],
+        })
+        try {
+            const result = await tool.execute('call', { query: 'weather' }, { modelInvoker: owner.forToolCall('call'), signal: controller.signal })
+            expect(result.isError).toBe(true)
+            expect(JSON.parse((result.content[0] as { text: string }).text)).toMatchObject({ status: 'failed', error: { code } })
+            expect(JSON.stringify(result)).not.toContain('private')
+            expect(controller.signal.aborted).toBe(false)
+            expect(http).toHaveBeenCalledOnce()
+            expect(http.mock.calls[0][1][0].timeoutMs).toBe(180_000)
+        } finally {
+            await owner.close()
+        }
+    })
+
     it('keeps the parent call isolated and accounts Gemini usage via the existing invoker', async () => {
         const [model] = parseModelCatalog({ models: [{ id: 'gemini-2.5-flash', cpa_capabilities: { web_search: false } }] })
         const http = vi.fn().mockResolvedValue({ status: 200, body: JSON.stringify({
