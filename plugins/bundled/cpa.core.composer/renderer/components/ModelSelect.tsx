@@ -75,10 +75,26 @@ export function ModelSelect({
     const [view, setView] = useState<'quick' | 'advanced'>('quick')
     const [activeSubmenu, setActiveSubmenu] = useState<ActiveSubmenu>(null)
     const [compactWidth, setCompactWidth] = useState<number | undefined>(undefined)
+    const [isFolding, setIsFolding] = useState(false)
     const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null)
     const rootRef = useRef<HTMLDivElement>(null)
     const triggerRef = useRef<HTMLButtonElement>(null)
     const measureRef = useRef<HTMLSpanElement>(null)
+    const prevOpenRef = useRef(open)
+
+    useEffect(() => {
+        if (prevOpenRef.current && !open) {
+            setIsFolding(true)
+            const timer = setTimeout(() => {
+                setIsFolding(false)
+            }, 220)
+            return () => clearTimeout(timer)
+        }
+        if (open) {
+            setIsFolding(false)
+        }
+        prevOpenRef.current = open
+    }, [open])
 
     const updatePosition = useCallback(() => {
         const trigger = triggerRef.current
@@ -313,7 +329,13 @@ export function ModelSelect({
                 ref={triggerRef}
                 type="button"
                 disabled={isTriggerDisabled}
-                style={{ width: open ? `${MODEL_MENU_WIDTH_PX}px` : compactWidth ? `${compactWidth}px` : undefined }}
+                style={{
+                    width: open
+                        ? `${MODEL_MENU_WIDTH_PX}px`
+                        : isFolding && compactWidth
+                            ? `${compactWidth}px`
+                            : undefined,
+                }}
                 className={cn(
                     'inline-flex w-max items-center justify-center gap-1 rounded-full px-[10px] py-1.5 text-[12px]',
                     'text-[var(--text-secondary)] transition-[width,background-color,color] duration-200 ease-out',

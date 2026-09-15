@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '@/i18n'
@@ -614,5 +614,35 @@ describe('ModelSelect', () => {
         expect(portalContainer).toHaveClass('fixed', 'z-[70]')
         expect(portalContainer?.parentElement).toBe(document.body)
         expect(container.contains(portalContainer)).toBe(false)
+    })
+
+    it('keeps inline width unset in closed state across reasoning effort changes so trigger expands directly without ellipsis', async () => {
+        modelsState = testModels
+        settingsState = {
+            ...settingsState,
+            modelId: 'model-primary',
+            reasoningLevel: 'high',
+        }
+
+        const { rerender } = render(<ModelSelect />)
+        const trigger = screen.getByRole('button', { name: 'Model' })
+
+        // When closed in steady state, inline width must not be locked to a fixed pixel value
+        expect(trigger.style.width).toBe('')
+        expect(trigger).toHaveTextContent('Primary Model')
+
+        // Simulate reasoning effort changing to xhigh (e.g. via Shift+Tab)
+        settingsState = {
+            ...settingsState,
+            reasoningLevel: 'xhigh',
+        }
+        await act(async () => {
+            notifySettings()
+        })
+        rerender(<ModelSelect />)
+
+        // Trigger text updates immediately and inline width remains unset for instant natural expansion
+        expect(trigger).toHaveTextContent('Primary Model')
+        expect(trigger.style.width).toBe('')
     })
 })
