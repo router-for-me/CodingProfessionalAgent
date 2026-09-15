@@ -22,7 +22,14 @@ export function getReasoningOptions(
     )
     const seen = new Set<string>()
     const unique = source.filter((option) => {
-        if (!option || !option.id || seen.has(option.id)) return false
+        if (
+            !option ||
+            !option.id ||
+            option.id.trim().toLowerCase() === 'ultra' ||
+            seen.has(option.id)
+        ) {
+            return false
+        }
         seen.add(option.id)
         return true
     })

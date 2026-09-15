@@ -46,6 +46,7 @@ import { useUiStore } from '@/stores/uiStore'
 import { useWorktreeSetupStore } from '@/stores/worktreeSetupStore'
 import { subscribeMessageEvents } from '@/application/events/messageEvents'
 import { canUseHostKvStore, getHostBridge } from './hostTransport'
+import { stripHiddenReasoningLevels } from '@/features/models/filteredModels'
 
 export type PersistVersion = 1 | 2
 
@@ -1239,7 +1240,7 @@ export function applyPersistedState(state: PersistedAppState): void {
   }
   try {
     if (state.cachedModels && Array.isArray(state.cachedModels) && state.cachedModels.length > 0) {
-      useModelCatalogStore.getState().hydrate(state.cachedModels)
+      useModelCatalogStore.getState().hydrate(stripHiddenReasoningLevels(state.cachedModels))
     }
   } catch {
     // Keep fallback models if hydrate fails.

@@ -14,7 +14,6 @@ export const CANONICAL_REASONING_ORDER = [
     'high',
     'xhigh',
     'max',
-    'ultra',
 ] as const
 
 const REASONING_LABEL_KEYS: Record<string, string> = {
@@ -61,11 +60,26 @@ export function orderModels(
         .map(({ model }) => model)
 }
 
+function withoutHiddenReasoning(model: ModelCatalogEntry): ModelCatalogEntry {
+    const reasoningLevels = model.reasoningLevels.filter(
+        (level) => level.id.trim().toLowerCase() !== 'ultra',
+    )
+    if (reasoningLevels.length === model.reasoningLevels.length) {
+        return model
+    }
+    return {
+        ...model,
+        reasoningLevels,
+    }
+}
+
 export function getFilteredModels(
     catalogModels: readonly ModelCatalogEntry[],
     modelSettings?: ModelSettingsConfig,
 ): readonly ModelCatalogEntry[] {
-    const ordered = orderModels(catalogModels, modelSettings?.modelOrder)
+    const ordered = orderModels(catalogModels, modelSettings?.modelOrder).map(
+        withoutHiddenReasoning,
+    )
 
     if (!modelSettings || modelSettings.enableAll) {
         return ordered

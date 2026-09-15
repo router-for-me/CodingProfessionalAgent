@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { getFilteredModels, orderModels } from './filteredModels'
+import {
+    getFilteredModels,
+    getReasoningOptions,
+    orderModels,
+    stripHiddenReasoningLevels,
+} from './filteredModels'
 import type { ModelCatalogEntry } from './types'
 
 describe('filteredModels', () => {
@@ -92,5 +97,47 @@ describe('filteredModels', () => {
             modelOrder: ['model-b', 'model-a'],
         })
         expect(result.map((m) => m.id)).toEqual(['model-b', 'model-a'])
+    })
+
+    it('hides ultra reasoning levels for every model while keeping other levels', () => {
+        const modelsWithUltra: ModelCatalogEntry[] = [
+            {
+                ...mockModels[0]!,
+                reasoningLevels: [
+                    { id: 'low', requestValue: 'low' },
+                    { id: 'medium', requestValue: 'medium' },
+                    { id: 'high', requestValue: 'high' },
+                    { id: 'ultra', requestValue: 'ultra' },
+                ],
+            },
+            {
+                ...mockModels[1]!,
+                reasoningLevels: [
+                    { id: 'ultra', requestValue: 'ULTRA' },
+                    { id: 'max', requestValue: 'max' },
+                ],
+            },
+        ]
+
+        const stripped = stripHiddenReasoningLevels(modelsWithUltra)
+        expect(stripped[0]?.reasoningLevels.map((level) => level.id)).toEqual([
+            'low',
+            'medium',
+            'high',
+        ])
+        expect(stripped[1]?.reasoningLevels.map((level) => level.id)).toEqual(['max'])
+
+        const filtered = getFilteredModels(modelsWithUltra, { enableAll: true, models: {} })
+        expect(filtered[0]?.reasoningLevels.map((level) => level.id)).toEqual([
+            'low',
+            'medium',
+            'high',
+        ])
+        expect(filtered[1]?.reasoningLevels.map((level) => level.id)).toEqual(['max'])
+        expect(getReasoningOptions(modelsWithUltra[0]).map((level) => level.id)).toEqual([
+            'low',
+            'medium',
+            'high',
+        ])
     })
 })

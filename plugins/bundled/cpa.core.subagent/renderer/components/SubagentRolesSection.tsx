@@ -48,20 +48,22 @@ export function getReasoningOptionsForModel(
             ]
         }
 
-        const mapped: CustomSelectOption<string>[] = matchedModel.reasoningLevels.map((lvl) => {
-            let label = lvl.fallbackLabel || lvl.id
-            if (lvl.labelKey) {
-                const tr = t(lvl.labelKey)
-                if (tr && tr !== lvl.labelKey) label = tr
-            } else {
-                const tr = t(`composer.reasoning.${lvl.id}`, lvl.id)
-                if (tr) label = tr
-            }
-            return {
-                value: lvl.id,
-                label,
-            }
-        })
+        const mapped: CustomSelectOption<string>[] = matchedModel.reasoningLevels
+            .filter((lvl) => lvl.id.trim().toLowerCase() !== 'ultra')
+            .map((lvl) => {
+                let label = lvl.fallbackLabel || lvl.id
+                if (lvl.labelKey) {
+                    const tr = t(lvl.labelKey)
+                    if (tr && tr !== lvl.labelKey) label = tr
+                } else {
+                    const tr = t(`composer.reasoning.${lvl.id}`, lvl.id)
+                    if (tr) label = tr
+                }
+                return {
+                    value: lvl.id,
+                    label,
+                }
+            })
 
         return [defaultOption, ...mapped]
     }

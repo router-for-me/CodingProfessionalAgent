@@ -36,6 +36,7 @@ const testModels: readonly ModelCatalogEntry[] = [
             { id: 'off', requestValue: 'off', labelKey: 'composer.reasoning.off', fallbackLabel: 'Off' },
             { id: 'low', requestValue: 'low', labelKey: 'composer.reasoning.low', fallbackLabel: 'Low' },
             { id: 'high', requestValue: 'high', labelKey: 'composer.reasoning.high', fallbackLabel: 'High' },
+            { id: 'ultra', requestValue: 'ultra', labelKey: 'composer.reasoning.ultra', fallbackLabel: 'Ultra' },
         ],
         input: ['text'],
         contextWindow: 128_000,
@@ -173,6 +174,18 @@ describe('ModelsSection', () => {
                 }),
             }),
         )
+    })
+
+    it('hides ultra reasoning levels while showing every other catalog level', () => {
+        mockSettings.modelSettings.enableAll = false
+
+        renderWithServices(<ModelsSection />)
+
+        expect(screen.getByRole('checkbox', { name: /Off/i })).toBeInTheDocument()
+        expect(screen.getByRole('checkbox', { name: /Low/i })).toBeInTheDocument()
+        expect(screen.getByRole('checkbox', { name: /High/i })).toBeInTheDocument()
+        expect(screen.queryByRole('checkbox', { name: /^Ultra$/i })).not.toBeInTheDocument()
+        expect(screen.queryByText('Ultra')).not.toBeInTheDocument()
     })
 
     it('toggles reasoning level when clicking reasoning checkbox button', () => {

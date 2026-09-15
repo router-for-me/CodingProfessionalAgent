@@ -106,8 +106,8 @@ describe('model catalog parser', () => {
             expect.objectContaining({ id: 'high', requestValue: 'HIGH', labelKey: 'composer.reasoning.high' }),
             expect.objectContaining({ id: 'xhigh', requestValue: 'xhigh', labelKey: 'composer.reasoning.xhigh' }),
             expect.objectContaining({ id: 'max', requestValue: 'max', labelKey: 'composer.reasoning.max' }),
-            expect.objectContaining({ id: 'ultra', requestValue: 'ultra', labelKey: 'composer.reasoning.ultra' }),
         ])
+        expect(model.reasoningLevels.map((level) => level.id)).not.toContain('ultra')
     })
 
     it('merges none and off while retaining the first request value', () => {

@@ -37,8 +37,13 @@ export const CANONICAL_REASONING_ORDER = [
     'high',
     'xhigh',
     'max',
-    'ultra',
 ] as const
+
+const HIDDEN_REASONING_LEVEL_ID = 'ultra'
+
+export function isHiddenReasoningLevel(id: string): boolean {
+    return id.trim().toLowerCase() === HIDDEN_REASONING_LEVEL_ID
+}
 
 const REASONING_LABEL_KEYS: Record<string, string> = {
     off: 'composer.reasoning.off',

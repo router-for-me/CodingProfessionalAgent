@@ -84,7 +84,6 @@ export const CANONICAL_REASONING_ORDER = [
     'high',
     'xhigh',
     'max',
-    'ultra',
 ] as const
 
 const REASONING_LABEL_KEYS: Record<string, string> = {

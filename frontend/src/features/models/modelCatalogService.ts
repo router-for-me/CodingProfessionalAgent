@@ -1,4 +1,5 @@
 import { fetchModelCatalog } from './modelCatalogClient'
+import { stripHiddenReasoningLevels } from './filteredModels'
 import { invalidateCachedModelCapabilities } from './modelCatalogParser'
 import { useModelCatalogStore } from '@/stores/modelCatalogStore'
 import type { ModelCatalogConfig, ModelCatalogEntry } from './types'
@@ -38,7 +39,7 @@ export async function refreshModelCatalog(
     })
 
     try {
-        const models = await fetcher(config)
+        const models = stripHiddenReasoningLevels(await fetcher(config))
         if (generation !== requestGeneration) {
             return
         }

@@ -77,6 +77,12 @@ function getReasoningLabel(
     })
 }
 
+function visibleReasoningLevels(
+    levels: readonly ModelReasoningOption[],
+): readonly ModelReasoningOption[] {
+    return levels.filter((level) => level.id.trim().toLowerCase() !== 'ultra')
+}
+
 export function ModelsSection() {
     const { t } = useTranslation()
     const services = useHostServices()
@@ -298,14 +304,15 @@ export function ModelsSection() {
                             filteredModels.map((model, index) => {
                                 const modelConfig = modelSettings.models?.[model.id]
                                 const isModelEnabled = modelConfig ? modelConfig.enabled !== false : true
-                                const allReasoningIds = model.reasoningLevels.map((l) => l.id)
+                                const reasoningLevels = visibleReasoningLevels(model.reasoningLevels)
+                                const allReasoningIds = reasoningLevels.map((l) => l.id)
                                 const enabledLevels = modelConfig?.enabledReasoningLevels
                                 const isLast = index === filteredModels.length - 1
 
                                 return (
                                     <ModelSettingRow
                                         key={model.id}
-                                        model={model}
+                                        model={{ ...model, reasoningLevels }}
                                         isModelEnabled={isModelEnabled}
                                         enabledLevels={enabledLevels}
                                         allReasoningIds={allReasoningIds}

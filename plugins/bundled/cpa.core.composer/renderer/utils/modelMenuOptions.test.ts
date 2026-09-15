@@ -40,6 +40,31 @@ describe('model menu options', () => {
         ])
     })
 
+    it('hides ultra reasoning levels while keeping all other efforts', () => {
+        const model: ModelCatalogEntry = {
+            id: 'with-ultra',
+            label: 'With Ultra',
+            supportsFast: false,
+            reasoningLevels: [
+                { id: 'low', requestValue: 'low', labelKey: 'composer.reasoning.low' },
+                { id: 'medium', requestValue: 'medium', labelKey: 'composer.reasoning.medium' },
+                { id: 'high', requestValue: 'high', labelKey: 'composer.reasoning.high' },
+                { id: 'ultra', requestValue: 'ultra', labelKey: 'composer.reasoning.ultra' },
+                { id: 'max', requestValue: 'max', labelKey: 'composer.reasoning.max' },
+            ],
+            input: ['text'],
+            contextWindow: 128_000,
+            maxTokens: 16_384,
+        }
+
+        expect(getReasoningOptions(model).map((option) => option.id)).toEqual([
+            'low',
+            'medium',
+            'high',
+            'max',
+        ])
+    })
+
     it('selects the middle reasoning level for odd counts and upper-middle for even counts', () => {
         const makeModel = (levels: string[]): ModelCatalogEntry => ({
             id: 'test-model',

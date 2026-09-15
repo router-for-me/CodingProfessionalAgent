@@ -42,6 +42,26 @@ describe('model catalog service', () => {
         expect(useModelCatalogStore.getState().models.map((model) => model.id)).toEqual(['remote'])
     })
 
+    it('strips ultra reasoning levels from fetched catalog models', async () => {
+        const fetcher = vi.fn<ModelCatalogFetcher>().mockResolvedValue([
+            {
+                ...remoteModel('with-ultra'),
+                reasoningLevels: [
+                    { id: 'low', requestValue: 'low' },
+                    { id: 'ultra', requestValue: 'ultra' },
+                    { id: 'high', requestValue: 'high' },
+                ],
+            },
+        ])
+
+        await refreshModelCatalog(config, fetcher)
+
+        expect(useModelCatalogStore.getState().models[0]?.reasoningLevels.map((level) => level.id)).toEqual([
+            'low',
+            'high',
+        ])
+    })
+
     it('keeps the previous catalog when a refresh fails', async () => {
         const fetcher = vi.fn<ModelCatalogFetcher>()
         fetcher.mockResolvedValueOnce([remoteModel('existing')])

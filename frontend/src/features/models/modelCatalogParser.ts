@@ -1,6 +1,7 @@
 import {
     CANONICAL_REASONING_ORDER,
     ModelCatalogFormatError,
+    isHiddenReasoningLevel,
     type ModelCatalogEntry,
     type ModelInputModality,
     type ModelReasoningOption,
@@ -80,7 +81,7 @@ function reasoningOptions(value: unknown): readonly ModelReasoningOption[] {
 
         const normalizedEffort = effort.toLowerCase()
         const id = CANONICAL_EFFORT_ALIASES.get(normalizedEffort) ?? normalizedEffort
-        if (options.has(id)) continue
+        if (isHiddenReasoningLevel(id) || options.has(id)) continue
 
         const option: ModelReasoningOption = {
             id,

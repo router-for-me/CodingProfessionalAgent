@@ -1,6 +1,6 @@
 import type { ModelSettingsConfig, Speed } from '@/types/models'
 import type { ModelCatalogEntry, ModelReasoningOption } from './types'
-import { CANONICAL_REASONING_ORDER } from './types'
+import { CANONICAL_REASONING_ORDER, isHiddenReasoningLevel } from './types'
 
 const CANONICAL_REASONING_RANK = new Map<string, number>(
     CANONICAL_REASONING_ORDER.map((id, index) => [id, index]),
@@ -13,7 +13,7 @@ export function getReasoningOptions(
     const source = model.reasoningLevels ?? []
     const seen = new Set<string>()
     const unique = source.filter((option) => {
-        if (seen.has(option.id)) return false
+        if (!option?.id || isHiddenReasoningLevel(option.id) || seen.has(option.id)) return false
         seen.add(option.id)
         return true
     })
@@ -92,9 +92,33 @@ export function orderModels(
         .map(({ model }) => model)
 }
 
+export function withoutHiddenReasoningLevels(
+    levels: readonly ModelReasoningOption[],
+): readonly ModelReasoningOption[] {
+    return levels.filter((level) => !isHiddenReasoningLevel(level.id))
+}
+
+export function stripHiddenReasoningLevels(
+    models: readonly ModelCatalogEntry[],
+): readonly ModelCatalogEntry[] {
+    return models.map(withoutHiddenReasoning)
+}
+
+function withoutHiddenReasoning(model: ModelCatalogEntry): ModelCatalogEntry {
+    const reasoningLevels = withoutHiddenReasoningLevels(model.reasoningLevels ?? [])
+    if (reasoningLevels.length === model.reasoningLevels.length) {
+        return model
+    }
+    return {
+        ...model,
+        reasoningLevels,
+    }
+}
+
 /**
  * Filter catalog models and their reasoning levels according to user settings.
  * When `enableAll` is true (default), all catalog models and reasoning levels are returned in configured order.
+ * The `ultra` reasoning level is always hidden.
  * When `enableAll` is false, only models with enabled !== false are returned in configured order,
  * with their reasoning levels filtered to the enabled set.
  */
@@ -102,7 +126,9 @@ export function getFilteredModels(
     catalogModels: readonly ModelCatalogEntry[],
     modelSettings?: ModelSettingsConfig,
 ): readonly ModelCatalogEntry[] {
-    const ordered = orderModels(catalogModels, modelSettings?.modelOrder)
+    const ordered = orderModels(catalogModels, modelSettings?.modelOrder).map(
+        withoutHiddenReasoning,
+    )
 
     if (!modelSettings || modelSettings.enableAll) {
         return ordered

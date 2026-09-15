@@ -57,6 +57,7 @@ describe('protocol-codex model catalog', () => {
             'high',
             'xhigh',
         ])
+        expect(model.reasoningLevels.map((level) => level.id)).not.toContain('ultra')
         expect(model.reasoningLevels[0]).toEqual(
             expect.objectContaining({
                 id: 'low',
@@ -89,6 +90,34 @@ describe('protocol-codex model catalog', () => {
             { id: 'ordinary', display_name: 'Gemini Flash', cpa_capabilities: { web_search: false } },
         ] })
         expect(models.map((model) => model.cpaCapabilities?.webSearch)).toEqual([true, true, true, false])
+    })
+
+    it('hides ultra reasoning levels while keeping all other efforts', () => {
+        const [model] = parseModelCatalog({
+            models: [
+                {
+                    slug: 'gpt-ultra',
+                    display_name: 'GPT Ultra',
+                    supported_reasoning_levels: [
+                        'low',
+                        'medium',
+                        'high',
+                        'xhigh',
+                        'max',
+                        'ultra',
+                        { effort: 'ULTRA' },
+                    ],
+                },
+            ],
+        })
+
+        expect(model.reasoningLevels.map((level) => level.id)).toEqual([
+            'low',
+            'medium',
+            'high',
+            'xhigh',
+            'max',
+        ])
     })
 
     it('does not treat additional_speed_tiers alone as Fast support', () => {

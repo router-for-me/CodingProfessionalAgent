@@ -11,7 +11,6 @@ const CANONICAL_REASONING_ORDER = [
     'high',
     'xhigh',
     'max',
-    'ultra',
 ] as const
 
 const REASONING_LABEL_KEYS = new Map<string, string>([
@@ -86,7 +85,7 @@ function reasoningOptions(value: unknown): readonly ModelReasoningOption[] {
 
         const normalizedEffort = effort.toLowerCase()
         const id = CANONICAL_EFFORT_ALIASES.get(normalizedEffort) ?? normalizedEffort
-        if (options.has(id)) continue
+        if (id === 'ultra' || options.has(id)) continue
 
         const option: ModelReasoningOption = {
             id,
