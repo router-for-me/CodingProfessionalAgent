@@ -25,6 +25,7 @@ export interface UpdateSectionProps {
     phase?: UpdatePhase
     availableVersion?: string
     updateType?: UpdateType
+    packageSize?: number
     releaseNotes?: string
     releaseDate?: string
     downloadProgress?: DownloadProgress
@@ -44,7 +45,8 @@ function formatBytes(bytes: number): string {
         val /= 1024
         unitIdx++
     }
-    return `${val.toFixed(unitIdx === 0 ? 0 : 1)} ${units[unitIdx]}`
+    const formatted = val.toFixed(unitIdx === 0 ? 0 : 1).replace(/\.0$/, '')
+    return `${formatted} ${units[unitIdx]}`
 }
 
 function formatSpeed(bytesPerSecond: number): string {
@@ -67,6 +69,7 @@ export function UpdateSection(props: UpdateSectionProps) {
         currentVersion: props.currentVersion ?? '1.0.0',
         availableVersion: props.availableVersion,
         updateType: props.updateType,
+        packageSize: props.packageSize,
         releaseNotes: props.releaseNotes,
         releaseDate: props.releaseDate,
         downloadProgress: props.downloadProgress,
@@ -77,6 +80,8 @@ export function UpdateSection(props: UpdateSectionProps) {
     const effectiveCurrentVersion = props.currentVersion ?? internalSnapshot.currentVersion ?? '1.0.0'
     const effectiveAvailableVersion = props.availableVersion ?? internalSnapshot.availableVersion
     const effectiveUpdateType = props.updateType ?? internalSnapshot.updateType
+    const effectivePackageSize =
+        props.packageSize ?? internalSnapshot.packageSize ?? internalSnapshot.downloadProgress?.totalBytes
     const effectiveReleaseNotes = props.releaseNotes ?? internalSnapshot.releaseNotes
     const effectiveDownloadProgress = props.downloadProgress ?? internalSnapshot.downloadProgress
     const effectiveErrorMessage = props.errorMessage ?? internalSnapshot.errorMessage
@@ -304,12 +309,22 @@ export function UpdateSection(props: UpdateSectionProps) {
                                     {effectiveUpdateType === 'hot' ? (
                                         <span className="inline-flex items-center gap-1 rounded-md border border-[var(--accent-green)]/30 bg-[var(--accent-green)]/10 px-2 py-0.5 text-[11px] font-medium text-[var(--accent-green)]">
                                             <Zap className="h-3 w-3" />
-                                            {t('settings.update.hotBadge', 'Hot Update (~25MB)')}
+                                            {effectivePackageSize
+                                                ? t('settings.update.hotBadgeWithSize', {
+                                                      defaultValue: 'Hot Update ({{size}})',
+                                                      size: formatBytes(effectivePackageSize),
+                                                  })
+                                                : t('settings.update.hotBadge', 'Hot Update (~25MB)')}
                                         </span>
                                     ) : (
                                         <span className="inline-flex items-center gap-1 rounded-md border border-[var(--accent-blue)]/30 bg-[var(--accent-blue)]/10 px-2 py-0.5 text-[11px] font-medium text-[var(--accent-blue)]">
                                             <Package className="h-3 w-3" />
-                                            {t('settings.update.fullBadge', 'Full Package Update')}
+                                            {effectivePackageSize
+                                                ? t('settings.update.fullBadgeWithSize', {
+                                                      defaultValue: 'Full Package Update ({{size}})',
+                                                      size: formatBytes(effectivePackageSize),
+                                                  })
+                                                : t('settings.update.fullBadge', 'Full Package Update')}
                                         </span>
                                     )}
                                 </div>

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent, act } from '@testing-library/react'
+import '@/i18n'
 import { UpdateSection } from './UpdateSection.js'
 import { setSettingsCapabilityClient } from '../utils/capability.js'
 
@@ -56,6 +57,36 @@ describe('UpdateSection', () => {
 
         expect(screen.getByText(/2\.0\.0/)).toBeDefined()
         expect(screen.getByText(/全量安装包更新|Full Package Update/i)).toBeDefined()
+    })
+
+    it('renders hot update badge with actual package size when packageSize is provided', () => {
+        render(
+            <UpdateSection
+                currentVersion="1.0.0"
+                phase="available"
+                availableVersion="1.1.0"
+                updateType="hot"
+                packageSize={26214400}
+            />,
+        )
+
+        expect(screen.getByText(/1\.1\.0/)).toBeDefined()
+        expect(screen.getByText(/热更新 \(25 MB\)|Hot Update \(25 MB\)/i)).toBeDefined()
+    })
+
+    it('renders full package update badge with actual package size when packageSize is provided', () => {
+        render(
+            <UpdateSection
+                currentVersion="1.0.0"
+                phase="available"
+                availableVersion="2.0.0"
+                updateType="full"
+                packageSize={125829120}
+            />,
+        )
+
+        expect(screen.getByText(/2\.0\.0/)).toBeDefined()
+        expect(screen.getByText(/全量安装包更新 \(120 MB\)|Full Package Update \(120 MB\)/i)).toBeDefined()
     })
 
     it('renders progress bar when downloading', () => {
@@ -157,6 +188,46 @@ describe('UpdateSection', () => {
         expect(invokeMock).toHaveBeenCalledWith('update:check')
         expect(await screen.findByText(/1\.3\.0/)).toBeDefined()
         expect(await screen.findByText(/热更新 \(~25MB\)|Hot Update \(~25MB\)/i)).toBeDefined()
+
+        setSettingsCapabilityClient(null)
+    })
+
+    it('queries update:getState and renders dynamic package size when check returns packageSize', async () => {
+        const invokeMock = vi.fn().mockImplementation((method: string) => {
+            if (method === 'update:getState') {
+                return Promise.resolve({
+                    phase: 'idle',
+                    currentVersion: '1.2.3',
+                })
+            }
+            if (method === 'update:check') {
+                return Promise.resolve({
+                    phase: 'available',
+                    currentVersion: '1.2.3',
+                    availableVersion: '1.3.0',
+                    updateType: 'hot',
+                    packageSize: 31457280,
+                    releaseNotes: 'New awesome feature',
+                })
+            }
+            return Promise.resolve()
+        })
+        const subscribeMock = vi.fn().mockReturnValue(() => {})
+
+        setSettingsCapabilityClient({
+            invoke: invokeMock,
+            subscribe: subscribeMock,
+            has: () => true,
+        } as any)
+
+        render(<UpdateSection />)
+
+        const checkBtn = await screen.findByRole('button', { name: /检查更新|Check for updates/i })
+        fireEvent.click(checkBtn)
+
+        expect(invokeMock).toHaveBeenCalledWith('update:check')
+        expect(await screen.findByText(/1\.3\.0/)).toBeDefined()
+        expect(await screen.findByText(/热更新 \(30 MB\)|Hot Update \(30 MB\)/i)).toBeDefined()
 
         setSettingsCapabilityClient(null)
     })

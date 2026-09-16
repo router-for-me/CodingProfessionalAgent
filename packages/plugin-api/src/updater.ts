@@ -52,6 +52,7 @@ export interface UpdateStatusSnapshot {
     currentVersion: string
     availableVersion?: string
     updateType?: UpdateType
+    packageSize?: number
     releaseNotes?: string
     releaseDate?: string
     downloadProgress?: DownloadProgress

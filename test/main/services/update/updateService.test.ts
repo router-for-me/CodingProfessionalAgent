@@ -150,6 +150,7 @@ describe('UpdateService', () => {
         expect(snapshot.phase).toBe('available')
         expect(snapshot.availableVersion).toBe('1.2.0')
         expect(snapshot.updateType).toBe('hot')
+        expect(snapshot.packageSize).toBe(2048)
         expect(snapshot.releaseNotes).toBe('Performance improvements and bug fixes')
         expect(snapshot.releaseDate).toBe('2026-09-15T00:00:00Z')
         expect(snapshot.errorMessage).toBeUndefined()
@@ -170,6 +171,31 @@ describe('UpdateService', () => {
         expect(snapshot.availableVersion).toBe('2.0.0')
         expect(snapshot.updateType).toBe('full')
         expect(snapshot.releaseNotes).toBe('Major new version with updated Electron')
+    })
+
+    it('populates packageSize in snapshot for both hot and full updates', async () => {
+        const fetcherHot = vi.fn().mockResolvedValue(sampleHotManifest)
+        const hotService = new UpdateService({
+            storage,
+            currentVersion: '1.0.0',
+            electronVersion: '44.0.0',
+            nodeAbiVersion: '130',
+            manifestFetcher: fetcherHot,
+        })
+        const hotSnapshot = await hotService.checkForUpdates()
+        expect(hotSnapshot.packageSize).toBe(2048)
+
+        const fetcherFull = vi.fn().mockResolvedValue(sampleFullManifest)
+        const fullService = new UpdateService({
+            storage,
+            fullProvider: mockFullProvider,
+            currentVersion: '1.0.0',
+            electronVersion: '44.0.0',
+            nodeAbiVersion: '130',
+            manifestFetcher: fetcherFull,
+        })
+        const fullSnapshot = await fullService.checkForUpdates()
+        expect(fullSnapshot.packageSize).toBe(80000)
     })
 
     it('transitions to idle when remote version is not greater than current version', async () => {

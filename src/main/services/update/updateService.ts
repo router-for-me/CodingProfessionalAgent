@@ -154,11 +154,25 @@ export class UpdateService {
                 ? this.targetUpdateType
                 : this.resolvedUpdateType
 
+        let packageSize: number | undefined
+        if (manifest) {
+            if (updateType === 'hot') {
+                packageSize = manifest.asar?.size
+            } else if (updateType === 'full') {
+                const installer = this.fullProvider.resolveInstaller(manifest)
+                packageSize = installer?.size
+            }
+        }
+        if (packageSize === undefined && this.currentProgress?.totalBytes) {
+            packageSize = this.currentProgress.totalBytes
+        }
+
         return {
             phase: this.phase,
             currentVersion: this.currentVersion,
             availableVersion: manifest?.version,
             updateType: updateType ?? undefined,
+            packageSize,
             releaseNotes: manifest?.releaseNotes,
             releaseDate: manifest?.releaseDate,
             downloadProgress: this.currentProgress,
