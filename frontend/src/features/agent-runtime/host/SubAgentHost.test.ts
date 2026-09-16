@@ -1013,6 +1013,48 @@ describe('SubAgentHost', () => {
         expect(completed?.completedAt).toBe(25000)
     })
 
+    it('finalizes runtime entries with streaming status upon subagent completion', async () => {
+        const host = new SubAgentHost({
+            generateId: () => 'sub-finalize-1',
+            now: () => 30000,
+            run: async function* (request) {
+                yield {
+                    type: 'assistant-end',
+                    entry: {
+                        id: 'a1',
+                        sessionId: request.sessionId,
+                        kind: 'assistant',
+                        content: [{ type: 'text', text: 'All done' }],
+                        status: 'streaming',
+                        stopReason: 'pending',
+                        createdAt: 10000,
+                    },
+                }
+            },
+        })
+        const prepared = preparedRun()
+        host.configure({
+            prepared,
+            codingTools: [readTool],
+            models: [model],
+        })
+        host.setParentContext({ sessionId: 'parent', runId: 'run-1' })
+
+        await host.spawn('Run task', { name: 'Finalizer' })
+        const agent = host.get('sub-finalize-1')
+        expect(agent?.status).toBe('completed')
+        expect(agent?.completedAt).toBe(30000)
+
+        const runtime = (host as any).runtimes.get('sub-finalize-1')
+        expect(runtime?.entries).toHaveLength(1)
+        expect(runtime?.entries[0]).toMatchObject({
+            id: 'a1',
+            status: 'done',
+            stopReason: 'stop',
+            completedAt: 30000,
+        })
+    })
+
     it('rejects spawn when subagents are disabled in settings', async () => {
         const host = new SubAgentHost({
             generateId: () => 'sub-disabled-1',

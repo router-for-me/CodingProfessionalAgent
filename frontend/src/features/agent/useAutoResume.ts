@@ -12,6 +12,7 @@ import { useWorktreeSetupStore } from '@/stores/worktreeSetupStore'
 import {
   ensureSessionLoaded,
   loadSessionEntries,
+  saveSessionData,
   schedulePersist,
 } from '@/application/services/persistenceService'
 import {
@@ -207,6 +208,34 @@ export async function scanUnfinishedTasks(): Promise<ScanResult> {
         const completedAt =
           typeof lastEntry?.createdAt === 'number' ? lastEntry.createdAt : Date.now()
         healSubAgent(sa, 'completed', completedAt)
+
+        if (childEntries.length > 0) {
+          let updatedChild = false
+          const healedEntries = childEntries.map((entry) => {
+            if (
+              entry.kind === 'assistant' &&
+              (entry.status === 'streaming' ||
+                entry.stopReason === 'pending' ||
+                entry.completedAt === undefined)
+            ) {
+              updatedChild = true
+              return {
+                ...entry,
+                status: 'done' as const,
+                stopReason:
+                  entry.stopReason === 'pending'
+                    ? ('stop' as const)
+                    : entry.stopReason,
+                completedAt: entry.completedAt ?? completedAt,
+              }
+            }
+            return entry
+          })
+          if (updatedChild) {
+            useMessageStore.getState().replaceSessionEntries(sa.sessionId, healedEntries)
+            void saveSessionData(sa.sessionId, healedEntries)
+          }
+        }
       }
     } catch {
       if (isSubAgentUnfinished(sa)) {

@@ -175,6 +175,18 @@ describe('mergeAssistantTurn', () => {
     expect((merged as any).completedAt).toBeUndefined()
   })
 
+  it('does not stay streaming when live is explicitly false even if messages have streaming status', () => {
+    const merged = mergeAssistantTurn(
+      [assistant('a1', 20, 'streaming')],
+      10,
+      false,
+      undefined,
+      5000,
+    )
+    expect(merged.status).toBe('done')
+    expect((merged as any).completedAt).toBe(5000)
+  })
+
   it('carries errorMessage and error status when an assistant stage failed', () => {
     const merged = mergeAssistantTurn(
       [

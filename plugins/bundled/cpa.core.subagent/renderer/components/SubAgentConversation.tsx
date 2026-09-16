@@ -136,8 +136,9 @@ function groupMessagesIntoTurns(messages: readonly any[]): ChatTurn[] {
 export function mergeAssistantMessages(
     messages: readonly any[],
     startedAt: number,
-    live = false,
+    live?: boolean,
     pausedMs?: number,
+    fallbackCompletedAt?: number,
 ): any {
     const first = messages[0]
     const last = messages[messages.length - 1]
@@ -174,7 +175,9 @@ export function mergeAssistantMessages(
     }
 
     const streaming =
-        live || messages.some((message) => message.status === 'streaming')
+        typeof live === 'boolean'
+            ? live
+            : messages.some((message) => message.status === 'streaming')
     const status = streaming
         ? 'streaming'
         : messages.some((message) => message.status === 'error')
@@ -196,6 +199,11 @@ export function mergeAssistantMessages(
         return max === undefined ? c : Math.max(max, c)
     }, undefined)
 
+    const effectiveCompletedAt =
+        resolvedCompletedAt !== undefined
+            ? resolvedCompletedAt
+            : fallbackCompletedAt
+
     return {
         kind: 'message',
         id: first.id,
@@ -206,9 +214,9 @@ export function mergeAssistantMessages(
         status,
         ...(errorMessage ? { errorMessage } : {}),
         createdAt: startedAt,
-        ...(streaming || typeof resolvedCompletedAt !== 'number'
+        ...(streaming || typeof effectiveCompletedAt !== 'number'
             ? {}
-            : { completedAt: resolvedCompletedAt }),
+            : { completedAt: effectiveCompletedAt }),
         ...(resolvedPausedMs > 0 ? { pausedMs: resolvedPausedMs } : {}),
     }
 }
@@ -408,6 +416,11 @@ function TurnSection({
     chatRenderers: readonly any[]
 }) {
     const running = isRunActive && (agent.status === 'running' || agent.status === 'queued')
+    const fallbackCompletedAt = !running
+        ? (turn.isLastTurn
+              ? (agent.completedAt ?? agent.updatedAt ?? turn.completedAt)
+              : turn.completedAt)
+        : undefined
 
     // Merge all assistant stages in the turn so earlier tool_call parts remain visible
     // while the live request continues. Force streaming while the agent is still running.
@@ -421,6 +434,7 @@ function TurnSection({
             turn.startedAt,
             running,
             turn.pausedMs,
+            fallbackCompletedAt,
         )
     } else if (running) {
         // Agent running without assistant entry yet

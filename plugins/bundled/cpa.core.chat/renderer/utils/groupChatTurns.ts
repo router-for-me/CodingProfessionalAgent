@@ -102,8 +102,9 @@ export function assistantTurnMessages(
 export function mergeAssistantTurn(
   messages: readonly DisplayChatMessage[],
   startedAt: number,
-  live = false,
+  live?: boolean,
   pausedMs?: number,
+  fallbackCompletedAt?: number,
 ): DisplayChatMessage {
   const first = messages[0]
   const last = messages[messages.length - 1]
@@ -141,7 +142,9 @@ export function mergeAssistantTurn(
   }
 
   const streaming =
-    live || messages.some((message) => message.status === 'streaming')
+    typeof live === 'boolean'
+      ? live
+      : messages.some((message) => message.status === 'streaming')
   const status = streaming
     ? 'streaming'
     : messages.some((message) => message.status === 'error')
@@ -162,6 +165,11 @@ export function mergeAssistantTurn(
     return max === undefined ? c : Math.max(max, c)
   }, undefined)
 
+  const effectiveCompletedAt =
+    resolvedCompletedAt !== undefined
+      ? resolvedCompletedAt
+      : fallbackCompletedAt
+
   const hasInterrupted = messages.some((m) => (m as any).interrupted === true)
 
   return {
@@ -175,9 +183,9 @@ export function mergeAssistantTurn(
     ...(errorMessage ? { errorMessage } : {}),
     ...(hasInterrupted ? { interrupted: true } : {}),
     createdAt: startedAt,
-    ...(streaming || typeof resolvedCompletedAt !== 'number'
+    ...(streaming || typeof effectiveCompletedAt !== 'number'
       ? {}
-      : { completedAt: resolvedCompletedAt }),
+      : { completedAt: effectiveCompletedAt }),
     ...(resolvedPausedMs > 0 ? { pausedMs: resolvedPausedMs } : {}),
   }
 }

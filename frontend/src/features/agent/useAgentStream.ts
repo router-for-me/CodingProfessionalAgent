@@ -568,6 +568,52 @@ function bindSubAgentHost(service: AgentService): void {
         onStateChange(agents) {
             useSubAgentStore.getState().mergeHostAgents(agents)
             schedulePersist(false)
+            for (const agent of agents) {
+                if (
+                    agent.status === 'completed' ||
+                    agent.status === 'aborted' ||
+                    agent.status === 'error'
+                ) {
+                    const childSessionId = agent.sessionId || agent.id
+                    const entries = useMessageStore.getState().getEntries(childSessionId)
+                    if (entries.length > 0) {
+                        const completedTimestamp =
+                            agent.completedAt ?? agent.updatedAt ?? Date.now()
+                        let updated = false
+                        const nextEntries = entries.map((entry) => {
+                            if (
+                                entry.kind === 'assistant' &&
+                                (entry.status === 'streaming' ||
+                                    entry.stopReason === 'pending' ||
+                                    entry.completedAt === undefined)
+                            ) {
+                                updated = true
+                                return {
+                                    ...entry,
+                                    status:
+                                        agent.status === 'aborted'
+                                            ? ('aborted' as const)
+                                            : agent.status === 'error'
+                                              ? ('error' as const)
+                                              : ('done' as const),
+                                    stopReason:
+                                        entry.stopReason === 'pending'
+                                            ? agent.status === 'aborted'
+                                                ? ('aborted' as const)
+                                                : ('stop' as const)
+                                            : entry.stopReason,
+                                    completedAt: entry.completedAt ?? completedTimestamp,
+                                }
+                            }
+                            return entry
+                        })
+                        if (updated) {
+                            useMessageStore.getState().replaceSessionEntries(childSessionId, nextEntries)
+                            schedulePersist(true)
+                        }
+                    }
+                }
+            }
             const parentSessionId = useSessionStore.getState().currentSessionId
             const bridge = getHostBridge()
             if (parentSessionId && bridge?.SessionBroadcastSubAgentState) {

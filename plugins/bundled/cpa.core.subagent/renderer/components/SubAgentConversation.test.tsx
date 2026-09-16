@@ -173,6 +173,25 @@ describe('mergeAssistantMessages', () => {
       expect.objectContaining({ type: 'tool_call', id: 't1', name: 'read' }),
     ])
   })
+
+  it('does not stay streaming when live is false even if an assistant message has streaming status', () => {
+    const merged = mergeAssistantMessages(
+      [
+        assistant('a1', 20, 'streaming', {
+          content: 'final answer',
+          parts: [{ type: 'text', text: 'final answer' }],
+        }),
+      ],
+      10,
+      false,
+      undefined,
+      5000,
+    )
+
+    expect(merged.status).toBe('done')
+    expect(merged.completedAt).toBe(5000)
+    expect(merged.content).toBe('final answer')
+  })
 })
 
 describe('SubAgentConversation live tool visibility', () => {
@@ -237,6 +256,56 @@ describe('SubAgentConversation live tool visibility', () => {
       ],
     })
     expect((assistantCall?.message as { completedAt?: number }).completedAt).toBeUndefined()
+  })
+
+  it('renders completed non-streaming assistant message when subagent is completed even if message was left streaming', () => {
+    pluginMessageHostCalls.length = 0
+    ;(globalThis as any).__subagentTestMessages = [
+      {
+        kind: 'message',
+        id: 'u1',
+        sessionId: 'ag-1',
+        role: 'user',
+        content: 'run review',
+        status: 'done',
+        createdAt: 1000,
+      },
+      assistant('a1', 2000, 'streaming', {
+        content: 'Review finished with RESOLVED',
+        parts: [{ type: 'text', text: 'Review finished with RESOLVED' }],
+      }),
+    ]
+
+    const completedAgent: SubAgentRecord = {
+      ...runningAgent,
+      status: 'completed',
+      completedAt: 45000,
+      updatedAt: 45000,
+    }
+
+    render(
+      <SubAgentConversation
+        sessionId="parent-1"
+        agent={completedAgent}
+        onBack={() => undefined}
+      />,
+    )
+
+    expect(screen.getByTestId('plugin-message-a1')).toBeInTheDocument()
+
+    const assistantCall = pluginMessageHostCalls.find((call) => {
+      const message = call.message as { role?: string; parts?: unknown[] }
+      return message?.role === 'assistant'
+    })
+
+    expect(assistantCall).toBeTruthy()
+    expect(assistantCall?.isRunActive).toBe(false)
+    expect(assistantCall?.message).toMatchObject({
+      id: 'a1',
+      status: 'done',
+      completedAt: 45000,
+      content: 'Review finished with RESOLVED',
+    })
   })
 })
 

@@ -1218,20 +1218,26 @@ export class SubAgentHost {
                         this.emitUserEntry(nextUser)
                     }
                 }
-                if (controller.signal.aborted) {
-                    this.patch(agentId, { status: 'aborted', completedAt: this.now() })
+                const completedAt = this.now()
+                const isAborted = Boolean(controller.signal.aborted)
+                this.finalizeRuntimeEntries(runtime, isAborted ? 'aborted' : 'completed', completedAt)
+                if (isAborted) {
+                    this.patch(agentId, { status: 'aborted', completedAt })
                 } else {
-                    this.patch(agentId, { status: 'completed', completedAt: this.now() })
+                    this.patch(agentId, { status: 'completed', completedAt })
                 }
             } catch (error) {
-                if (controller.signal.aborted || isAbortError(error)) {
-                    this.patch(agentId, { status: 'aborted', completedAt: this.now() })
+                const completedAt = this.now()
+                const isAbort = controller.signal.aborted || isAbortError(error)
+                this.finalizeRuntimeEntries(runtime, isAbort ? 'aborted' : 'error', completedAt)
+                if (isAbort) {
+                    this.patch(agentId, { status: 'aborted', completedAt })
                     return
                 }
                 this.patch(agentId, {
                     status: 'error',
                     errorMessage: errorMessageOf(error),
-                    completedAt: this.now(),
+                    completedAt,
                 })
                 throw error
             } finally {
@@ -1336,20 +1342,26 @@ export class SubAgentHost {
                         this.emitUserEntry(nextUser)
                     }
                 }
-                if (controller.signal.aborted) {
-                    this.patch(agentId, { status: 'aborted', completedAt: this.now() })
+                const completedAt = this.now()
+                const isAborted = Boolean(controller.signal.aborted)
+                this.finalizeRuntimeEntries(runtime, isAborted ? 'aborted' : 'completed', completedAt)
+                if (isAborted) {
+                    this.patch(agentId, { status: 'aborted', completedAt })
                 } else {
-                    this.patch(agentId, { status: 'completed', completedAt: this.now() })
+                    this.patch(agentId, { status: 'completed', completedAt })
                 }
             } catch (error) {
-                if (controller.signal.aborted || isAbortError(error)) {
-                    this.patch(agentId, { status: 'aborted', completedAt: this.now() })
+                const completedAt = this.now()
+                const isAbort = controller.signal.aborted || isAbortError(error)
+                this.finalizeRuntimeEntries(runtime, isAbort ? 'aborted' : 'error', completedAt)
+                if (isAbort) {
+                    this.patch(agentId, { status: 'aborted', completedAt })
                     return
                 }
                 this.patch(agentId, {
                     status: 'error',
                     errorMessage: errorMessageOf(error),
-                    completedAt: this.now(),
+                    completedAt,
                 })
                 throw error
             } finally {
@@ -1440,6 +1452,39 @@ export class SubAgentHost {
             throw new Error('Sub-agent runtime is not configured')
         }
         return resolveCatalogModel(config.models, modelId, config.prepared.model)
+    }
+
+    private finalizeRuntimeEntries(
+        runtime: ChildRuntime,
+        status: SubAgentStatus,
+        completedAt: number,
+    ): void {
+        runtime.entries = runtime.entries.map((entry) => {
+            if (
+                entry.kind === 'assistant' &&
+                (entry.status === 'streaming' ||
+                    entry.stopReason === 'pending' ||
+                    entry.completedAt === undefined)
+            ) {
+                return {
+                    ...entry,
+                    status:
+                        status === 'aborted'
+                            ? ('aborted' as const)
+                            : status === 'error'
+                              ? ('error' as const)
+                              : ('done' as const),
+                    stopReason:
+                        entry.stopReason === 'pending'
+                            ? status === 'aborted'
+                                ? ('aborted' as const)
+                                : ('stop' as const)
+                            : entry.stopReason,
+                    completedAt: entry.completedAt ?? completedAt,
+                }
+            }
+            return entry
+        })
     }
 
     private makeUserEntry(sessionId: string, text: string): UserEntry {
