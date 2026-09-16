@@ -135,7 +135,38 @@ export class RendererPluginModuleLoader {
             const fileUrl = `${convertToFileUrl(diskPath)}?rev=${cacheBust}`
             rawModule = await this.importModuleFn(fileUrl)
         } else {
-            rawModule = await this.importModuleFn(entryUrl)
+            try {
+                rawModule = await this.importModuleFn(entryUrl)
+            } catch (directImportErr: any) {
+                // If direct dynamic import fails (e.g. Chromium rejects custom scheme dynamic imports),
+                // fetch the module content and load via Blob URL (universally supported for ES modules).
+                if (
+                    typeof fetch === 'function' &&
+                    typeof URL !== 'undefined' &&
+                    typeof URL.createObjectURL === 'function' &&
+                    typeof Blob !== 'undefined'
+                ) {
+                    const response = await fetch(entryUrl)
+                    if (!response.ok) {
+                        const detail = await response.text().catch(() => '')
+                        const err = new Error(
+                            `Failed to fetch plugin module from '${entryUrl}': HTTP ${response.status} ${response.statusText}${detail ? ` - ${detail}` : ''}`,
+                        )
+                        ;(err as any).cause = directImportErr
+                        throw err
+                    }
+                    const sourceCode = await response.text()
+                    const blob = new Blob([sourceCode], { type: 'text/javascript' })
+                    const blobUrl = URL.createObjectURL(blob)
+                    try {
+                        rawModule = await this.importModuleFn(blobUrl)
+                    } finally {
+                        URL.revokeObjectURL(blobUrl)
+                    }
+                } else {
+                    throw directImportErr
+                }
+            }
         }
 
         if (!rawModule || typeof rawModule !== 'object') {

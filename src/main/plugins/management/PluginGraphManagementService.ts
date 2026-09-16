@@ -479,6 +479,11 @@ export class PluginGraphManagementService {
         const nextGeneration = (this.coordinator.getGeneration() || 0) + 1
         const transactionId = `tx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 
+        // Stage candidate packages in resource service so renderer/agent can load modules during staging
+        for (const pkg of candidatePackages) {
+            this.resourceService.registerPackage(pkg)
+        }
+
         // Stage candidate generation in coordinator
         this.coordinator.setGraphDTO(candidateGraphDTO)
         await this.coordinator.prepareGeneration(candidateCatalog, {
@@ -686,10 +691,8 @@ export class PluginGraphManagementService {
             }
         }
 
-        // Register newly active packages in resource service
-        for (const pkg of tx.rawGraph.activationOrder) {
-            this.resourceService.registerPackage(pkg)
-        }
+        // Register active packages in resource service
+        this.resourceService.setPackages(tx.rawGraph.activationOrder, tx.candidateRevision)
 
         // Update active configs and clear pending transaction
         this.activeGlobalConfig = tx.globalConfig
@@ -742,6 +745,14 @@ export class PluginGraphManagementService {
             } catch {
                 // Ignore config rollback error
             }
+        }
+
+        // Restore active packages in resource service
+        try {
+            const activePackages = this.coordinator.host?.catalog?.getPackages() ?? []
+            this.resourceService.setPackages(activePackages)
+        } catch {
+            // Ignore resource restore error on rollback
         }
     }
 }

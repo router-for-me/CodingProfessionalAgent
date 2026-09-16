@@ -169,4 +169,48 @@ describe('RendererPluginModuleLoader', () => {
         const loaded = await loader.load(pkg, 'renderer')
         expect(loaded?.activate).toBe(pluginWithChunk.activate)
     })
+
+    it('falls back to fetching content and loading via Blob URL when direct import fails', async () => {
+        const expectedPlugin: PluginEntryDefinition = {
+            runtime: 'agent',
+            activate: vi.fn(),
+            deactivate: vi.fn(),
+        }
+
+        const createObjectURLSpy = vi.fn().mockReturnValue('blob:http://localhost/mock-blob-uuid')
+        const revokeObjectURLSpy = vi.fn()
+        vi.stubGlobal('URL', {
+            ...URL,
+            createObjectURL: createObjectURLSpy,
+            revokeObjectURL: revokeObjectURLSpy,
+        })
+
+        const fetchSpy = vi.fn().mockResolvedValue({
+            ok: true,
+            status: 200,
+            text: async () => 'export default { runtime: "agent", activate() {} }',
+        })
+        vi.stubGlobal('fetch', fetchSpy)
+
+        const mockImport = vi.fn().mockImplementation(async (url: string) => {
+            if (url.startsWith('blob:')) {
+                return { default: expectedPlugin }
+            }
+            throw new TypeError(`Failed to fetch dynamically imported module: ${url}`)
+        })
+
+        const loader = new RendererPluginModuleLoader({
+            importModule: mockImport,
+            isElectron: true,
+        })
+
+        const loaded = await loader.load(mockPkg, 'agent')
+        expect(fetchSpy).toHaveBeenCalledWith('cpa-plugin://sample-renderer-plugin/dist/agent.js')
+        expect(createObjectURLSpy).toHaveBeenCalled()
+        expect(mockImport).toHaveBeenCalledWith('blob:http://localhost/mock-blob-uuid')
+        expect(revokeObjectURLSpy).toHaveBeenCalledWith('blob:http://localhost/mock-blob-uuid')
+        expect(loaded?.activate).toBe(expectedPlugin.activate)
+
+        vi.unstubAllGlobals()
+    })
 })
