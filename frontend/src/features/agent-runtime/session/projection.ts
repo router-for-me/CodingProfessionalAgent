@@ -1,3 +1,4 @@
+import { extractMemoryCitations } from '@cpa/plugin-sdk'
 import type {
     AssistantEntry,
     CompactionEntry,
@@ -96,7 +97,11 @@ function projectAssistant(
     }
 
     const parts = contentToDisplayParts(entry.content, byCallId, entry.status)
-    const text = joinTextBlocks(entry.content)
+    const rawText = joinTextBlocks(entry.content)
+    const { cleanText: text, citations: extractedCitations } = extractMemoryCitations(rawText)
+    const effectiveCitations = entry.citations && entry.citations.length > 0
+        ? { entries: entry.citations.flatMap(c => c.entries), rolloutIds: entry.citations.flatMap(c => c.rolloutIds ?? []) }
+        : extractedCitations
     const pausedMs =
         typeof entry.pausedMs === 'number' && Number.isFinite(entry.pausedMs) && entry.pausedMs > 0
             ? entry.pausedMs
@@ -126,6 +131,7 @@ function projectAssistant(
         status: entry.status,
         ...(entry.errorMessage ? { errorMessage: entry.errorMessage } : {}),
         createdAt: entry.createdAt,
+        ...(effectiveCitations !== undefined ? { citations: effectiveCitations } : {}),
         ...(effectiveCompletedAt !== undefined
             ? { completedAt: effectiveCompletedAt }
             : {}),
@@ -152,7 +158,8 @@ function contentToDisplayParts(
 
     for (const block of content) {
         if (block.type === 'text') {
-            parts.push({ type: 'text', text: block.text })
+            const { cleanText } = extractMemoryCitations(block.text)
+            parts.push({ type: 'text', text: cleanText })
             continue
         }
 

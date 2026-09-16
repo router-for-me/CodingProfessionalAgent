@@ -55,6 +55,9 @@ import { ThinkingBlock } from './ThinkingBlock.js'
 import { ToolActivityStack } from './ToolActivityStack.js'
 import { ToolCard } from './ToolCard.js'
 import { TurnHeader } from './TurnHeader.js'
+import { MemoryCitationsView } from './MemoryCitationsView.js'
+import { extractMemoryCitations, stripMemoryCitations } from '@cpa/plugin-sdk'
+import type { MemoryCitation } from '@cpa/plugin-api'
 
 export function ForkIcon({ className }: { className?: string }) {
     return (
@@ -792,15 +795,18 @@ export const AssistantMessageRenderer = memo(function AssistantMessageRenderer(
                         toolOverlays,
                         compactActivity,
                         chatRenderers,
+                        citations: message.citations,
                     })
                     : (
                         <AssistantText
                             text={message.content}
+                            citations={message.citations}
                         />
                     )
                 : (
                     <AssistantText
                         text={collapsedText ?? trailingAssistantText(parts, message.content)}
+                        citations={message.citations}
                     />
                 )}
             {message.status === 'error' ? (
@@ -927,23 +933,31 @@ export function AssistantText(props: {
     text?: string
     part?: any
     value?: any
+    citations?: MemoryCitation
     className?: string
 }) {
-    const text = props.text ?? props.part?.text ?? props.value?.text ?? ''
-    if (!text) return null
+    const rawText = props.text ?? props.part?.text ?? props.value?.text ?? ''
+    if (!rawText) return null
+
+    const { cleanText, citations: inlineCitations } = extractMemoryCitations(rawText)
+    const activeCitations = props.citations ?? inlineCitations
+
     return (
-        <div
-            className={cn(
-                'markdown-body prose prose-invert max-w-none min-w-0 [overflow-wrap:anywhere]',
-                props.className,
-            )}
-        >
-            <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
-                components={markdownComponents}
+        <div className="flex flex-col">
+            <div
+                className={cn(
+                    'markdown-body prose prose-invert max-w-none min-w-0 [overflow-wrap:anywhere]',
+                    props.className,
+                )}
             >
-                {text}
-            </ReactMarkdown>
+                <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={markdownComponents}
+                >
+                    {cleanText}
+                </ReactMarkdown>
+            </div>
+            {activeCitations && <MemoryCitationsView citations={activeCitations} />}
         </div>
     )
 }
@@ -1049,12 +1063,14 @@ function userText(message: DisplayChatMessage): string {
 }
 
 function assistantText(message: DisplayChatMessage): string {
-    if (message.content) return message.content
-    const textParts = message.parts?.filter((p) => p.type === 'text')
-    if (textParts && textParts.length > 0) {
-        return textParts.map((p) => (p as { text: string }).text).join('\n\n')
-    }
-    return ''
+    const raw = message.content || (() => {
+        const textParts = message.parts?.filter((p) => p.type === 'text')
+        if (textParts && textParts.length > 0) {
+            return textParts.map((p) => (p as { text: string }).text).join('\n\n')
+        }
+        return ''
+    })()
+    return stripMemoryCitations(raw)
 }
 
 function renderParts(
@@ -1068,6 +1084,7 @@ function renderParts(
         compactActivity?: boolean
         chatRenderers?: readonly any[]
         message?: DisplayChatMessage
+        citations?: MemoryCitation
     },
 ) {
     if (opts.compactActivity) {
@@ -1081,6 +1098,7 @@ function renderParts(
                     <AssistantText
                         key={`text-${index}`}
                         text={segment.text}
+                        citations={isLastSegment ? opts.citations : undefined}
                     />
                 )
             }
@@ -1127,7 +1145,11 @@ function renderParts(
                     streaming={opts.streaming && isLast}
                 />
             ) : part.type === 'text' ? (
-                <AssistantText key={`text-${index}`} text={(part as any).text} />
+                <AssistantText
+                    key={`text-${index}`}
+                    text={(part as any).text}
+                    citations={isLast ? opts.citations : undefined}
+                />
             ) : undefined
 
         return (

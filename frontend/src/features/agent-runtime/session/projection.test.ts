@@ -569,4 +569,45 @@ describe('projectConversation', () => {
         // completedAt must be 63000 (incorporating tool duration), not 3000!
         expect((projected[0] as any).completedAt).toBe(63000)
     })
+
+    it('extracts memory citations and strips XML from assistant text in projection', () => {
+        const rawContent = `# GitHub Issue Triage\n\nReport body here.\n\n<oai-mem-citation>\n<citation_entries>\nextensions/ad_hoc/notes/triage-5847.md:1-8|note=[prior criteria]\nMEMORY.md:20-25|note=[registry]\n</citation_entries>\n<rollout_ids>\n019c6e27-e55b-73d1-87d8-4e01f1f75043\n</rollout_ids>\n</oai-mem-citation>`
+
+        const entries: ConversationEntry[] = [
+            {
+                id: 'a-cite',
+                sessionId: 's-cite',
+                createdAt: 1000,
+                kind: 'assistant',
+                content: [{ type: 'text', text: rawContent }],
+                status: 'done',
+                stopReason: 'stop',
+            },
+        ]
+
+        const projected = projectConversation(entries)
+        expect(projected).toHaveLength(1)
+        const msg = projected[0] as any
+        expect(msg.content).toBe('# GitHub Issue Triage\n\nReport body here.')
+        expect(msg.parts).toEqual([
+            { type: 'text', text: '# GitHub Issue Triage\n\nReport body here.' },
+        ])
+        expect(msg.citations).toBeDefined()
+        expect(msg.citations.entries).toEqual([
+            {
+                file: 'extensions/ad_hoc/notes/triage-5847.md',
+                lineRange: '1-8',
+                note: 'prior criteria',
+            },
+            {
+                file: 'MEMORY.md',
+                lineRange: '20-25',
+                note: 'registry',
+            },
+        ])
+        expect(msg.citations.rolloutIds).toEqual([
+            '019c6e27-e55b-73d1-87d8-4e01f1f75043',
+        ])
+    })
 })
+

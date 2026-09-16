@@ -118,6 +118,21 @@ export interface AssistantEntry extends EntryBase {
     nativeToolCalls?: readonly Record<string, unknown>[]
     /** Raw upstream output annotations, including search citations. */
     annotations?: readonly Record<string, unknown>[]
+    /** Structured memory citation blocks extracted from model reply text. */
+    citations?: readonly MemoryCitation[]
+}
+
+/** Individual cited entry from a persistent memory file. */
+export interface MemoryCitationEntry {
+    file: string
+    lineRange?: string
+    note?: string
+}
+
+/** Structured memory citation parsed from `<oai-mem-citation>` blocks. */
+export interface MemoryCitation {
+    entries: readonly MemoryCitationEntry[]
+    rolloutIds?: readonly string[]
 }
 
 /** Runtime-produced accounting for an isolated model call, separate from chat usage. */

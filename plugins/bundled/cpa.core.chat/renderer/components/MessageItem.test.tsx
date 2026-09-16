@@ -659,4 +659,59 @@ describe('MessageItem contribution rendering and custom override dispatching', (
     expect(consoleError).toHaveBeenCalled()
     consoleError.mockRestore()
   })
+
+  it('renders memory citations and strips citation XML from displayed text and copy payload', async () => {
+    let copiedText = ''
+    const hostServices: Partial<HostServices> = {
+      ui: {
+        writeClipboard: async (text: string) => {
+          copiedText = text
+        },
+        pushToast: () => undefined,
+      } as any,
+    }
+
+    const rawMessage = `# Final Triage Report\n\nAll tests passed.\n\n<oai-mem-citation>\n<citation_entries>\nextensions/ad_hoc/notes/triage-5847.md:1-8|note=[prior criteria]\n</citation_entries>\n<rollout_ids>\n019c6e27-e55b-73d1-87d8-4e01f1f75043\n</rollout_ids>\n</oai-mem-citation>`
+
+    const message: DisplayChatMessage = {
+      kind: 'message',
+      id: 'asst-with-citations',
+      sessionId: 's1',
+      role: 'assistant',
+      content: rawMessage,
+      status: 'done',
+      createdAt: 1000,
+    }
+
+    render(
+      <HostServicesProvider services={hostServices as HostServices}>
+        <MessageItem
+          message={message}
+          onApproveTool={() => undefined}
+          onRejectTool={() => undefined}
+        />
+      </HostServicesProvider>,
+    )
+
+    // Heading and body should be present
+    expect(screen.getByRole('heading', { level: 1, name: 'Final Triage Report' })).toBeInTheDocument()
+    expect(screen.getByText('All tests passed.')).toBeInTheDocument()
+
+    // Raw citation XML tag should NOT be visible in the rendered document
+    expect(screen.queryByText(/<oai-mem-citation>/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/<citation_entries>/)).not.toBeInTheDocument()
+
+    // Memory citations component should be rendered
+    const toggle = screen.getByTestId('memory-citations-toggle')
+    expect(toggle).toBeInTheDocument()
+    fireEvent.click(toggle)
+    expect(screen.getByText('extensions/ad_hoc/notes/triage-5847.md')).toBeInTheDocument()
+    expect(screen.getByText('prior criteria')).toBeInTheDocument()
+
+    // Verify copy result strips XML
+    const copyButton = screen.getByRole('button', { name: /Copy result/i })
+    fireEvent.click(copyButton)
+    expect(copiedText).toBe('# Final Triage Report\n\nAll tests passed.')
+  })
 })
+

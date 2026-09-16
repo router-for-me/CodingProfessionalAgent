@@ -1,3 +1,5 @@
+import type { MemoryCitation } from '@cpa/plugin-api'
+
 export type ToolCardStatus =
   | 'queued'
   | 'running'
@@ -75,6 +77,7 @@ export interface DisplayChatMessage {
   completedAt?: number
   pausedMs?: number
   updatedAt?: number
+  citations?: MemoryCitation
   [key: string]: unknown
 }
 

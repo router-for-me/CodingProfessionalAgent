@@ -16,6 +16,8 @@ import type {
     Usage,
     UserEntry,
     UserPendingStatus,
+    MemoryCitation,
+    MemoryCitationEntry,
 } from '@cpa/plugin-api'
 
 export type {
@@ -31,6 +33,8 @@ export type {
     Usage,
     UserEntry,
     UserPendingStatus,
+    MemoryCitation,
+    MemoryCitationEntry,
 }
 
 /** Display tool status kept compatible with current ToolCard expectations. */
@@ -77,6 +81,7 @@ export interface DisplayChatMessage {
     createdAt: number
     completedAt?: number
     pausedMs?: number
+    citations?: MemoryCitation
 }
 
 export interface DisplayCompaction {
