@@ -62,14 +62,14 @@ jobs:
           DRAFT: ${{ github.event.inputs.draft == 'true' }}
           PRERELEASE: ${{ github.event.inputs.prerelease == 'true' }}
         run: |
-          FLAGS="--title Release $TAG --generate-notes"
-          if [ "$DRAFT" = "true" ]; then FLAGS="$FLAGS --draft"; fi
-          if [ "$PRERELEASE" = "true" ]; then FLAGS="$FLAGS --prerelease"; fi
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG already exists."
-          else
-            gh release create "$TAG" $FLAGS
+            exit 0
           fi
+          ARGS=("$TAG" --title "Release $TAG" --generate-notes)
+          if [ "$DRAFT" = "true" ]; then ARGS+=(--draft); fi
+          if [ "$PRERELEASE" = "true" ]; then ARGS+=(--prerelease); fi
+          gh release create "${ARGS[@]}"
 
   build-patch:
     name: Build ASAR Patch
