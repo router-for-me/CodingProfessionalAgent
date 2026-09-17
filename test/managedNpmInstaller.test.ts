@@ -277,6 +277,89 @@ describe('ManagedNpmInstaller & PluginPackageLock & NpmPluginSource', () => {
                 /failed to fetch manifest.*E404 Not Found/i,
             )
         })
+
+        it('automatically resolves latest version when no version is specified in package spec', async () => {
+            const extractSpy = vi.fn(async (_s: string, dest: string) => {
+                await fs.mkdir(dest, { recursive: true })
+                await fs.writeFile(
+                    path.join(dest, 'package.json'),
+                    JSON.stringify({ name: 'cpa-codex-computer-use', version: '2.1.0' }),
+                    'utf-8',
+                )
+            })
+
+            const fetchManifestSpy = vi.fn(async (spec: string) => {
+                expect(spec).toBe('cpa-codex-computer-use@latest')
+                return {
+                    name: 'cpa-codex-computer-use',
+                    version: '2.1.0',
+                    dist: { integrity: 'sha512-autoLatestIntegrity==' },
+                }
+            })
+
+            const installer = new ManagedNpmInstaller({
+                pluginsDir,
+                fetchManifest: fetchManifestSpy,
+                extractPackage: extractSpy,
+            })
+
+            // Spec without '@' version
+            const installed = await installer.install('cpa-codex-computer-use')
+            expect(installed.name).toBe('cpa-codex-computer-use')
+            expect(installed.version).toBe('2.1.0')
+            expect(installed.packageRoot).toBe(
+                path.join(pluginsDir, 'npm', 'cpa-codex-computer-use', '2.1.0'),
+            )
+            expect(fetchManifestSpy).toHaveBeenCalledTimes(1)
+            expect(extractSpy).toHaveBeenCalledWith(
+                'cpa-codex-computer-use@2.1.0',
+                expect.stringContaining('.tmp-'),
+                expect.objectContaining({ runScripts: false }),
+            )
+
+            // Verify lockfile contains both requested spec and exact spec
+            const lock = new PluginPackageLock(lockfilePath)
+            const lockContent = await lock.load()
+            expect(lockContent.packages['cpa-codex-computer-use']?.resolvedVersion).toBe('2.1.0')
+            expect(
+                lockContent.packages['npm:cpa-codex-computer-use@2.1.0']?.resolvedVersion,
+            ).toBe('2.1.0')
+        })
+
+        it('automatically queries latest version on subsequent install when new version is published', async () => {
+            let currentVersion = '1.0.0'
+            const extractSpy = vi.fn(async (spec: string, dest: string) => {
+                const version = spec.split('@')[1]
+                await fs.mkdir(dest, { recursive: true })
+                await fs.writeFile(
+                    path.join(dest, 'package.json'),
+                    JSON.stringify({ name: 'cpa-codex-computer-use', version }),
+                    'utf-8',
+                )
+            })
+
+            const installer = new ManagedNpmInstaller({
+                pluginsDir,
+                fetchManifest: async () => ({
+                    name: 'cpa-codex-computer-use',
+                    version: currentVersion,
+                    dist: { integrity: `sha512-integrity-${currentVersion}==` },
+                }),
+                extractPackage: extractSpy,
+            })
+
+            // 1st install: version 1.0.0
+            const first = await installer.install('cpa-codex-computer-use')
+            expect(first.version).toBe('1.0.0')
+
+            // 2nd install: remote releases 1.0.1
+            currentVersion = '1.0.1'
+            const second = await installer.install('cpa-codex-computer-use')
+            expect(second.version).toBe('1.0.1')
+            expect(second.packageRoot).toBe(
+                path.join(pluginsDir, 'npm', 'cpa-codex-computer-use', '1.0.1'),
+            )
+        })
     })
 
     describe('Helper Utilities', () => {

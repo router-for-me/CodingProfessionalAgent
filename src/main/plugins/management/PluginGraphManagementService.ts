@@ -305,11 +305,9 @@ export class PluginGraphManagementService {
             }
         } else if (type === 'install') {
             const spec = targetIdOrSpec
-            // Install managed package
-            const installed = await this.npmInstaller.install(spec, { strictExact: true })
-            const canonicalSpec: PluginSourceSpec = spec.startsWith('npm:')
-                ? (spec as PluginSourceSpec)
-                : `npm:${installed.name}@${installed.version}`
+            // Install managed package. When version is omitted, automatically resolves latest version.
+            const installed = await this.npmInstaller.install(spec)
+            const canonicalSpec: PluginSourceSpec = `npm:${installed.name}@${installed.version}`
 
             const entry: PluginSourceConfigEntry = {
                 source: canonicalSpec,
@@ -317,11 +315,12 @@ export class PluginGraphManagementService {
             }
 
             // Ensure newly installed plugin is not in disabled list
+            let pluginId = installed.name
             try {
                 const manifestPath = path.join(installed.packageRoot, 'manifest.json')
                 const manifestContent = await fs.readFile(manifestPath, 'utf-8')
                 const parsedManifest = JSON.parse(manifestContent)
-                const pluginId = parsedManifest.id ?? installed.name
+                pluginId = parsedManifest.id ?? installed.name
                 candidateGlobal.disabled = (candidateGlobal.disabled ?? []).filter(
                     (id) => id !== pluginId && id !== installed.name,
                 )
@@ -329,11 +328,25 @@ export class PluginGraphManagementService {
                 // Best effort manifest inspection
             }
 
-            const existingIdx = candidateGlobal.sources.findIndex(
-                (s) => s.source === canonicalSpec || s.source === spec,
-            )
+            const isMatchingPackageSource = (s: PluginSourceConfigEntry): boolean => {
+                if (typeof s.source !== 'string') return false
+                if (s.source === canonicalSpec || s.source === spec) return true
+                if (s.source === installed.name || s.source === `npm:${installed.name}`) return true
+                if (
+                    s.source.startsWith(`npm:${installed.name}@`) ||
+                    s.source.startsWith(`${installed.name}@`)
+                ) {
+                    return true
+                }
+                return false
+            }
+
+            const existingIdx = candidateGlobal.sources.findIndex(isMatchingPackageSource)
             if (existingIdx !== -1) {
                 candidateGlobal.sources[existingIdx] = entry
+                candidateGlobal.sources = candidateGlobal.sources.filter(
+                    (s, idx) => idx === existingIdx || !isMatchingPackageSource(s),
+                )
             } else {
                 candidateGlobal.sources.push(entry)
             }

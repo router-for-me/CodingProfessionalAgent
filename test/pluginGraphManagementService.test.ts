@@ -375,6 +375,84 @@ describe('PluginGraphManagementService & Graph Transactions', () => {
         expect(savedSettings.plugins.disabled).toEqual([])
     })
 
+    it('automatically resolves latest version when installing without version specifier (e.g. cpa-codex-computer-use)', async () => {
+        let currentVersion = '1.0.3'
+        const fixtureManifest = {
+            name: 'cpa-codex-computer-use',
+            version: currentVersion,
+            dist: { integrity: 'sha512-computerUseHash==' },
+        }
+        const extractSpy = vi.fn(async (spec: string, dest: string) => {
+            const version = spec.split('@')[1] || '1.0.3'
+            await createTestPlugin(dest, 'cpa.ext.computer-use', version)
+        })
+
+        const customInstaller = new ManagedNpmInstaller({
+            pluginsDir: globalPluginsDir,
+            fetchManifest: async (spec: string) => {
+                expect(spec).toBe('cpa-codex-computer-use@latest')
+                return {
+                    name: 'cpa-codex-computer-use',
+                    version: currentVersion,
+                    dist: { integrity: `sha512-hash-${currentVersion}==` },
+                }
+            },
+            extractPackage: extractSpy,
+        })
+
+        const service = new PluginGraphManagementService({
+            homeDir,
+            projectPath: projectDir,
+            resourceService,
+            coordinator,
+            npmInstaller: customInstaller,
+        })
+
+        // Prepare install with bare package name without version (should resolve latest automatically without throwing strict semver error)
+        const installCandidate = await service.prepareInstall('cpa-codex-computer-use')
+        expect(installCandidate.candidateRevision).toBeTruthy()
+        expect(
+            installCandidate.graph.plugins.some((p) => p.id === 'cpa.ext.computer-use'),
+        ).toBe(true)
+
+        await service.commitTransaction(installCandidate.candidateRevision)
+
+        const list = await service.list()
+        const plugin = list.plugins.find((p) => p.manifest.id === 'cpa.ext.computer-use')
+        expect(plugin).toBeDefined()
+        expect(plugin?.manifest.version).toBe('1.0.3')
+        expect(plugin?.status).toBe('active')
+
+        // Verify persisted setting uses canonical exact spec
+        const globalSettingsPath = path.join(homeDir, '.coding-professional-agent', 'settings.json')
+        const savedSettings = JSON.parse(await fs.readFile(globalSettingsPath, 'utf-8'))
+        expect(savedSettings.plugins.sources).toEqual([
+            expect.objectContaining({
+                source: 'npm:cpa-codex-computer-use@1.0.3',
+                enabled: true,
+            }),
+        ])
+
+        // Upgrade test: remote publishes 1.0.4, user re-installs 'cpa-codex-computer-use'
+        currentVersion = '1.0.4'
+        const upgradeCandidate = await service.prepareInstall('cpa-codex-computer-use')
+        await service.commitTransaction(upgradeCandidate.candidateRevision)
+
+        const listAfterUpgrade = await service.list()
+        const upgradedPlugin = listAfterUpgrade.plugins.find(
+            (p) => p.manifest.id === 'cpa.ext.computer-use',
+        )
+        expect(upgradedPlugin?.manifest.version).toBe('1.0.4')
+
+        // Verify no duplicate sources in configuration
+        const savedSettingsAfterUpgrade = JSON.parse(await fs.readFile(globalSettingsPath, 'utf-8'))
+        const matchingSources = savedSettingsAfterUpgrade.plugins.sources.filter(
+            (s: any) => s.source.includes('cpa-codex-computer-use'),
+        )
+        expect(matchingSources).toHaveLength(1)
+        expect(matchingSources[0].source).toBe('npm:cpa-codex-computer-use@1.0.4')
+    })
+
     it('does NOT commit runtime coordinator if disk prepare fails', async () => {
         const bundledDir = path.join(tempRoot, 'bundled')
         await createTestPlugin(path.join(bundledDir, 'cpa.core.bundled'), 'cpa.core.bundled')

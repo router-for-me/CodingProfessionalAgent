@@ -207,6 +207,35 @@ describe('PluginsSection', () => {
         })
     })
 
+    it('handles install flow without version specifier (e.g. cpa-codex-computer-use)', async () => {
+        const installSpy = vi.fn()
+        const pluginManagementMock = {
+            getPluginSummaries: () => [],
+            subscribe: () => () => {},
+            activatePlugin: vi.fn(),
+            deactivatePlugin: vi.fn(),
+            reloadPlugin: vi.fn(),
+            installPlugin: installSpy,
+            uninstallPlugin: vi.fn(),
+            isPluginActive: () => false,
+        }
+
+        createHostServices({ pluginManagement: pluginManagementMock })
+        render(<PluginsSection />)
+
+        const input = screen.getByPlaceholderText(/npm package name or spec/i)
+        expect(input).toBeInTheDocument()
+
+        fireEvent.change(input, { target: { value: 'cpa-codex-computer-use' } })
+
+        const installBtn = screen.getByRole('button', { name: /install/i })
+        fireEvent.click(installBtn)
+
+        await waitFor(() => {
+            expect(installSpy).toHaveBeenCalledWith('cpa-codex-computer-use')
+        })
+    })
+
     it('handles uninstall flow for non-core external plugins', async () => {
         const uninstallSpy = vi.fn()
         const extManifest = makeManifest('cpa.ext.custom', {

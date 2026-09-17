@@ -304,8 +304,12 @@ export class ManagedNpmInstaller {
         const lockedEntry: PluginPackageLockEntry | undefined =
             lockFile.packages[spec] ?? lockFile.packages[parsed.normalizedSpec]
 
-        // Check if cached package directory exists on disk and matches lockfile
-        if (lockedEntry && lockedEntry.packageRoot) {
+        // Check if cached package directory exists on disk and matches lockfile.
+        // Early cache short-circuit is only allowed when an exact semver was requested
+        // or when running in offline mode. If no exact version was specified (e.g. 'latest')
+        // and online, query the registry to resolve the latest version.
+        const canUseEarlyCache = this.offline || isExactSemver(parsed.range)
+        if (canUseEarlyCache && lockedEntry && lockedEntry.packageRoot) {
             try {
                 const stat = await fs.stat(lockedEntry.packageRoot)
                 if (stat.isDirectory()) {
@@ -418,12 +422,17 @@ export class ManagedNpmInstaller {
 
         // Check if target directory already exists and is intact
         let needsExtract = true
+        let contentDigest =
+            lockedEntry?.resolvedVersion === resolvedVersion
+                ? lockedEntry.contentDigest || ''
+                : ''
+
         try {
             const stat = await fs.stat(targetPackageRoot)
             if (stat.isDirectory()) {
-                if (lockedEntry?.contentDigest) {
+                if (contentDigest) {
                     const currentDigest = await computeDirectoryContentDigest(targetPackageRoot)
-                    if (currentDigest === lockedEntry.contentDigest) {
+                    if (currentDigest === contentDigest) {
                         needsExtract = false
                     }
                 } else {
@@ -433,8 +442,6 @@ export class ManagedNpmInstaller {
         } catch {
             needsExtract = true
         }
-
-        let contentDigest = lockedEntry?.contentDigest || ''
 
         if (needsExtract) {
             await fs.mkdir(this.npmDir, { recursive: true })
@@ -496,6 +503,13 @@ export class ManagedNpmInstaller {
                 lockFile.packages[parsed.normalizedSpec] = {
                     ...lockEntry,
                     requested: parsed.normalizedSpec,
+                }
+            }
+            const exactSpec: `npm:${string}` = `npm:${resolvedName}@${resolvedVersion}`
+            if (exactSpec !== spec && exactSpec !== parsed.normalizedSpec) {
+                lockFile.packages[exactSpec] = {
+                    ...lockEntry,
+                    requested: exactSpec,
                 }
             }
         })
