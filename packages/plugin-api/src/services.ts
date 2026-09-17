@@ -287,7 +287,6 @@ export interface AppSettings {
   modelId: string
   reasoningLevel: ReasoningLevel
   speed: Speed
-  requestApproval: boolean
   compactionThresholdPercent: number
   fastContextCompaction: boolean
   resumeUnfinishedConversations?: boolean
@@ -603,7 +602,6 @@ export interface SettingsService {
     setModelId?(modelId: string): void
     setReasoningLevel?(reasoningLevel: ReasoningLevel): void
     setSpeed?(speed: Speed): void
-    setRequestApproval?(requestApproval: boolean): void
     setCompactionThresholdPercent?(percent: number): void
     setFastContextCompaction?(enabled: boolean): void
     setResumeUnfinishedConversations?(enabled: boolean): void

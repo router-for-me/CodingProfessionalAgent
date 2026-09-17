@@ -23,7 +23,6 @@ import { useProjectStore } from '@/stores/projectStore'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useSubAgentStore } from '@/stores/subAgentStore'
 import { useUiStore } from '@/stores/uiStore'
-import { useSettingsStore } from '@/stores/settingsStore'
 import {
     createManageTodoListTool,
 } from '../../../plugins/bundled/cpa.core.manage-todo-list/agent/index.js'
@@ -145,13 +144,6 @@ describe('Universal Plugin Architecture - End-to-End Integration', () => {
             rightSidebarWidth: 320,
             settingsOpen: false,
             toasts: [],
-        })
-
-        useSettingsStore.setState({
-            settings: {
-                ...useSettingsStore.getState().settings,
-                requestApproval: false,
-            },
         })
     })
 

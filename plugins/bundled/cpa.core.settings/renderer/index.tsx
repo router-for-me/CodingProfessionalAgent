@@ -95,12 +95,6 @@ export const settingsRendererEntry = definePluginEntry({
                         keywords: ['permissions'],
                     },
                     {
-                        id: 'fullAccess',
-                        labelKey: 'settings.general.fullAccess',
-                        descriptionKey: 'settings.general.fullAccess.desc',
-                        keywords: ['full access'],
-                    },
-                    {
                         id: 'language',
                         labelKey: 'settings.language',
                         descriptionKey: 'settings.general.language.desc',

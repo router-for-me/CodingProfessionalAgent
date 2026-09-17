@@ -488,9 +488,6 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
         setSpeed(speed) {
             useSettingsStore.getState().setSpeed(speed)
         },
-        setRequestApproval(requestApproval) {
-            useSettingsStore.getState().setRequestApproval(requestApproval)
-        },
         setCompactionThresholdPercent(percent) {
             useSettingsStore.getState().setCompactionThresholdPercent(percent)
         },

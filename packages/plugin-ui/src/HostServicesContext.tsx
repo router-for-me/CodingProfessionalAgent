@@ -99,7 +99,6 @@ const DEFAULT_FALLBACK_SETTINGS: AppSettings = Object.freeze({
     modelId: '',
     reasoningLevel: '',
     speed: 'standard',
-    requestApproval: false,
     compactionThresholdPercent: 80,
     fastContextCompaction: true,
     resumeUnfinishedConversations: true,

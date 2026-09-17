@@ -366,7 +366,6 @@ describe('bundledPluginContract baseline', () => {
         expect(manifest.contributes['composer']).toEqual(
             expect.arrayContaining([
                 'composer-attach',
-                'request-approval',
                 'context-usage-ring',
                 'model-select',
                 'files',

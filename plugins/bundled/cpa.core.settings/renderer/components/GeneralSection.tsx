@@ -6,7 +6,6 @@ import {
 } from '@cpa/plugin-ui'
 import {
     SettingsServiceToken,
-    UiServiceToken,
     isMacPlatform,
     type EditorFollowUpMode,
     type EditorSendShortcut,
@@ -18,7 +17,6 @@ import {
 import {
     SegmentedControl,
     SettingsCard,
-    SettingsLink,
     SettingsPercentInput,
     SettingsRow,
     SettingsSection,
@@ -39,7 +37,6 @@ const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
  */
 export function GeneralSection() {
     const { t } = useTranslation()
-    const uiService = useHostService(UiServiceToken)
     const settingsService = useHostService(SettingsServiceToken)
     const settings = useSettings()
 
@@ -73,10 +70,6 @@ export function GeneralSection() {
     const terminalPosition = settings.terminalPosition ?? 'bottom'
     const setTerminalPosition = (val: TerminalPosition) =>
         settingsService?.setTerminalPosition?.(val)
-
-    const requestApproval = settings.requestApproval ?? false
-    const setRequestApproval = (val: boolean) =>
-        settingsService?.setRequestApproval?.(val)
 
     const speed = settings.speed ?? 'standard'
     const setSpeed = (val: Speed) => settingsService?.setSpeed?.(val)
@@ -130,9 +123,6 @@ export function GeneralSection() {
               'Queue follow-up messages while CPA is running, or steer the current run. Press Shift+Ctrl+Enter for the opposite on a single message',
           )
 
-    const pushToast = (msg: string) => uiService?.pushToast(msg)
-    const learnMore = () => pushToast(t('toast.comingSoon'))
-
     return (
         <div className="mx-auto w-full max-w-[760px] space-y-6 px-8 pt-8 pb-12">
             <h1 className="text-[22px] font-semibold tracking-tight text-[var(--text-primary)]">
@@ -151,25 +141,6 @@ export function GeneralSection() {
                                 disabled={true}
                                 label={t('settings.general.defaultPermissions')}
                                 onChange={() => {}}
-                            />
-                        }
-                    />
-                    <SettingsRow
-                        id="setting-fullAccess"
-                        title={t('settings.general.fullAccess')}
-                        description={
-                            <>
-                                {t('settings.general.fullAccess.desc')}{' '}
-                                <SettingsLink onClick={learnMore}>
-                                    {t('settings.general.learnMore')}
-                                </SettingsLink>
-                            </>
-                        }
-                        control={
-                            <ToggleSwitch
-                                checked={!requestApproval}
-                                label={t('settings.general.fullAccess')}
-                                onChange={(checked) => setRequestApproval(!checked)}
                             />
                         }
                         last

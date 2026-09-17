@@ -43,7 +43,6 @@ describe('cpa.core.composer Renderer Entry', () => {
         expect(manifest.contributes.composer).toEqual(
             expect.arrayContaining([
                 'composer-attach',
-                'request-approval',
                 'context-usage-ring',
                 'model-select',
                 'files',
@@ -84,7 +83,6 @@ describe('cpa.core.composer Renderer Entry', () => {
         expect(composerContribs.map((c) => c.id)).toEqual(
             expect.arrayContaining([
                 'composer-attach',
-                'request-approval',
                 'context-usage-ring',
                 'model-select',
                 'files',

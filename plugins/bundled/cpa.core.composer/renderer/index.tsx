@@ -13,7 +13,6 @@ import { ModelSelect } from './components/ModelSelect.js'
 import { ContextUsageRing } from './components/ContextUsageRing.js'
 import {
     AttachControl,
-    RequestApprovalControl,
 } from './components/ComposerToolbarControls.js'
 import { expandPromptTemplate } from './utils/promptTemplates.js'
 import {
@@ -28,7 +27,6 @@ export {
     ModelSelect,
     ContextUsageRing,
     AttachControl,
-    RequestApprovalControl,
 }
 
 export const composerRendererEntry = definePluginEntry({
@@ -57,18 +55,6 @@ export const composerRendererEntry = definePluginEntry({
                 placement: 'toolbar-left',
                 order: 10,
                 component: AttachControl,
-            },
-        })
-
-        context.register<ComposerControlContribution>({
-            kind: 'composer',
-            id: 'request-approval',
-            target: 'control:toolbar-left',
-            value: {
-                id: 'request-approval',
-                placement: 'toolbar-left',
-                order: 20,
-                component: RequestApprovalControl,
             },
         })
 

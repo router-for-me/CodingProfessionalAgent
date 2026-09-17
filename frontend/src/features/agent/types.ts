@@ -62,7 +62,7 @@ export interface AgentPrepareInput {
     models: readonly ModelCatalogEntry[]
     reasoningLevel: string
     speed: Speed
-    requestApproval: boolean
+    requestApproval?: boolean
     /** Auto-compact when context exceeds this percent of the model window. */
     compactionThresholdPercent?: number
     /** Lower expensive reasoning levels for context summarization. Defaults to true. */
@@ -110,7 +110,7 @@ export interface PreparedAgentRun {
     /** Mapped catalog requestValue; omitted when model has no reasoning options. */
     readonly reasoningEffort?: string
     readonly speed: 'standard' | 'fast' | string
-    readonly requestApproval: boolean
+    readonly requestApproval?: boolean
     readonly compactionSettings?: CompactionSettings
     readonly fastContextCompaction: boolean
     readonly agentDir: string
@@ -198,7 +198,7 @@ export interface StreamChatInput {
     sessionId: string
     messages: import('@/types/models').Message[]
     modelId: string
-    requestApproval: boolean
+    requestApproval?: boolean
     signal?: AbortSignal
     locale?: import('@/types/models').Locale
     kind?: import('./templates').QuickActionKind | 'general'

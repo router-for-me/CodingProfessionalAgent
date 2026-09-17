@@ -25,12 +25,11 @@ describe('composer contribution selectors and pipeline', () => {
         await manager.activateAll()
 
         const allControls = selectComposerControls(registry)
-        expect(allControls.length).toBeGreaterThanOrEqual(4)
+        expect(allControls.length).toBeGreaterThanOrEqual(3)
 
         const toolbarLeftControls = selectComposerControls(registry, 'toolbar-left')
         expect(toolbarLeftControls.map((item) => item.id)).toEqual([
             'composer-attach',
-            'request-approval',
         ])
 
         const toolbarRightControls = selectComposerControls(registry, 'toolbar-right')

@@ -168,7 +168,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   modelId: '',
   reasoningLevel: '',
   speed: 'standard',
-  requestApproval: false,
   compactionThresholdPercent: DEFAULT_COMPACTION_THRESHOLD_PERCENT,
   fastContextCompaction: true,
   resumeUnfinishedConversations: true,

@@ -33,7 +33,6 @@ interface SettingsState {
   setModelId: (modelId: string) => void
   setReasoningLevel: (reasoningLevel: ReasoningLevel) => void
   setSpeed: (speed: Speed) => void
-  setRequestApproval: (requestApproval: boolean) => void
   setCompactionThresholdPercent: (percent: number) => void
   setFastContextCompaction: (enabled: boolean) => void
   setResumeUnfinishedConversations: (enabled: boolean) => void
@@ -108,11 +107,6 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   setSpeed: (speed) =>
     set((state) => ({
       settings: { ...state.settings, speed },
-    })),
-
-  setRequestApproval: (requestApproval) =>
-    set((state) => ({
-      settings: { ...state.settings, requestApproval },
     })),
 
   setCompactionThresholdPercent: (percent) =>

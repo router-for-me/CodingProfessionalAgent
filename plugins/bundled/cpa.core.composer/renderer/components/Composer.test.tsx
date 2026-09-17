@@ -148,7 +148,6 @@ function resetTestServices() {
         modelId: visionModel.id,
         reasoningLevel: 'off',
         speed: 'standard',
-        requestApproval: false,
         compactionThresholdPercent: 80,
         fastContextCompaction: true,
         showInMenuBar: true,
@@ -200,10 +199,6 @@ function resetTestServices() {
             }),
             setSpeed: vi.fn((spd: any) => {
                 settingsState = { ...settingsState, speed: spd }
-                notifySettings()
-            }),
-            setRequestApproval: vi.fn((val: boolean) => {
-                settingsState = { ...settingsState, requestApproval: val }
                 notifySettings()
             }),
         },
@@ -1644,17 +1639,6 @@ describe('Composer extension slots', () => {
         render(<Composer onSend={() => undefined} />)
         expect(screen.getByTestId('context-usage-ring')).toBeInTheDocument()
         expect(screen.getByRole('button', { name: 'Model' })).toBeInTheDocument()
-    })
-
-    it('toggles request approval setting when checkbox is clicked', async () => {
-        const user = userEvent.setup()
-        render(<Composer onSend={() => undefined} />)
-
-        const checkbox = screen.getByRole('checkbox', { name: 'Request approval' })
-        expect(checkbox).not.toBeChecked()
-
-        await user.click(checkbox)
-        expect(mockServices.settings.setRequestApproval).toHaveBeenCalledWith(true)
     })
 })
 

@@ -30,7 +30,6 @@
         ],
         "composer": [
             "composer-attach",
-            "request-approval",
             "context-usage-ring",
             "model-select",
             "files",

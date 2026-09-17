@@ -327,7 +327,6 @@ export const bundledManifests: Readonly<Record<string, PluginManifest>> = Object
                 ],
                 "composer": [
                         "composer-attach",
-                        "request-approval",
                         "context-usage-ring",
                         "model-select",
                         "files",

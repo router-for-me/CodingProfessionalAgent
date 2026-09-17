@@ -238,7 +238,6 @@ function resetServices() {
         modelId: 'test-model',
         reasoningLevel: 'off',
         speed: 'standard',
-        requestApproval: false,
         compactionThresholdPercent: 80,
         fastContextCompaction: true,
         showInMenuBar: true,
@@ -279,10 +278,6 @@ function resetServices() {
             }),
             setSpeed: vi.fn((spd: any) => {
                 settingsState = { ...settingsState, speed: spd }
-                notifySettings()
-            }),
-            setRequestApproval: vi.fn((val: boolean) => {
-                settingsState = { ...settingsState, requestApproval: val }
                 notifySettings()
             }),
         },
@@ -905,8 +900,8 @@ describe('ComposerContainer Integration', () => {
         const sendBtn = screen.getByRole('button', { name: 'Send' })
         expect(sendBtn).toBeInTheDocument()
 
-        const checkbox = screen.getByRole('checkbox')
-        expect(checkbox).not.toBeDisabled()
+        const attachBtn = screen.getByRole('button', { name: 'Attach files' })
+        expect(attachBtn).not.toBeDisabled()
 
         // Send prompt in Session 2
         const textarea2 = screen.getByTestId('composer-input')
@@ -968,8 +963,8 @@ describe('ComposerContainer Integration', () => {
         expect(nextTextarea).toHaveAttribute('contenteditable', 'true')
 
         // Context controls and toolbar controls are not locked
-        const checkbox = screen.getByRole('checkbox')
-        expect(checkbox).not.toBeDisabled()
+        const attachBtn = screen.getByRole('button', { name: 'Attach files' })
+        expect(attachBtn).not.toBeDisabled()
 
         mockAgent.streamHold = null
         release1()

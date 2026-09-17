@@ -249,7 +249,6 @@ describe('persist pure helpers', () => {
         theme: 'dark',
         locale: 'zh-CN',
         modelId: 'cpa-mock-pro',
-        requestApproval: false,
       },
       projects: [],
       sessions: [],
@@ -305,7 +304,6 @@ describe('persist pure helpers', () => {
         theme: 'dark',
         locale: 'zh-CN',
         modelId: 'cpa-mock-pro',
-        requestApproval: false,
       },
       projects: [],
       sessions: [],
@@ -350,7 +348,6 @@ describe('persist pure helpers', () => {
         modelId: 'cpa-mock-pro',
         reasoningLevel: 'medium',
         speed: 'standard',
-        requestApproval: false,
       },
       projects: [],
       sessions: [],
@@ -783,7 +780,6 @@ describe('persist pure helpers', () => {
         modelId: 'cpa-mock-fast',
         reasoningLevel: 'high',
         speed: 'fast',
-        requestApproval: true,
         compactionThresholdPercent: 95,
         fastContextCompaction: true,
         showInMenuBar: true,
@@ -840,7 +836,6 @@ describe('persist pure helpers', () => {
     expect(useSettingsStore.getState().settings.modelId).toBe('cpa-mock-fast')
     expect(useSettingsStore.getState().settings.reasoningLevel).toBe('high')
     expect(useSettingsStore.getState().settings.speed).toBe('fast')
-    expect(useSettingsStore.getState().settings.requestApproval).toBe(true)
     expect(useProjectStore.getState().projects[0]).toMatchObject({
       name: 'CLIProxyAPI',
       path: undefined,

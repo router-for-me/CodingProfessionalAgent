@@ -1259,7 +1259,6 @@ async function prepareExecutionRun(
                 models: params.catalog,
                 reasoningLevel: params.settings.reasoningLevel,
                 speed: params.settings.speed,
-                requestApproval: params.settings.requestApproval,
                 compactionThresholdPercent:
                     params.settings.compactionThresholdPercent,
                 fastContextCompaction:
@@ -1388,7 +1387,6 @@ async function prepareExecutionRun(
             models: params.catalog,
             reasoningLevel: params.settings.reasoningLevel,
             speed: params.settings.speed,
-            requestApproval: params.settings.requestApproval,
             compactionThresholdPercent:
                 params.settings.compactionThresholdPercent,
             fastContextCompaction:
@@ -2159,7 +2157,6 @@ export function useAgentStream(
                         models: catalog,
                         reasoningLevel: settings.reasoningLevel,
                         speed: settings.speed,
-                        requestApproval: settings.requestApproval,
                         compactionThresholdPercent:
                             settings.compactionThresholdPercent,
                         fastContextCompaction:

@@ -80,7 +80,6 @@ function resetState(): void {
         modelId: '',
         reasoningLevel: 'off',
         speed: 'standard',
-        requestApproval: false,
         compactionThresholdPercent: 80,
         fastContextCompaction: true,
         showInMenuBar: true,

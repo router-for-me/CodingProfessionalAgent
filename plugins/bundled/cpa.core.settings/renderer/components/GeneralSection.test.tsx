@@ -151,30 +151,6 @@ describe('GeneralSection', () => {
         expect(screen.queryByRole('switch', { name: 'Prompt suggestions' })).not.toBeInTheDocument()
     })
 
-    it('syncs full access switch with requestApproval in store', async () => {
-        const user = userEvent.setup()
-        // When requestApproval is false, full access is checked (true)
-        useSettingsStore.setState({
-            settings: { ...DEFAULT_SETTINGS, requestApproval: false },
-        })
-        const { rerender } = render(<GeneralSection />)
-
-        const fullAccessSwitch = screen.getByRole('switch', { name: 'Full access' })
-        expect(fullAccessSwitch).toBeInTheDocument()
-        expect(fullAccessSwitch).toHaveAttribute('aria-checked', 'true')
-
-        // Toggling full access off sets requestApproval to true
-        await user.click(fullAccessSwitch)
-        expect(useSettingsStore.getState().settings.requestApproval).toBe(true)
-
-        rerender(<GeneralSection />)
-        expect(fullAccessSwitch).toHaveAttribute('aria-checked', 'false')
-
-        // Toggling full access on sets requestApproval to false
-        await user.click(fullAccessSwitch)
-        expect(useSettingsStore.getState().settings.requestApproval).toBe(false)
-    })
-
     it('renders resumeUnfinishedConversations switch with name Resume unfinished conversations and toggles store', async () => {
         const user = userEvent.setup()
         useSettingsStore.setState({
