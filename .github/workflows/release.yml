@@ -56,15 +56,20 @@ jobs:
           fi
 
       - name: Create GitHub Release Anchor
-        uses: softprops/action-gh-release@v2
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ steps.release_tag.outputs.tag }}
-          name: Release ${{ steps.release_tag.outputs.tag }}
-          draft: ${{ github.event.inputs.draft == 'true' }}
-          prerelease: ${{ github.event.inputs.prerelease == 'true' }}
-          generate_release_notes: true
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.release_tag.outputs.tag }}
+          DRAFT: ${{ github.event.inputs.draft == 'true' }}
+          PRERELEASE: ${{ github.event.inputs.prerelease == 'true' }}
+        run: |
+          FLAGS="--title Release $TAG --generate-notes"
+          if [ "$DRAFT" = "true" ]; then FLAGS="$FLAGS --draft"; fi
+          if [ "$PRERELEASE" = "true" ]; then FLAGS="$FLAGS --prerelease"; fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists."
+          else
+            gh release create "$TAG" $FLAGS
+          fi
 
   build-patch:
     name: Build ASAR Patch
@@ -94,14 +99,10 @@ jobs:
       - name: Build patch archive
         run: node scripts/build-update-patch.mjs
 
-      - name: Upload patch to GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Upload patch and update release manifest
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ needs.create-release.outputs.tag }}
-          files: |
-            bin/dist/app-update-*.asar
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/publish-release-artifacts.mjs "${{ needs.create-release.outputs.tag }}" bin/dist
 
   build:
     name: Build (${{ matrix.name }})
@@ -191,22 +192,15 @@ jobs:
       - name: Normalize artifact names (amd64/aarch64) and cleanup metadata
         run: node scripts/normalize-artifacts.js
 
-      - name: Upload artifacts directly to GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Upload artifacts and update release manifest
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ needs.create-release.outputs.tag }}
-          files: |
-            bin/dist/*.dmg
-            bin/dist/*.exe
-            bin/dist/*.AppImage
-            bin/dist/*.tar.gz
-            bin/dist/*.zip
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/publish-release-artifacts.mjs "${{ needs.create-release.outputs.tag }}" bin/dist
 
   finalize:
     name: Finalize Release (Checksums & Manifest)
     needs: [create-release, build-patch, build]
+    if: always() && !cancelled() && needs.create-release.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -224,7 +218,7 @@ jobs:
         run: |
           mkdir -p release-assets
           cd release-assets
-          gh release download "$TAG" --pattern "*.dmg" --pattern "*.exe" --pattern "*.AppImage" --pattern "*.tar.gz" --pattern "*.zip" --pattern "*.asar"
+          gh release download "$TAG" --pattern "*.dmg" --pattern "*.exe" --pattern "*.AppImage" --pattern "*.tar.gz" --pattern "*.zip" --pattern "*.asar" --clobber || true
           rm -f SHA256SUMS.txt release-manifest.json
           for file in *; do
             if [ -f "$file" ]; then
@@ -233,7 +227,7 @@ jobs:
           done
           echo "Generated checksums:"
           cat SHA256SUMS.txt
-          node ../scripts/generate-release-manifest.mjs "$TAG"
+          node ../scripts/generate-release-manifest.mjs "$TAG" . release-manifest.json
           echo "Generated release-manifest.json:"
           cat release-manifest.json
           if [ -s SHA256SUMS.txt ]; then

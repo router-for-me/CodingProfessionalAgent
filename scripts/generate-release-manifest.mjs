@@ -87,17 +87,40 @@ export function generateReleaseManifest(options = {}) {
 
     const modulesAbi = options.nativeRequirements?.modules || resolveElectronModulesAbi(resolvedPkgDir, electronVer)
 
+    const mergeExisting = options.mergeExisting ?? process.argv.includes('--merge')
+    let existing = options.existingManifest || null
+    if (!existing && mergeExisting) {
+        const existingPath = options.existingManifestPath || outputPath
+        if (fs.existsSync(existingPath)) {
+            try {
+                const parsed = JSON.parse(fs.readFileSync(existingPath, 'utf8'))
+                if (parsed && typeof parsed === 'object') {
+                    existing = parsed
+                }
+            } catch (err) {
+                console.warn(`[Manifest Generator] Could not parse existing manifest at ${existingPath}:`, err)
+            }
+        }
+    }
+
     const manifest = {
-        version,
+        version: existing?.version || version,
         releaseDate: new Date().toISOString(),
-        releaseNotes: options.releaseNotes || `Release ${rawTag}`,
+        releaseNotes: options.releaseNotes || existing?.releaseNotes || `Release ${rawTag}`,
         nativeRequirements: {
             electron: electronVer,
             modules: modulesAbi,
             minNativeBaseVersion: '1.0.0',
+            ...(existing?.nativeRequirements || {}),
             ...options.nativeRequirements,
         },
-        installers: {},
+        installers: {
+            ...(existing?.installers || {}),
+        },
+    }
+
+    if (existing?.asar) {
+        manifest.asar = existing.asar
     }
 
     for (const file of files) {
@@ -135,7 +158,7 @@ export function generateReleaseManifest(options = {}) {
             manifest.installers[key] = { filename: file, url, sha256, size }
         } else if (file.endsWith('.tar.gz')) {
             const key = isArm ? 'linux-arm64' : 'linux-x64'
-            if (!manifest.installers[key]) {
+            if (!manifest.installers[key] || manifest.installers[key].filename.endsWith('.tar.gz')) {
                 manifest.installers[key] = { filename: file, url, sha256, size }
             }
         }
