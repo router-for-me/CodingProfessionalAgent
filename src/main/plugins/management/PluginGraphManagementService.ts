@@ -21,7 +21,6 @@ import {
 } from '@cpa/plugin-kernel'
 import {
     loadGlobalPluginConfig,
-    loadProjectPluginConfig,
     prepareDurableConfig,
     finalizeDurableConfig,
     rollbackDurableConfig,
@@ -61,7 +60,6 @@ export interface PluginGraphManagementOptions {
 
 export interface PrepareActionOptions {
     expectedRevision?: string
-    scope?: 'project' | 'global'
 }
 
 export interface PreparedCandidateResult {
@@ -85,11 +83,9 @@ interface PendingCandidateTransaction {
     rawGraph: ResolvedPluginGraph
     catalog: PluginCatalog
     globalConfig: PluginSourceConfig
-    projectConfig?: PluginSourceConfig
     grantTickets?: Record<string, { renderer?: string; agent?: string }> | null
     type: 'enable' | 'disable' | 'reload' | 'install' | 'uninstall'
     targetId?: string
-    scope?: 'project' | 'global'
     createdAt: number
     journal?: PluginGraphJournal | null
     runtimeCommitted?: boolean
@@ -113,7 +109,6 @@ export class PluginGraphManagementService {
     readonly npmInstaller: ManagedNpmInstaller
 
     private activeGlobalConfig?: PluginSourceConfig
-    private activeProjectConfig?: PluginSourceConfig
     private pendingTransaction: PendingCandidateTransaction | null = null
     private readonly changeListeners = new Set<() => void>()
 
@@ -171,45 +166,31 @@ export class PluginGraphManagementService {
         }
     }
 
-    private async ensureActiveConfigs(): Promise<{
-        globalConfig: PluginSourceConfig
-        projectConfig?: PluginSourceConfig
-    }> {
+    private async ensureActiveConfig(): Promise<PluginSourceConfig> {
         if (!this.activeGlobalConfig) {
             this.activeGlobalConfig = await loadGlobalPluginConfig(this.homeDir)
         }
-        if (this.projectPath && !this.activeProjectConfig) {
-            this.activeProjectConfig = await loadProjectPluginConfig(this.projectPath)
-        }
-        return {
-            globalConfig: this.activeGlobalConfig,
-            projectConfig: this.activeProjectConfig,
-        }
+        return this.activeGlobalConfig
     }
 
     /**
      * List all plugins across all tiers with their status, source, and metadata.
      */
     async list(): Promise<PluginManagementListResult> {
-        const { globalConfig, projectConfig } = await this.ensureActiveConfigs()
+        const globalConfig = await this.ensureActiveConfig()
         const bundledPackages =
             this.bundledPackages ?? (await discoverBundledPluginPackages(this.bundledDir))
 
         const discoveredPackages = await createPluginCatalog({
-            projectPath: this.projectPath,
             homeDir: this.homeDir,
             bundledPackages,
             globalConfig,
-            projectConfig,
             npmInstaller: this.npmInstaller,
         })
 
         const disabledSet = new Set<string>()
         if (globalConfig.disabled) {
             for (const id of globalConfig.disabled) disabledSet.add(id)
-        }
-        if (projectConfig?.disabled) {
-            for (const id of projectConfig.disabled) disabledSet.add(id)
         }
 
         const enabledPluginIds = discoveredPackages
@@ -298,8 +279,7 @@ export class PluginGraphManagementService {
         this.checkAndCleanExpiredTransaction()
         this.validateExpectedRevision(options.expectedRevision)
 
-        const { globalConfig: curGlobal, projectConfig: curProj } =
-            await this.ensureActiveConfigs()
+        const curGlobal = await this.ensureActiveConfig()
 
         // Clone configs for candidate transaction
         const candidateGlobal: PluginSourceConfig = {
@@ -308,48 +288,20 @@ export class PluginGraphManagementService {
             disabled: curGlobal.disabled ? [...curGlobal.disabled] : [],
         }
 
-        const candidateProject: PluginSourceConfig | undefined = curProj
-            ? {
-                  version: curProj.version ?? 1,
-                  sources: [...curProj.sources],
-                  disabled: curProj.disabled ? [...curProj.disabled] : [],
-              }
-            : undefined
-
-        const scope = options.scope ?? (this.projectPath && candidateProject ? 'project' : 'global')
-
         if (type === 'enable') {
             const pluginId = targetIdOrSpec
             // Remove from disabled lists
             candidateGlobal.disabled = (candidateGlobal.disabled ?? []).filter((id) => id !== pluginId)
-            if (candidateProject) {
-                candidateProject.disabled = (candidateProject.disabled ?? []).filter(
-                    (id) => id !== pluginId,
-                )
-            }
             // If in sources with enabled: false, set to true
             for (const s of candidateGlobal.sources) {
                 if (typeof s.source === 'string' && s.source.includes(pluginId)) {
                     s.enabled = true
                 }
             }
-            if (candidateProject) {
-                for (const s of candidateProject.sources) {
-                    if (typeof s.source === 'string' && s.source.includes(pluginId)) {
-                        s.enabled = true
-                    }
-                }
-            }
         } else if (type === 'disable') {
             const pluginId = targetIdOrSpec
-            if (scope === 'project' && candidateProject) {
-                if (!candidateProject.disabled?.includes(pluginId)) {
-                    candidateProject.disabled = [...(candidateProject.disabled ?? []), pluginId]
-                }
-            } else {
-                if (!candidateGlobal.disabled?.includes(pluginId)) {
-                    candidateGlobal.disabled = [...(candidateGlobal.disabled ?? []), pluginId]
-                }
+            if (!candidateGlobal.disabled?.includes(pluginId)) {
+                candidateGlobal.disabled = [...(candidateGlobal.disabled ?? []), pluginId]
             }
         } else if (type === 'install') {
             const spec = targetIdOrSpec
@@ -373,53 +325,27 @@ export class PluginGraphManagementService {
                 candidateGlobal.disabled = (candidateGlobal.disabled ?? []).filter(
                     (id) => id !== pluginId && id !== installed.name,
                 )
-                if (candidateProject) {
-                    candidateProject.disabled = (candidateProject.disabled ?? []).filter(
-                        (id) => id !== pluginId && id !== installed.name,
-                    )
-                }
             } catch {
                 // Best effort manifest inspection
             }
 
-            if (scope === 'project' && candidateProject) {
-                const existingIdx = candidateProject.sources.findIndex(
-                    (s) => s.source === canonicalSpec || s.source === spec,
-                )
-                if (existingIdx !== -1) {
-                    candidateProject.sources[existingIdx] = entry
-                } else {
-                    candidateProject.sources.push(entry)
-                }
+            const existingIdx = candidateGlobal.sources.findIndex(
+                (s) => s.source === canonicalSpec || s.source === spec,
+            )
+            if (existingIdx !== -1) {
+                candidateGlobal.sources[existingIdx] = entry
             } else {
-                const existingIdx = candidateGlobal.sources.findIndex(
-                    (s) => s.source === canonicalSpec || s.source === spec,
-                )
-                if (existingIdx !== -1) {
-                    candidateGlobal.sources[existingIdx] = entry
-                } else {
-                    candidateGlobal.sources.push(entry)
-                }
+                candidateGlobal.sources.push(entry)
             }
         } else if (type === 'uninstall') {
             const pluginId = targetIdOrSpec
             // Remove from disabled lists
             candidateGlobal.disabled = (candidateGlobal.disabled ?? []).filter((id) => id !== pluginId)
-            if (candidateProject) {
-                candidateProject.disabled = (candidateProject.disabled ?? []).filter(
-                    (id) => id !== pluginId,
-                )
-            }
 
             // Remove from configured sources
             candidateGlobal.sources = candidateGlobal.sources.filter((s) => {
                 return !(typeof s.source === 'string' && (s.source === pluginId || s.source.includes(pluginId)))
             })
-            if (candidateProject) {
-                candidateProject.sources = candidateProject.sources.filter((s) => {
-                    return !(typeof s.source === 'string' && (s.source === pluginId || s.source.includes(pluginId)))
-                })
-            }
         }
 
         // Discover candidate packages across tiers
@@ -427,20 +353,15 @@ export class PluginGraphManagementService {
             this.bundledPackages ?? (await discoverBundledPluginPackages(this.bundledDir))
 
         const candidatePackages = await createPluginCatalog({
-            projectPath: this.projectPath,
             homeDir: this.homeDir,
             bundledPackages,
             globalConfig: candidateGlobal,
-            projectConfig: candidateProject,
             npmInstaller: this.npmInstaller,
         })
 
         const candidateDisabledSet = new Set<string>()
         if (candidateGlobal.disabled) {
             for (const id of candidateGlobal.disabled) candidateDisabledSet.add(id)
-        }
-        if (candidateProject?.disabled) {
-            for (const id of candidateProject.disabled) candidateDisabledSet.add(id)
         }
 
         const candidateEnabledIds = candidatePackages
@@ -501,11 +422,9 @@ export class PluginGraphManagementService {
             rawGraph: candidateRawGraph,
             catalog: candidateCatalog,
             globalConfig: candidateGlobal,
-            projectConfig: candidateProject,
             grantTickets: preparedState?.grantTickets ?? null,
             type,
             targetId: targetIdOrSpec,
-            scope,
             createdAt: Date.now(),
             journal: null,
             runtimeCommitted: false,
@@ -603,9 +522,7 @@ export class PluginGraphManagementService {
         try {
             const journal = await prepareDurableConfig({
                 homeDir: this.homeDir,
-                projectPath: this.projectPath,
                 globalConfig: tx.globalConfig,
-                projectConfig: tx.projectConfig,
                 candidateRevision: tx.candidateRevision,
                 generation: tx.generation,
                 transactionId: tx.transactionId,
@@ -683,7 +600,7 @@ export class PluginGraphManagementService {
             } catch (err) {
                 // Config finalization failed: attempt recovery immediately
                 try {
-                    await recoverFromJournal(this.homeDir, this.projectPath)
+                    await recoverFromJournal(this.homeDir)
                 } catch {
                     // Fatal recovery failure
                 }
@@ -696,7 +613,6 @@ export class PluginGraphManagementService {
 
         // Update active configs and clear pending transaction
         this.activeGlobalConfig = tx.globalConfig
-        this.activeProjectConfig = tx.projectConfig
         this.pendingTransaction = null
 
         this.emitChange()

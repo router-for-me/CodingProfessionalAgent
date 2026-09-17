@@ -78,7 +78,7 @@ describe('ExternalMainPluginHost (Utility Process Execution, VM Sandbox, RPC & E
                     engines: { cpa: '>=1.0.0' },
                     entries: { main: './main.js' },
                 },
-                source: { kind: 'project-directory', spec: `path:${pluginDir}` },
+                source: { kind: 'global-directory', spec: `path:${pluginDir}` },
                 sourceRoot: pluginDir,
                 entries: { main: mainFile },
             }
@@ -104,7 +104,7 @@ describe('ExternalMainPluginHost (Utility Process Execution, VM Sandbox, RPC & E
                     engines: { cpa: '>=1.0.0' },
                     entries: { main: './main.js' },
                 },
-                source: { kind: 'project-directory', spec: `path:${pluginDir}` },
+                source: { kind: 'global-directory', spec: `path:${pluginDir}` },
                 sourceRoot: pluginDir,
                 entries: { main: mainFile },
             }
@@ -130,7 +130,7 @@ describe('ExternalMainPluginHost (Utility Process Execution, VM Sandbox, RPC & E
                     engines: { cpa: '>=1.0.0' },
                     entries: { main: './main.js' },
                 },
-                source: { kind: 'project-directory', spec: `path:${pluginDir}` },
+                source: { kind: 'global-directory', spec: `path:${pluginDir}` },
                 sourceRoot: pluginDir,
                 entries: { main: mainFile },
             }
@@ -156,7 +156,7 @@ describe('ExternalMainPluginHost (Utility Process Execution, VM Sandbox, RPC & E
                     engines: { cpa: '>=1.0.0' },
                     entries: { main: './main.js' },
                 },
-                source: { kind: 'project-directory', spec: `path:${pluginDir}` },
+                source: { kind: 'global-directory', spec: `path:${pluginDir}` },
                 sourceRoot: pluginDir,
                 entries: { main: mainFile },
             }
@@ -190,7 +190,7 @@ describe('ExternalMainPluginHost (Utility Process Execution, VM Sandbox, RPC & E
                     engines: { cpa: '>=1.0.0' },
                     entries: { main: './main.js' },
                 },
-                source: { kind: 'project-directory', spec: `path:${pluginDir}` },
+                source: { kind: 'global-directory', spec: `path:${pluginDir}` },
                 sourceRoot: pluginDir,
                 entries: { main: mainFile },
             }
@@ -234,7 +234,7 @@ describe('ExternalMainPluginHost (Utility Process Execution, VM Sandbox, RPC & E
                     engines: { cpa: '>=1.0.0' },
                     entries: { main: './main.js' },
                 },
-                source: { kind: 'project-directory', spec: `path:${pluginDir}` },
+                source: { kind: 'global-directory', spec: `path:${pluginDir}` },
                 sourceRoot: pluginDir,
                 entries: { main: mainFile },
             }
@@ -298,7 +298,7 @@ describe('ExternalMainPluginHost (Utility Process Execution, VM Sandbox, RPC & E
                     engines: { cpa: '>=1.0.0' },
                     entries: { main: './main.js' },
                 },
-                source: { kind: 'project-directory', spec: `path:${pluginDir}` },
+                source: { kind: 'global-directory', spec: `path:${pluginDir}` },
                 sourceRoot: pluginDir,
                 entries: { main: mainFile },
             }
@@ -369,7 +369,7 @@ describe('ExternalMainPluginHost (Utility Process Execution, VM Sandbox, RPC & E
                     engines: { cpa: '>=1.0.0' },
                     entries: { main: './main.js' },
                 },
-                source: { kind: 'project-directory', spec: `path:${pluginDir}` },
+                source: { kind: 'global-directory', spec: `path:${pluginDir}` },
                 sourceRoot: pluginDir,
                 entries: { main: mainFile },
             }
@@ -431,7 +431,7 @@ describe('ExternalMainPluginHost (Utility Process Execution, VM Sandbox, RPC & E
                     engines: { cpa: '>=1.0.0' },
                     entries: { main: './main.js' },
                 },
-                source: { kind: 'project-directory', spec: `path:${pluginDir}` },
+                source: { kind: 'global-directory', spec: `path:${pluginDir}` },
                 sourceRoot: pluginDir,
                 entries: { main: mainFile },
             }
@@ -527,7 +527,7 @@ describe('ExternalMainPluginHost (Utility Process Execution, VM Sandbox, RPC & E
                     entries: { main: './main.js' },
                     capabilities: ['sessions.*'],
                 },
-                source: { kind: 'project-directory', spec: `path:${pluginDir}` },
+                source: { kind: 'global-directory', spec: `path:${pluginDir}` },
                 sourceRoot: pluginDir,
                 entries: { main: mainFile },
             }
@@ -596,7 +596,7 @@ describe('ExternalMainPluginHost (Utility Process Execution, VM Sandbox, RPC & E
                     engines: { cpa: '>=1.0.0' },
                     entries: { main: './main.js' },
                 },
-                source: { kind: 'project-directory', spec: `path:${pluginDir}` },
+                source: { kind: 'global-directory', spec: `path:${pluginDir}` },
                 sourceRoot: pluginDir,
                 entries: { main: mainFile },
             }
@@ -684,7 +684,7 @@ describe('ExternalMainPluginHost (Utility Process Execution, VM Sandbox, RPC & E
                     engines: { cpa: '>=1.0.0' },
                     entries: { main: './main.js' },
                 },
-                source: { kind: 'project-directory', spec: `path:${pluginDir}` },
+                source: { kind: 'global-directory', spec: `path:${pluginDir}` },
                 sourceRoot: pluginDir,
                 entries: { main: mainFile },
             }
@@ -761,7 +761,7 @@ describe('ExternalMainPluginHost (Utility Process Execution, VM Sandbox, RPC & E
                     engines: { cpa: '>=1.0.0' },
                     entries: { main: './main.js' },
                 },
-                source: { kind: 'project-directory', spec: `path:${pluginDir}` },
+                source: { kind: 'global-directory', spec: `path:${pluginDir}` },
                 sourceRoot: pluginDir,
                 entries: { main: mainFile },
             }
@@ -844,7 +844,7 @@ describe('ExternalMainPluginHost (Utility Process Execution, VM Sandbox, RPC & E
                     engines: { cpa: '>=1.0.0' },
                     entries: { main: './main.js' },
                 },
-                source: { kind: 'project-directory', spec: `path:${pluginDir}` },
+                source: { kind: 'global-directory', spec: `path:${pluginDir}` },
                 sourceRoot: pluginDir,
                 entries: { main: mainFile },
             }
@@ -907,7 +907,7 @@ describe('ExternalMainPluginHost (Utility Process Execution, VM Sandbox, RPC & E
                     engines: { cpa: '>=1.0.0' },
                     entries: { main: './main.js' },
                 },
-                source: { kind: 'project-directory', spec: `path:${pluginDir}` },
+                source: { kind: 'global-directory', spec: `path:${pluginDir}` },
                 sourceRoot: pluginDir,
                 entries: { main: mainFile },
             }
@@ -971,7 +971,7 @@ describe('ExternalMainPluginHost (Utility Process Execution, VM Sandbox, RPC & E
                     engines: { cpa: '>=1.0.0' },
                     entries: { main: './main.js' },
                 },
-                source: { kind: 'project-directory', spec: `path:${pluginDir}` },
+                source: { kind: 'global-directory', spec: `path:${pluginDir}` },
                 sourceRoot: pluginDir,
                 entries: { main: mainFile },
             }
@@ -1050,7 +1050,7 @@ describe('ExternalMainPluginHost (Utility Process Execution, VM Sandbox, RPC & E
                     engines: { cpa: '>=1.0.0' },
                     entries: { main: './main.js' },
                 },
-                source: { kind: 'project-directory', spec: `path:${pluginDir}` },
+                source: { kind: 'global-directory', spec: `path:${pluginDir}` },
                 sourceRoot: pluginDir,
                 entries: { main: mainFile },
             }
@@ -1124,7 +1124,7 @@ describe('ExternalMainPluginHost (Utility Process Execution, VM Sandbox, RPC & E
                     engines: { cpa: '>=1.0.0' },
                     entries: { main: './main.js' },
                 },
-                source: { kind: 'project-directory', spec: `path:${pluginDir}` },
+                source: { kind: 'global-directory', spec: `path:${pluginDir}` },
                 sourceRoot: pluginDir,
                 entries: { main: mainFile },
             }
@@ -1191,7 +1191,7 @@ describe('ExternalMainPluginHost (Utility Process Execution, VM Sandbox, RPC & E
                     engines: { cpa: '>=1.0.0' },
                     entries: { main: './main.js' },
                 },
-                source: { kind: 'project-directory', spec: `path:${pluginDir}` },
+                source: { kind: 'global-directory', spec: `path:${pluginDir}` },
                 sourceRoot: pluginDir,
                 entries: { main: mainFile },
             }
@@ -1254,7 +1254,7 @@ describe('ExternalMainPluginHost (Utility Process Execution, VM Sandbox, RPC & E
                     engines: { cpa: '>=1.0.0' },
                     entries: { main: './main.js' },
                 },
-                source: { kind: 'project-directory', spec: `path:${pluginDir}` },
+                source: { kind: 'global-directory', spec: `path:${pluginDir}` },
                 sourceRoot: pluginDir,
                 entries: { main: mainFile },
             }
@@ -1310,7 +1310,7 @@ describe('ExternalMainPluginHost (Utility Process Execution, VM Sandbox, RPC & E
                     engines: { cpa: '>=1.0.0' },
                     entries: { main: './main.js' },
                 },
-                source: { kind: 'project-directory', spec: `path:${pluginDir}` },
+                source: { kind: 'global-directory', spec: `path:${pluginDir}` },
                 sourceRoot: pluginDir,
                 entries: { main: mainFile },
             }

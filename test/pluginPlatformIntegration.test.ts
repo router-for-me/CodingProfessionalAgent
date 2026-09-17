@@ -47,17 +47,14 @@ describe('Plugin Platform Integration (Main Process)', () => {
     let homeDir: string
     let projectDir: string
     let globalPluginsDir: string
-    let projectPluginsDir: string
 
     beforeEach(async () => {
         tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cpa-plugin-integ-test-'))
         homeDir = path.join(tempRoot, 'home')
         projectDir = path.join(tempRoot, 'project')
         globalPluginsDir = path.join(homeDir, '.coding-professional-agent', 'plugins')
-        projectPluginsDir = path.join(projectDir, '.cpa', 'plugins')
 
         await fs.mkdir(globalPluginsDir, { recursive: true })
-        await fs.mkdir(projectPluginsDir, { recursive: true })
     })
 
     afterEach(async () => {
@@ -87,8 +84,8 @@ describe('Plugin Platform Integration (Main Process)', () => {
         return dir
     }
 
-    describe('Multi-source Loading & Dependency Ordering Across 5 Source Kinds', () => {
-        it('loads all 5 source kinds and activates them in dependency order', async () => {
+    describe('Multi-source Loading & Dependency Ordering Across Source Kinds', () => {
+        it('loads source kinds and activates them in dependency order', async () => {
             const activationOrder: string[] = []
 
             // 1. Bundled Source Fixture
@@ -125,11 +122,11 @@ describe('Plugin Platform Integration (Main Process)', () => {
                 entries: { main: './index.js' },
             })
 
-            // 3. Project Directory Source
-            const projDir = path.join(projectPluginsDir, 'project-plugin')
-            await createPluginOnDisk(projDir, {
-                id: 'fixture.project',
-                name: 'Project Plugin',
+            // 3. Local Configured Path Source
+            const localDir = path.join(tempRoot, 'custom-local')
+            await createPluginOnDisk(localDir, {
+                id: 'fixture.local',
+                name: 'Local Plugin',
                 version: '1.0.0',
                 apiVersion: '1.0.0',
                 engines: { cpa: '>=1.0.0' },
@@ -138,20 +135,7 @@ describe('Plugin Platform Integration (Main Process)', () => {
                 entries: { main: './index.js' },
             })
 
-            // 4. Local Configured Path Source
-            const localDir = path.join(tempRoot, 'custom-local')
-            await createPluginOnDisk(localDir, {
-                id: 'fixture.local',
-                name: 'Local Plugin',
-                version: '1.0.0',
-                apiVersion: '1.0.0',
-                engines: { cpa: '>=1.0.0' },
-                activationPriority: 40,
-                dependencies: { 'fixture.project': '>=1.0.0' },
-                entries: { main: './index.js' },
-            })
-
-            // 5. NPM Packaged Source
+            // 4. NPM Packaged Source
             const npmDir = path.join(tempRoot, 'node_modules', '@test', 'npm-plugin')
             await createPluginOnDisk(npmDir, {
                 id: 'fixture.npm',
@@ -159,16 +143,15 @@ describe('Plugin Platform Integration (Main Process)', () => {
                 version: '1.0.0',
                 apiVersion: '1.0.0',
                 engines: { cpa: '>=1.0.0' },
-                activationPriority: 50,
+                activationPriority: 40,
                 dependencies: { 'fixture.local': '>=1.0.0' },
                 entries: { main: './index.js' },
             })
 
             const discoveredPackages = await createPluginCatalog({
                 homeDir,
-                projectPath: projectDir,
                 bundledPackages: [bundledPkg],
-                projectConfig: {
+                globalConfig: {
                     sources: [
                         { source: `path:${localDir}` },
                         { source: 'npm:@test/npm-plugin' },
@@ -184,7 +167,7 @@ describe('Plugin Platform Integration (Main Process)', () => {
                             version: '1.0.0',
                             apiVersion: '1.0.0',
                             engines: { cpa: '>=1.0.0' },
-                            activationPriority: 50,
+                            activationPriority: 40,
                             dependencies: { 'fixture.local': '>=1.0.0' },
                             entries: { main: './index.js' },
                         },
@@ -201,7 +184,6 @@ describe('Plugin Platform Integration (Main Process)', () => {
             const packages = catalog.getPackages()
             expect(packages.map((p) => p.manifest.id)).toContain('fixture.bundled')
             expect(packages.map((p) => p.manifest.id)).toContain('fixture.global')
-            expect(packages.map((p) => p.manifest.id)).toContain('fixture.project')
             expect(packages.map((p) => p.manifest.id)).toContain('fixture.local')
             expect(packages.map((p) => p.manifest.id)).toContain('fixture.npm')
 
@@ -223,12 +205,6 @@ describe('Plugin Platform Integration (Main Process)', () => {
                         activationOrder.push('fixture.global')
                         const bundledSvc = ctx.getService<{ ping: () => string }>('bundledService')
                         expect(bundledSvc.ping()).toBe('pong')
-                    },
-                },
-                'fixture.project': {
-                    runtime: 'main',
-                    activate: () => {
-                        activationOrder.push('fixture.project')
                     },
                 },
                 'fixture.local': {
@@ -258,15 +234,13 @@ describe('Plugin Platform Integration (Main Process)', () => {
             expect(activationOrder).toEqual([
                 'fixture.bundled',
                 'fixture.global',
-                'fixture.project',
                 'fixture.local',
                 'fixture.npm',
             ])
 
-            // Verify all 5 are active
+            // Verify all are active
             expect(host.isPluginActive('fixture.bundled')).toBe(true)
             expect(host.isPluginActive('fixture.global')).toBe(true)
-            expect(host.isPluginActive('fixture.project')).toBe(true)
             expect(host.isPluginActive('fixture.local')).toBe(true)
             expect(host.isPluginActive('fixture.npm')).toBe(true)
 
@@ -275,7 +249,6 @@ describe('Plugin Platform Integration (Main Process)', () => {
             // Deactivating base plugin should deactivate all dependents in reverse order
             expect(host.isPluginActive('fixture.bundled')).toBe(false)
             expect(host.isPluginActive('fixture.global')).toBe(false)
-            expect(host.isPluginActive('fixture.project')).toBe(false)
             expect(host.isPluginActive('fixture.local')).toBe(false)
             expect(host.isPluginActive('fixture.npm')).toBe(false)
         })

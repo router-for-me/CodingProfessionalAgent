@@ -674,7 +674,7 @@ export class RendererPluginRuntimeHost {
             entries: { renderer: './index.ts', ...(pkgOptions?.entries ?? {}) },
             sourceRoot: pkgOptions?.sourceRoot ?? `plugins/${isCore ? 'bundled' : 'external'}/${id}`,
             source: pkgOptions?.source ?? {
-                kind: isCore ? 'bundled' : 'project-config',
+                kind: isCore ? 'bundled' : 'global-config',
                 spec: `${id}@${manifest.version}`,
             },
             ...pkgOptions,

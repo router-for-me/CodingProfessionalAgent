@@ -77,7 +77,7 @@ Electron Preload & Main (src/main, src/preload)
     - **Zero Direct Native / Window Access**: Plugins MUST NOT access `window.electronBridge`, `window.cpa`, `ipcRenderer`, or Node.js built-ins in renderer. All system interactions go through `context.getCapability<T>(capabilityId)` or scoped `CapabilityClient`.
     - **Browser Transport Parity**: Capabilities seamlessly route over WebSocket/Web transport in browser mode, maintaining identical security contracts.
   - **Multi-Source Discovery & Catalog Generation**:
-    - Five plugin sources in strict priority order: Project Config > Project Directory (`<project>/.cpa/plugins/`) > Global Config > Global Directory (`~/.coding-professional-agent/plugins/`) > Managed NPM (verified lockfile) > Bundled (`plugins/bundled/`).
+    - Four plugin sources in strict priority order: Global Config > Global Directory (`~/.coding-professional-agent/plugins/`) > Managed NPM (verified lockfile) > Bundled (`plugins/bundled/`).
     - **Catalog Generation**: When adding or updating bundled plugin manifests, run `node scripts/generate-bundled-plugin-catalog.mjs` (or `pnpm build`) to update `bundledPluginLoaders.ts` in both `src/main/plugins/generated/` and `frontend/src/plugins/generated/`. Host code must never manually maintain bundled plugin lists.
   - **Strict Architectural Boundaries (Enforced by `pnpm check:plugin-architecture`)**:
     - **Zero Host -> Plugin Imports**: App host modules (`frontend/src/app/*`, `frontend/src/features/*`, `frontend/src/components/*`, `frontend/src/stores/*`, `src/main/services/*`) MUST NEVER directly import concrete plugin implementation files. All features must be dynamically discovered and consumed via registries and generated loaders (`bundledPluginLoaders.ts`).

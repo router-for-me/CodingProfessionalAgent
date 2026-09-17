@@ -868,10 +868,10 @@ describe('PluginRuntime', () => {
                     contributes: {},
                 },
                 source: {
-                    kind: 'project-config',
+                    kind: 'global-config',
                     spec: 'external-plugin@1.0.0',
                 },
-                sourceRoot: '/project/.cpa/plugins/external-plugin',
+                sourceRoot: '/global/.coding-professional-agent/plugins/external-plugin',
                 entries: { main: 'index.js' },
             }
 

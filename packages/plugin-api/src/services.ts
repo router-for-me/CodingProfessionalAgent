@@ -933,12 +933,10 @@ export interface SubAgentService {
 }
 
 export interface PluginManagementInstallOptions {
-    scope?: 'project' | 'global'
     expectedRevision?: string
 }
 
 export interface PluginManagementActionOptions {
-    scope?: 'project' | 'global'
     expectedRevision?: string
 }
 

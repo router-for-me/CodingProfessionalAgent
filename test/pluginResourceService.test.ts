@@ -99,7 +99,7 @@ describe('PluginResourceService & MainPluginModuleLoader', () => {
                 },
             },
             source: {
-                kind: 'project-directory',
+                kind: 'global-directory',
                 spec: `path:${pluginDir}`,
             },
             sourceRoot: pluginDir,
@@ -254,7 +254,7 @@ describe('PluginResourceService & MainPluginModuleLoader', () => {
                     entries: { main: './index.js' },
                 },
                 source: {
-                    kind: 'project-directory',
+                    kind: 'global-directory',
                     spec: `path:${unsafePluginDir}`,
                 },
                 sourceRoot: unsafePluginDir,
@@ -375,7 +375,7 @@ export default {
                     entries: { main: './index.js' },
                 },
                 source: {
-                    kind: 'project-directory',
+                    kind: 'global-directory',
                     spec: `path:${validPluginDir}`,
                 },
                 sourceRoot: validPluginDir,

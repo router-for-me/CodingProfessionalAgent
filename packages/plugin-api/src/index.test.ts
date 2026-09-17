@@ -126,7 +126,7 @@ describe('@cpa/plugin-api resolvePackageCriticality', () => {
         expect(
             resolvePackageCriticality({
                 manifest: makeManifest({ id: 'p2', criticality: 'platform' }),
-                source: { kind: 'project-config', spec: 'p2@1.0.0' },
+                source: { kind: 'global-config', spec: 'p2@1.0.0' },
             }),
         ).toBe('platform')
     })
@@ -151,7 +151,7 @@ describe('@cpa/plugin-api resolvePackageCriticality', () => {
         expect(
             resolvePackageCriticality({
                 manifest: makeManifest({ id: 'ext1' }),
-                source: { kind: 'project-config', spec: 'ext1@1.0.0' },
+                source: { kind: 'global-config', spec: 'ext1@1.0.0' },
             }),
         ).toBe('optional')
         expect(

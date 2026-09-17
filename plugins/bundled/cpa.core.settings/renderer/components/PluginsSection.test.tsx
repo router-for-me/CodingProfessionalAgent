@@ -178,7 +178,7 @@ describe('PluginsSection', () => {
         expect(renderedIds).toEqual(['cpa.core.a', 'cpa.core.b', 'cpa.ext.a', 'cpa.ext.b'])
     })
 
-    it('handles install flow with exact semver and scope selection', async () => {
+    it('handles install flow with exact semver', async () => {
         const installSpy = vi.fn()
         const pluginManagementMock = {
             getPluginSummaries: () => [],
@@ -203,10 +203,7 @@ describe('PluginsSection', () => {
         fireEvent.click(installBtn)
 
         await waitFor(() => {
-            expect(installSpy).toHaveBeenCalledWith(
-                '@my-scope/new-plugin@1.2.0',
-                expect.objectContaining({ scope: 'project' }),
-            )
+            expect(installSpy).toHaveBeenCalledWith('@my-scope/new-plugin@1.2.0')
         })
     })
 

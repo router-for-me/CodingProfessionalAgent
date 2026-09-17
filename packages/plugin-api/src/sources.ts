@@ -2,8 +2,6 @@ import type { PluginEntryKind, PluginManifest } from './manifest.js'
 
 export type PluginSourceSpec = `path:${string}` | `npm:${string}`
 export type PluginSourceKind =
-    | 'project-config'
-    | 'project-directory'
     | 'global-config'
     | 'global-directory'
     | 'bundled'

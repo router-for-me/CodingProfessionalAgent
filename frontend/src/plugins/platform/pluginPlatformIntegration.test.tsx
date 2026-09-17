@@ -69,8 +69,8 @@ describe('Plugin Platform Integration (Renderer & Agent Runtime)', () => {
                     contributes: {},
                     entries: { renderer: './renderer.ts' },
                 },
-                source: { kind: 'project-directory', spec: 'project:fixture.project' },
-                sourceRoot: '/project/.cpa/plugins/fixture.project',
+                source: { kind: 'global-directory', spec: 'global:fixture.project' },
+                sourceRoot: '/global/.coding-professional-agent/plugins/fixture.project',
                 entries: { renderer: './renderer.ts' },
             }
 

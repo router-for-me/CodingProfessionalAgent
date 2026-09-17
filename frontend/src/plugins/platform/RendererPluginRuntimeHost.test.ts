@@ -603,10 +603,10 @@ describe('RendererPluginRuntimeHost', () => {
                         description: 'External custom plugin',
                     },
                     source: {
-                        kind: 'project-config' as const,
+                        kind: 'global-config' as const,
                         spec: 'cpa.external.custom@2.1.0',
                     },
-                    sourceKind: 'project-config' as const,
+                    sourceKind: 'global-config' as const,
                     entries: { main: './main.js' }, // External plugin running on Main only
                     criticality: 'optional' as const,
                     dependencies: {},

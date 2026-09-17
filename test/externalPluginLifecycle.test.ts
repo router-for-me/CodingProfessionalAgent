@@ -42,7 +42,6 @@ describe('Task 22: External Plugin Unified Runtime Lifecycle & Multi-Source End-
     let homeDir: string
     let projectDir: string
     let globalPluginsDir: string
-    let projectPluginsDir: string
     let npmPluginsDir: string
 
     beforeEach(async () => {
@@ -50,11 +49,9 @@ describe('Task 22: External Plugin Unified Runtime Lifecycle & Multi-Source End-
         homeDir = path.join(tempRoot, 'home')
         projectDir = path.join(tempRoot, 'project')
         globalPluginsDir = path.join(homeDir, '.coding-professional-agent', 'plugins')
-        projectPluginsDir = path.join(projectDir, '.cpa', 'plugins')
         npmPluginsDir = path.join(globalPluginsDir, 'npm')
 
         await fs.mkdir(globalPluginsDir, { recursive: true })
-        await fs.mkdir(projectPluginsDir, { recursive: true })
         await fs.mkdir(npmPluginsDir, { recursive: true })
     })
 
@@ -167,10 +164,8 @@ describe('Task 22: External Plugin Unified Runtime Lifecycle & Multi-Source End-
         return dir
     }
 
-    describe('1. Five Sources x Three Runtimes End-to-End Activation', () => {
+    describe('1. External Sources x Three Runtimes End-to-End Activation', () => {
         it.each([
-            'project-config',
-            'project-directory',
             'global-config',
             'global-directory',
             'npm',
@@ -180,22 +175,12 @@ describe('Task 22: External Plugin Unified Runtime Lifecycle & Multi-Source End-
                 const pluginId = `test.ext.${sourceKind.replace('-', '.')}`
                 let pluginDir: string
                 let npmInstaller: ManagedNpmInstaller | undefined
-                let projectConfig: any = undefined
                 let globalConfig: any = undefined
                 let npmSources: any = undefined
 
-                if (sourceKind === 'project-directory') {
-                    pluginDir = path.join(projectPluginsDir, 'my-plugin')
-                    await createExternalPluginFixture(pluginDir, pluginId)
-                } else if (sourceKind === 'global-directory') {
+                if (sourceKind === 'global-directory') {
                     pluginDir = path.join(globalPluginsDir, 'my-plugin')
                     await createExternalPluginFixture(pluginDir, pluginId)
-                } else if (sourceKind === 'project-config') {
-                    pluginDir = path.join(tempRoot, 'custom-project-plugin')
-                    await createExternalPluginFixture(pluginDir, pluginId)
-                    projectConfig = {
-                        sources: [{ source: `path:${pluginDir}` }],
-                    }
                 } else if (sourceKind === 'global-config') {
                     pluginDir = path.join(tempRoot, 'custom-global-plugin')
                     await createExternalPluginFixture(pluginDir, pluginId)
@@ -231,9 +216,7 @@ describe('Task 22: External Plugin Unified Runtime Lifecycle & Multi-Source End-
 
                 // 1. Discover and bootstrap plugin graph
                 const bootstrap = await bootstrapPluginGraph({
-                    projectPath: projectDir,
                     homeDir,
-                    projectConfig,
                     globalConfig,
                     npmSources,
                     npmInstaller,
@@ -326,13 +309,12 @@ describe('Task 22: External Plugin Unified Runtime Lifecycle & Multi-Source End-
 
     describe('2. Revision Management, Enable/Disable and Dynamic Reload', () => {
         it('computes stable SHA-256 revision invariant to discovery order and updates on toggle', async () => {
-            const dirA = path.join(projectPluginsDir, 'plugin-a')
-            const dirB = path.join(projectPluginsDir, 'plugin-b')
+            const dirA = path.join(globalPluginsDir, 'plugin-a')
+            const dirB = path.join(globalPluginsDir, 'plugin-b')
             await createExternalPluginFixture(dirA, 'ext.plugin.a')
             await createExternalPluginFixture(dirB, 'ext.plugin.b')
 
             const bootstrap1 = await bootstrapPluginGraph({
-                projectPath: projectDir,
                 homeDir,
                 bundledPackages: [],
             })
@@ -342,7 +324,6 @@ describe('Task 22: External Plugin Unified Runtime Lifecycle & Multi-Source End-
 
             // Disabling plugin-b creates a different revision
             const bootstrap2 = await bootstrapPluginGraph({
-                projectPath: projectDir,
                 homeDir,
                 bundledPackages: [],
                 enabledPluginIds: ['ext.plugin.a'],
@@ -354,13 +335,12 @@ describe('Task 22: External Plugin Unified Runtime Lifecycle & Multi-Source End-
         })
 
         it('supports atomic prepare/commit generation advance and rollback on failure', async () => {
-            const dirA = path.join(projectPluginsDir, 'plugin-a')
+            const dirA = path.join(globalPluginsDir, 'plugin-a')
             await createExternalPluginFixture(dirA, 'ext.plugin.a', { main: true, renderer: false, agent: false }, {
                 contributes: { service: ['srv-a'] },
             })
 
             const bootstrap = await bootstrapPluginGraph({
-                projectPath: projectDir,
                 homeDir,
                 bundledPackages: [],
             })
@@ -422,7 +402,7 @@ describe('Task 22: External Plugin Unified Runtime Lifecycle & Multi-Source End-
     })
 
     describe('3. Multi-Tier Precedence & Duplicate Diagnostics', () => {
-        it('enforces precedence order: project-config > project-directory > global-config > global-directory > npm > bundled', async () => {
+        it('enforces precedence order: global-config > global-directory > npm > bundled', async () => {
             const bundledPkg: ResolvedPluginPackage = {
                 manifest: {
                     id: 'tier.test',
@@ -440,21 +420,20 @@ describe('Task 22: External Plugin Unified Runtime Lifecycle & Multi-Source End-
             const globalDir = path.join(globalPluginsDir, 'tier.test')
             await createExternalPluginFixture(globalDir, 'tier.test', { main: true }, { name: 'Tier (Global Dir)' })
 
-            // Project Dir
-            const projectDir_ = path.join(projectPluginsDir, 'tier.test')
-            await createExternalPluginFixture(projectDir_, 'tier.test', { main: true }, { name: 'Tier (Project Dir)' })
+            // Global Config
+            const customDir = path.join(tempRoot, 'cfg-tier-test')
+            await createExternalPluginFixture(customDir, 'tier.test', { main: true }, { name: 'Tier (Global Config)' })
 
             const catalog = await createPluginCatalog({
-                projectPath: projectDir,
                 homeDir,
                 bundledPackages: [bundledPkg],
-                globalConfig: { sources: [] },
+                globalConfig: { sources: [{ source: `path:${customDir}` }] },
             })
 
             const winner = catalog.find((p) => p.manifest.id === 'tier.test')
             expect(winner).toBeDefined()
-            expect(winner?.manifest.name).toBe('Tier (Project Dir)')
-            expect(winner?.source.kind).toBe('project-directory')
+            expect(winner?.manifest.name).toBe('Tier (Global Config)')
+            expect(winner?.source.kind).toBe('global-config')
         })
 
         it('throws DuplicatePluginSourceError when duplicate IDs exist in the same tier', async () => {
@@ -478,7 +457,7 @@ describe('Task 22: External Plugin Unified Runtime Lifecycle & Multi-Source End-
 
     describe('4. Dependency Resolution & Criticality Enforcement', () => {
         it('fails bootstrap with PluginDependencyError when a required plugin dependency is missing', async () => {
-            const dir = path.join(projectPluginsDir, 'dependent-plugin')
+            const dir = path.join(globalPluginsDir, 'dependent-plugin')
             await createExternalPluginFixture(
                 dir,
                 'dependent.plugin',
@@ -499,7 +478,7 @@ describe('Task 22: External Plugin Unified Runtime Lifecycle & Multi-Source End-
         })
 
         it('allows resolution when an optional dependency is missing', async () => {
-            const dir = path.join(projectPluginsDir, 'opt-dependent-plugin')
+            const dir = path.join(globalPluginsDir, 'opt-dependent-plugin')
             await createExternalPluginFixture(
                 dir,
                 'opt.dependent.plugin',
@@ -655,7 +634,7 @@ describe('Task 22: External Plugin Unified Runtime Lifecycle & Multi-Source End-
 
     describe('6. PluginResourceService Security & Path Traversal Guard', () => {
         it('rejects directory traversal, encoded path attempts, and symlink escapes', async () => {
-            const pluginDir = path.join(projectPluginsDir, 'secured-plugin')
+            const pluginDir = path.join(globalPluginsDir, 'secured-plugin')
             await createExternalPluginFixture(pluginDir, 'secured-plugin')
 
             const outsideSecret = path.join(tempRoot, 'host-secret.env')
@@ -676,7 +655,7 @@ describe('Task 22: External Plugin Unified Runtime Lifecycle & Multi-Source End-
                     apiVersion: '1.0.0',
                     engines: { cpa: '>=1.0.0' },
                 },
-                source: { kind: 'project-directory', spec: `path:${pluginDir}` },
+                source: { kind: 'global-directory', spec: `path:${pluginDir}` },
                 sourceRoot: pluginDir,
                 entries: {},
             })
@@ -698,7 +677,7 @@ describe('Task 22: External Plugin Unified Runtime Lifecycle & Multi-Source End-
         })
 
         it('correctly identifies content types and serves package assets', async () => {
-            const pluginDir = path.join(projectPluginsDir, 'asset-plugin')
+            const pluginDir = path.join(globalPluginsDir, 'asset-plugin')
             await createExternalPluginFixture(pluginDir, 'asset-plugin')
 
             await fs.writeFile(path.join(pluginDir, 'styles.css'), 'body { color: blue; }')
@@ -713,7 +692,7 @@ describe('Task 22: External Plugin Unified Runtime Lifecycle & Multi-Source End-
                     apiVersion: '1.0.0',
                     engines: { cpa: '>=1.0.0' },
                 },
-                source: { kind: 'project-directory', spec: `path:${pluginDir}` },
+                source: { kind: 'global-directory', spec: `path:${pluginDir}` },
                 sourceRoot: pluginDir,
                 entries: {},
             })
@@ -737,7 +716,7 @@ describe('Task 22: External Plugin Unified Runtime Lifecycle & Multi-Source End-
 
     describe('7. ExternalMainPluginHost Utility Process Isolation', () => {
         it('blocks unauthorized imports such as Node built-ins without capabilities', async () => {
-            const dir = path.join(projectPluginsDir, 'unauthorized-import-plugin')
+            const dir = path.join(globalPluginsDir, 'unauthorized-import-plugin')
             await createExternalPluginFixture(dir, 'unauthorized-import-plugin')
 
             // Write entry importing fs without filesystem capability
@@ -758,7 +737,7 @@ describe('Task 22: External Plugin Unified Runtime Lifecycle & Multi-Source End-
                     entries: { main: './main.js' },
                     capabilities: [],
                 },
-                source: { kind: 'project-directory', spec: `path:${dir}` },
+                source: { kind: 'global-directory', spec: `path:${dir}` },
                 sourceRoot: dir,
                 entries: { main: path.join(dir, 'main.js') },
             }
@@ -769,7 +748,7 @@ describe('Task 22: External Plugin Unified Runtime Lifecycle & Multi-Source End-
 
     describe('8. PluginGraphManagementService 3-Runtime Coordination & Persistence', () => {
         it('prepares and commits enable/disable/reload across all 3 runtimes with candidate revision', async () => {
-            const dir = path.join(projectPluginsDir, 'managed-e2e-plugin')
+            const dir = path.join(globalPluginsDir, 'managed-e2e-plugin')
             await createExternalPluginFixture(dir, 'managed-e2e-plugin', {
                 main: true,
                 renderer: true,
@@ -841,7 +820,7 @@ describe('Task 22: External Plugin Unified Runtime Lifecycle & Multi-Source End-
         })
 
         it('rolls back all 3 runtimes when candidate commit fails and preserves active graph', async () => {
-            const dir = path.join(projectPluginsDir, 'rollback-e2e-plugin')
+            const dir = path.join(globalPluginsDir, 'rollback-e2e-plugin')
             await createExternalPluginFixture(dir, 'rollback-e2e-plugin', {
                 main: true,
                 renderer: true,

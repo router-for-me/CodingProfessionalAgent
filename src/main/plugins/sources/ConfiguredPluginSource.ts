@@ -11,14 +11,14 @@ import { loadPluginPackageFromDirectory } from './loadPluginPackage.js'
 export interface ConfiguredPluginSourceOptions {
     entries: PluginSourceConfigEntry[]
     baseDir: string
-    kind: 'project-config' | 'global-config'
+    kind: 'global-config'
     installer?: ManagedNpmInstaller
 }
 
 export class ConfiguredPluginSource {
     private readonly entries: PluginSourceConfigEntry[]
     private readonly baseDir: string
-    private readonly kind: 'project-config' | 'global-config'
+    private readonly kind: 'global-config'
     private readonly installer?: ManagedNpmInstaller
 
     constructor(options: ConfiguredPluginSourceOptions) {

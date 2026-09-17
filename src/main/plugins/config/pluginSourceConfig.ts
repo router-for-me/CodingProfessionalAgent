@@ -37,9 +37,7 @@ export interface PluginGraphJournal {
 
 export interface PrepareDurableConfigOptions {
     homeDir: string
-    projectPath?: string
     globalConfig: PluginSourceConfig
-    projectConfig?: PluginSourceConfig
     candidateRevision: string
     generation: number
     transactionId?: string
@@ -48,12 +46,9 @@ export interface PrepareDurableConfigOptions {
 }
 
 export interface CreatePluginCatalogOptions {
-    projectPath?: string
     homeDir: string
     bundledPackages: readonly ResolvedPluginPackage[]
     globalConfig: PluginSourceConfig
-    projectConfig?: PluginSourceConfig
-    projectConfigDir?: string
     globalConfigDir?: string
     npmInstaller?: ManagedNpmInstaller
     npmSources?: readonly PluginSourceConfigEntry[]
@@ -175,62 +170,6 @@ export function normalizePluginSourceConfig(raw: unknown): PluginSourceConfig {
 }
 
 /**
- * Load project plugin configuration from `<project>/.cpa/plugins.json`.
- * Returns `undefined` if the file does not exist.
- */
-export async function loadProjectPluginConfig(
-    projectPath: string,
-): Promise<PluginSourceConfig | undefined> {
-    if (!projectPath || typeof projectPath !== 'string' || projectPath.trim().length === 0) {
-        return undefined
-    }
-
-    const configPath = path.join(path.resolve(projectPath), '.cpa', 'plugins.json')
-    try {
-        const content = await fs.readFile(configPath, 'utf-8')
-        const parsed = JSON.parse(content)
-        return normalizePluginSourceConfig(parsed)
-    } catch (err: any) {
-        if (err?.code === 'ENOENT') {
-            return undefined
-        }
-        return { version: 1, sources: [], disabled: [] }
-    }
-}
-
-/**
- * Atomically save project plugin configuration to `<project>/.cpa/plugins.json`.
- */
-export async function saveProjectPluginConfig(
-    projectPath: string,
-    config: PluginSourceConfig,
-): Promise<void> {
-    if (!projectPath || typeof projectPath !== 'string' || projectPath.trim().length === 0) {
-        return
-    }
-
-    const targetDir = path.join(path.resolve(projectPath), '.cpa')
-    await fs.mkdir(targetDir, { recursive: true })
-
-    const configPath = path.join(targetDir, 'plugins.json')
-    const tempPath = path.join(
-        targetDir,
-        `.plugins.tmp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    )
-
-    const payload = {
-        version: 1,
-        sources: config.sources,
-        disabled: config.disabled ?? [],
-    }
-
-    const content = JSON.stringify(payload, null, 2) + '\n'
-    await writeAndSyncFile(tempPath, content)
-    await fs.rename(tempPath, configPath)
-    await fsyncDirectory(targetDir)
-}
-
-/**
  * Load global plugin configuration from `~/.coding-professional-agent/settings.json`.
  */
 export async function loadGlobalPluginConfig(
@@ -312,7 +251,7 @@ export async function saveGlobalPluginConfig(
 export async function prepareDurableConfig(
     options: PrepareDurableConfigOptions,
 ): Promise<PluginGraphJournal> {
-    const { homeDir, projectPath, globalConfig, projectConfig, candidateRevision, generation } =
+    const { homeDir, globalConfig, candidateRevision, generation } =
         options
     const transactionId =
         options.transactionId ??
@@ -366,43 +305,6 @@ export async function prepareDurableConfig(
             newContent: newSettingsContent,
             newHash: sha256(newSettingsContent),
         })
-
-        // 2. Prepare project config file mutation if projectPath is set
-        if (projectPath && projectConfig) {
-            const projBaseDir = path.join(path.resolve(projectPath), '.cpa')
-            await fs.mkdir(projBaseDir, { recursive: true })
-
-            const projConfigPath = path.join(projBaseDir, 'plugins.json')
-            let oldProjContent: string | null = null
-            try {
-                oldProjContent = await fs.readFile(projConfigPath, 'utf-8')
-            } catch {
-                oldProjContent = null
-            }
-
-            const projPayload = {
-                version: 1,
-                sources: projectConfig.sources,
-                disabled: projectConfig.disabled ?? [],
-            }
-            const newProjContent = JSON.stringify(projPayload, null, 2) + '\n'
-            const projTempPath = path.join(
-                projBaseDir,
-                `.plugins.tmp-${transactionId}-${Math.random().toString(36).slice(2, 8)}`,
-            )
-
-            await writeAndSyncFile(projTempPath, newProjContent)
-            createdTempPaths.push(projTempPath)
-
-            files.push({
-                targetPath: projConfigPath,
-                tempPath: projTempPath,
-                oldContent: oldProjContent,
-                oldHash: oldProjContent ? sha256(oldProjContent) : null,
-                newContent: newProjContent,
-                newHash: sha256(newProjContent),
-            })
-        }
 
         const journal: PluginGraphJournal = {
             transactionId,
@@ -548,7 +450,6 @@ export async function rollbackDurableConfig(
  */
 export async function recoverFromJournal(
     homeDir: string,
-    projectPath?: string,
 ): Promise<void> {
     if (!homeDir || typeof homeDir !== 'string' || homeDir.trim().length === 0) {
         return

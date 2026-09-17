@@ -88,7 +88,7 @@ export class MainPluginModuleLoader implements PluginModuleLoader {
             return definition
         }
 
-        // Project, global, and npm external plugins execute in isolated host
+        // Global and npm external plugins execute in isolated host
         return this.externalHost.load(pluginPackage)
     }
 }

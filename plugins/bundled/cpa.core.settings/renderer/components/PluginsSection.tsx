@@ -82,7 +82,6 @@ export function PluginsSection({
     const [actionLoadingId, setActionLoadingId] = useState<string | null>(null)
     const [actionErrors, setActionErrors] = useState<Record<string, string>>({})
     const [installSpec, setInstallSpec] = useState('')
-    const [installScope, setInstallScope] = useState<'project' | 'global'>('project')
     const [isInstalling, setIsInstalling] = useState(false)
     const [installError, setInstallError] = useState<string | null>(null)
 
@@ -104,7 +103,9 @@ export function PluginsSection({
                     pluginManagementService.reloadPlugin(id, opt),
                 installPlugin: (spec: string, opt?: PluginManagementInstallOptions) =>
                     pluginManagementService.installPlugin
-                        ? pluginManagementService.installPlugin(spec, opt)
+                        ? opt !== undefined
+                            ? pluginManagementService.installPlugin(spec, opt)
+                            : pluginManagementService.installPlugin(spec)
                         : Promise.resolve(),
                 uninstallPlugin: (id: string, opt?: PluginManagementActionOptions) =>
                     pluginManagementService.uninstallPlugin
@@ -258,7 +259,7 @@ export function PluginsSection({
         setInstallError(null)
         try {
             if (host.installPlugin) {
-                await host.installPlugin(trimmed, { scope: installScope })
+                await host.installPlugin(trimmed)
             }
             setInstallSpec('')
         } catch (err: any) {
@@ -329,33 +330,6 @@ export function PluginsSection({
                                         )}
                                         className="w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-app)] px-3 py-1.5 text-[13px] font-mono text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-blue-500 focus:outline-none"
                                     />
-                                </div>
-                                {/* Scope Selector: custom buttons, no native select */}
-                                <div className="inline-flex rounded-md border border-[var(--border-subtle)] bg-[var(--bg-app)] p-0.5 text-[12px]">
-                                    <button
-                                        type="button"
-                                        className={cn(
-                                            'rounded px-2.5 py-1 font-medium transition-colors',
-                                            installScope === 'project'
-                                                ? 'bg-[var(--bg-card)] text-[var(--text-primary)] shadow-sm'
-                                                : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]',
-                                        )}
-                                        onClick={() => setInstallScope('project')}
-                                    >
-                                        {t('settings.plugins.scope.project', 'Project')}
-                                    </button>
-                                    <button
-                                        type="button"
-                                        className={cn(
-                                            'rounded px-2.5 py-1 font-medium transition-colors',
-                                            installScope === 'global'
-                                                ? 'bg-[var(--bg-card)] text-[var(--text-primary)] shadow-sm'
-                                                : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]',
-                                        )}
-                                        onClick={() => setInstallScope('global')}
-                                    >
-                                        {t('settings.plugins.scope.global', 'Global')}
-                                    </button>
                                 </div>
                                 <button
                                     type="submit"
@@ -437,10 +411,6 @@ export function PluginsSection({
                                                     ) : plugin.source?.kind === 'npm' || (plugin as any).sourceKind === 'npm' ? (
                                                         <span className="rounded-full border border-purple-500/20 bg-purple-500/10 px-2 py-0.5 text-[11px] font-medium text-purple-400">
                                                             {t('settings.plugins.source.npm', 'NPM')}
-                                                        </span>
-                                                    ) : plugin.source?.kind?.startsWith('project') || (plugin as any).sourceKind?.startsWith('project') ? (
-                                                        <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
-                                                            {t('settings.plugins.source.project', 'Project')}
                                                         </span>
                                                     ) : plugin.source?.kind?.startsWith('global') || (plugin as any).sourceKind?.startsWith('global') ? (
                                                         <span className="rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-400">

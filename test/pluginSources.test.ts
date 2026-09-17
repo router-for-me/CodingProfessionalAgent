@@ -7,7 +7,6 @@ import {
     type CreatePluginCatalogOptions,
 } from '../src/main/plugins/catalog/createPluginCatalog.js'
 import {
-    loadProjectPluginConfig,
     loadGlobalPluginConfig,
     type PluginSourceConfig,
 } from '../src/main/plugins/config/pluginSourceConfig.js'
@@ -27,7 +26,6 @@ describe('Plugin Sources & Catalog Discovery', () => {
     let homeDir: string
     let projectDir: string
     let globalPluginsDir: string
-    let projectPluginsDir: string
     let outsideWorkspace: string
 
     async function createPluginFixture(
@@ -65,10 +63,8 @@ describe('Plugin Sources & Catalog Discovery', () => {
         outsideWorkspace = path.join(tempRoot, 'outside-workspace')
 
         globalPluginsDir = path.join(homeDir, '.coding-professional-agent', 'plugins')
-        projectPluginsDir = path.join(projectDir, '.cpa', 'plugins')
 
         await fs.mkdir(globalPluginsDir, { recursive: true })
-        await fs.mkdir(projectPluginsDir, { recursive: true })
         await fs.mkdir(outsideWorkspace, { recursive: true })
     })
 
@@ -81,7 +77,7 @@ describe('Plugin Sources & Catalog Discovery', () => {
     })
 
     describe('Source Precedence Ordering', () => {
-        it('uses project configured source before every other source', async () => {
+        it('uses global configured source before global directory and bundled', async () => {
             const bundledPkg: ResolvedPluginPackage = {
                 manifest: {
                     id: 'same',
@@ -109,102 +105,72 @@ describe('Plugin Sources & Catalog Discovery', () => {
                 sources: [{ source: `path:${globalConfiguredDir}` }],
             }
 
-            // 4. Project Directory
-            const projectDirPlugin = path.join(projectPluginsDir, 'same')
-            await createPluginFixture(projectDirPlugin, { id: 'same', name: 'Same (Project Dir)' })
-
-            // 5. Project Config
-            const projectConfiguredDir = path.join(tempRoot, 'project-custom-same')
-            await createPluginFixture(projectConfiguredDir, { id: 'same', name: 'Same (Project Config)' })
-            const projectConfig: PluginSourceConfig = {
-                sources: [{ source: `path:${projectConfiguredDir}` }],
-            }
-
             const fixtureOptions: CreatePluginCatalogOptions = {
-                projectPath: projectDir,
                 homeDir,
                 bundledPackages,
                 globalConfig,
-                projectConfig,
             }
 
             const packages = await createPluginCatalog(fixtureOptions)
             const samePlugin = packages.find((item) => item.manifest.id === 'same')
             expect(samePlugin).toBeDefined()
-            expect(samePlugin?.source.kind).toBe('project-config')
-            expect(samePlugin?.manifest.name).toBe('Same (Project Config)')
-        })
-
-        it('falls back to project directory when project config is not present', async () => {
-            const bundledPkg: ResolvedPluginPackage = {
-                manifest: {
-                    id: 'same',
-                    name: 'Same (Bundled)',
-                    version: '1.0.0',
-                    apiVersion: '1.0.0',
-                    engines: { cpa: '^1.0.0' },
-                },
-                source: { kind: 'bundled', spec: 'bundled:same' },
-                sourceRoot: '/bundled/same',
-                entries: {},
-            }
-
-            await createPluginFixture(path.join(globalPluginsDir, 'same'), {
-                id: 'same',
-                name: 'Same (Global Dir)',
-            })
-            const globalCustomDir = path.join(tempRoot, 'global-custom-same')
-            await createPluginFixture(globalCustomDir, { id: 'same', name: 'Same (Global Config)' })
-
-            await createPluginFixture(path.join(projectPluginsDir, 'same'), {
-                id: 'same',
-                name: 'Same (Project Dir)',
-            })
-
-            const packages = await createPluginCatalog({
-                projectPath: projectDir,
-                homeDir,
-                bundledPackages: [bundledPkg],
-                globalConfig: { sources: [{ source: `path:${globalCustomDir}` }] },
-                projectConfig: { sources: [] },
-            })
-
-            const samePlugin = packages.find((item) => item.manifest.id === 'same')
-            expect(samePlugin?.source.kind).toBe('project-directory')
-            expect(samePlugin?.manifest.name).toBe('Same (Project Dir)')
-        })
-
-        it('falls back to global config when project sources are absent', async () => {
-            const bundledPkg: ResolvedPluginPackage = {
-                manifest: {
-                    id: 'same',
-                    name: 'Same (Bundled)',
-                    version: '1.0.0',
-                    apiVersion: '1.0.0',
-                    engines: { cpa: '^1.0.0' },
-                },
-                source: { kind: 'bundled', spec: 'bundled:same' },
-                sourceRoot: '/bundled/same',
-                entries: {},
-            }
-
-            await createPluginFixture(path.join(globalPluginsDir, 'same'), {
-                id: 'same',
-                name: 'Same (Global Dir)',
-            })
-            const globalCustomDir = path.join(tempRoot, 'global-custom-same')
-            await createPluginFixture(globalCustomDir, { id: 'same', name: 'Same (Global Config)' })
-
-            const packages = await createPluginCatalog({
-                projectPath: projectDir,
-                homeDir,
-                bundledPackages: [bundledPkg],
-                globalConfig: { sources: [{ source: `path:${globalCustomDir}` }] },
-            })
-
-            const samePlugin = packages.find((item) => item.manifest.id === 'same')
             expect(samePlugin?.source.kind).toBe('global-config')
             expect(samePlugin?.manifest.name).toBe('Same (Global Config)')
+        })
+
+        it('falls back to global directory when global config is not present', async () => {
+            const bundledPkg: ResolvedPluginPackage = {
+                manifest: {
+                    id: 'same',
+                    name: 'Same (Bundled)',
+                    version: '1.0.0',
+                    apiVersion: '1.0.0',
+                    engines: { cpa: '^1.0.0' },
+                },
+                source: { kind: 'bundled', spec: 'bundled:same' },
+                sourceRoot: '/bundled/same',
+                entries: {},
+            }
+
+            await createPluginFixture(path.join(globalPluginsDir, 'same'), {
+                id: 'same',
+                name: 'Same (Global Dir)',
+            })
+
+            const packages = await createPluginCatalog({
+                homeDir,
+                bundledPackages: [bundledPkg],
+                globalConfig: { sources: [] },
+            })
+
+            const samePlugin = packages.find((item) => item.manifest.id === 'same')
+            expect(samePlugin?.source.kind).toBe('global-directory')
+            expect(samePlugin?.manifest.name).toBe('Same (Global Dir)')
+        })
+
+        it('falls back to bundled when global sources are absent', async () => {
+            const bundledPkg: ResolvedPluginPackage = {
+                manifest: {
+                    id: 'same',
+                    name: 'Same (Bundled)',
+                    version: '1.0.0',
+                    apiVersion: '1.0.0',
+                    engines: { cpa: '^1.0.0' },
+                },
+                source: { kind: 'bundled', spec: 'bundled:same' },
+                sourceRoot: '/bundled/same',
+                entries: {},
+            }
+
+            const packages = await createPluginCatalog({
+                homeDir,
+                bundledPackages: [bundledPkg],
+                globalConfig: { sources: [] },
+            })
+
+            const samePlugin = packages.find((item) => item.manifest.id === 'same')
+            expect(samePlugin?.source.kind).toBe('bundled')
+            expect(samePlugin?.manifest.name).toBe('Same (Bundled)')
         })
 
         it('falls back to global directory when global config is absent', async () => {
@@ -270,11 +236,9 @@ describe('Plugin Sources & Catalog Discovery', () => {
             await createPluginFixture(customDir, { id: 'arbitrary-plugin' })
 
             const packages = await createPluginCatalog({
-                projectPath: projectDir,
                 homeDir,
                 bundledPackages: [],
-                globalConfig: { sources: [] },
-                projectConfig: { sources: [{ source: `path:${customDir}` }] },
+                globalConfig: { sources: [{ source: `path:${customDir}` }] },
             })
 
             expect(packages.length).toBe(1)
@@ -283,15 +247,15 @@ describe('Plugin Sources & Catalog Discovery', () => {
         })
 
         it('resolves relative paths relative to the config file directory', async () => {
-            const relDir = path.join(projectDir, '.cpa', 'custom-relative-plugin')
+            const baseDir = path.join(homeDir, '.coding-professional-agent')
+            const relDir = path.join(baseDir, 'custom-relative-plugin')
             await createPluginFixture(relDir, { id: 'relative-plugin' })
 
             const packages = await createPluginCatalog({
-                projectPath: projectDir,
                 homeDir,
                 bundledPackages: [],
-                globalConfig: { sources: [] },
-                projectConfig: { sources: [{ source: 'path:./custom-relative-plugin' }] },
+                globalConfig: { sources: [{ source: 'path:./custom-relative-plugin' }] },
+                globalConfigDir: baseDir,
             })
 
             expect(packages.length).toBe(1)
@@ -301,24 +265,6 @@ describe('Plugin Sources & Catalog Discovery', () => {
     })
 
     describe('Duplicate ID Error Handling', () => {
-        it('throws DuplicatePluginSourceError for duplicate IDs within projectConfig', async () => {
-            const dir1 = path.join(tempRoot, 'dup1')
-            const dir2 = path.join(tempRoot, 'dup2')
-            await createPluginFixture(dir1, { id: 'dup-plugin' })
-            await createPluginFixture(dir2, { id: 'dup-plugin' })
-
-            await expect(
-                createPluginCatalog({
-                    homeDir,
-                    bundledPackages: [],
-                    globalConfig: { sources: [] },
-                    projectConfig: {
-                        sources: [{ source: `path:${dir1}` }, { source: `path:${dir2}` }],
-                    },
-                }),
-            ).rejects.toThrow(DuplicatePluginSourceError)
-        })
-
         it('throws DuplicatePluginSourceError for duplicate IDs within globalConfig', async () => {
             const dir1 = path.join(tempRoot, 'dup1')
             const dir2 = path.join(tempRoot, 'dup2')
@@ -336,16 +282,14 @@ describe('Plugin Sources & Catalog Discovery', () => {
             ).rejects.toThrow(DuplicatePluginSourceError)
         })
 
-        it('throws DuplicatePluginSourceError for duplicate IDs within project directory', async () => {
-            // If two folders inside .cpa/plugins have the same manifest ID
-            const dirA = path.join(projectPluginsDir, 'folder-a')
-            const dirB = path.join(projectPluginsDir, 'folder-b')
+        it('throws DuplicatePluginSourceError for duplicate IDs within global directory', async () => {
+            const dirA = path.join(globalPluginsDir, 'folder-a')
+            const dirB = path.join(globalPluginsDir, 'folder-b')
             await createPluginFixture(dirA, { id: 'conflict-id' })
             await createPluginFixture(dirB, { id: 'conflict-id' })
 
             await expect(
                 createPluginCatalog({
-                    projectPath: projectDir,
                     homeDir,
                     bundledPackages: [],
                     globalConfig: { sources: [] },
@@ -451,24 +395,6 @@ describe('Plugin Sources & Catalog Discovery', () => {
     })
 
     describe('Config Loaders', () => {
-        it('loadProjectPluginConfig loads <project>/.cpa/plugins.json', async () => {
-            const configPath = path.join(projectDir, '.cpa', 'plugins.json')
-            await fs.mkdir(path.dirname(configPath), { recursive: true })
-            const configContent: PluginSourceConfig = {
-                sources: [{ source: 'path:./my-plugin', enabled: true }],
-            }
-            await fs.writeFile(configPath, JSON.stringify(configContent, null, 2), 'utf-8')
-
-            const loaded = await loadProjectPluginConfig(projectDir)
-            expect(loaded).toBeDefined()
-            expect(loaded?.sources).toEqual([{ source: 'path:./my-plugin', enabled: true }])
-        })
-
-        it('loadProjectPluginConfig returns undefined when file is missing', async () => {
-            const loaded = await loadProjectPluginConfig(path.join(tempRoot, 'empty-project'))
-            expect(loaded).toBeUndefined()
-        })
-
         it('loadGlobalPluginConfig loads plugins from settings.json', async () => {
             const settingsDir = path.join(homeDir, '.coding-professional-agent')
             await fs.mkdir(settingsDir, { recursive: true })

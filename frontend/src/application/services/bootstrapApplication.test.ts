@@ -70,7 +70,7 @@ describe('bootstrapApplication', () => {
             runtime: 'renderer' as const,
             activate: () => {},
         }
-        await rendererPluginRuntime.registerPlugin(externalManifest, externalEntry, { source: { kind: 'project-config', spec: 'external.disk.plugin@1.0.0' } })
+        await rendererPluginRuntime.registerPlugin(externalManifest, externalEntry, { source: { kind: 'global-config', spec: 'external.disk.plugin@1.0.0' } })
 
         setHostBridge({
             StorageGet: vi.fn().mockResolvedValue(null),

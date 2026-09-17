@@ -9,12 +9,12 @@ import { loadPluginPackageFromDirectory } from './loadPluginPackage.js'
 
 export interface DirectoryPluginSourceOptions {
     directory: string
-    kind: 'project-directory' | 'global-directory'
+    kind: 'global-directory'
 }
 
 export class DirectoryPluginSource {
     private readonly directory: string
-    private readonly kind: 'project-directory' | 'global-directory'
+    private readonly kind: 'global-directory'
 
     constructor(options: DirectoryPluginSourceOptions) {
         this.directory = options.directory

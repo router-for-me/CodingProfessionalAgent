@@ -19,7 +19,6 @@ import {
 } from './createPluginCatalog.js'
 import {
     loadGlobalPluginConfig,
-    loadProjectPluginConfig,
     recoverFromJournal,
     type PluginSourceConfig,
     type PluginSourceConfigEntry,
@@ -39,8 +38,6 @@ export interface BootstrapPluginGraphOptions {
     bundledPackages?: readonly ResolvedPluginPackage[]
     bundledDir?: string
     globalConfig?: PluginSourceConfig
-    projectConfig?: PluginSourceConfig
-    projectConfigDir?: string
     globalConfigDir?: string
     npmInstaller?: ManagedNpmInstaller
     npmSources?: readonly PluginSourceConfigEntry[]
@@ -122,7 +119,7 @@ export async function discoverBundledPluginPackages(
 
 /**
  * Main process production bootstrap:
- * 1. Loads global and project plugin configurations;
+ * 1. Loads global plugin configuration;
  * 2. Creates unified PluginCatalog across all source tiers in precedence order;
  * 3. Resolves dependency graph and checks criticality failure semantics;
  * 4. Freezes immutable ResolvedPluginGraphDTO with canonical SHA-256 revision;
@@ -142,16 +139,13 @@ export async function bootstrapPluginGraph(
 
     // 0. Crash recovery from any pending transaction journal
     if (homeDir.length > 0) {
-        await recoverFromJournal(homeDir, projectPath)
+        await recoverFromJournal(homeDir)
     }
 
     // 1. Configs
     const globalConfig =
         options.globalConfig ??
         (homeDir.length > 0 ? await loadGlobalPluginConfig(homeDir) : { sources: [] })
-    const projectConfig =
-        options.projectConfig ??
-        (projectPath ? await loadProjectPluginConfig(projectPath) : undefined)
 
     // 2. Bundled packages
     const bundledPackages =
@@ -159,12 +153,9 @@ export async function bootstrapPluginGraph(
 
     // 3. Multi-tier discovery
     const catalogOptions: CreatePluginCatalogOptions = {
-        projectPath,
         homeDir,
         bundledPackages,
         globalConfig,
-        projectConfig,
-        projectConfigDir: options.projectConfigDir,
         globalConfigDir: options.globalConfigDir,
         npmInstaller: options.npmInstaller,
         npmSources: options.npmSources,
@@ -178,11 +169,6 @@ export async function bootstrapPluginGraph(
     const disabledSet = new Set<string>()
     if (globalConfig?.disabled) {
         for (const id of globalConfig.disabled) {
-            disabledSet.add(id)
-        }
-    }
-    if (projectConfig?.disabled) {
-        for (const id of projectConfig.disabled) {
             disabledSet.add(id)
         }
     }

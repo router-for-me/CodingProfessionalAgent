@@ -22,7 +22,7 @@ describe('RendererPluginModuleLoader', () => {
                 },
             },
             source: {
-                kind: 'project-directory',
+                kind: 'global-directory',
                 spec: 'path:/workspace/sample-renderer-plugin',
             },
             sourceRoot: '/workspace/sample-renderer-plugin',

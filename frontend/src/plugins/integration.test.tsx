@@ -239,7 +239,7 @@ describe('Universal Plugin Architecture - End-to-End Integration', () => {
 
         // Load and activate external plugin
         await act(async () => {
-            await rendererPluginRuntime.registerPlugin(manifest, entry, { source: { kind: 'project-config', spec: 'external.multi-slot@1.0.0' } })
+            await rendererPluginRuntime.registerPlugin(manifest, entry, { source: { kind: 'global-config', spec: 'external.multi-slot@1.0.0' } })
             await rendererPluginRuntime.activatePlugin(manifest.id)
         })
 
@@ -346,7 +346,7 @@ describe('Universal Plugin Architecture - End-to-End Integration', () => {
             },
         })
 
-        await rendererPluginRuntime.registerPlugin(manifest, entry, { source: { kind: 'project-config', spec: 'external.hotplug@2.0.0' } })
+        await rendererPluginRuntime.registerPlugin(manifest, entry, { source: { kind: 'global-config', spec: 'external.hotplug@2.0.0' } })
         await rendererPluginRuntime.activatePlugin(manifest.id)
         expect(rendererPluginRuntime.isPluginActive('external.hotplug')).toBe(true)
 
@@ -414,7 +414,7 @@ describe('Universal Plugin Architecture - End-to-End Integration', () => {
         })
 
         await act(async () => {
-            await rendererPluginRuntime.registerPlugin(manifest, entry, { source: { kind: 'project-config', spec: 'external.audited@1.5.0' } })
+            await rendererPluginRuntime.registerPlugin(manifest, entry, { source: { kind: 'global-config', spec: 'external.audited@1.5.0' } })
             await rendererPluginRuntime.activatePlugin(manifest.id)
         })
 
@@ -478,7 +478,7 @@ describe('Universal Plugin Architecture - End-to-End Integration', () => {
             },
         })
 
-        await rendererPluginRuntime.registerPlugin(manifest, entry, { source: { kind: 'project-config', spec: 'external.buggy@0.0.1' } })
+        await rendererPluginRuntime.registerPlugin(manifest, entry, { source: { kind: 'global-config', spec: 'external.buggy@0.0.1' } })
         await rendererPluginRuntime.activatePlugin('external.buggy')
 
         const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -675,7 +675,7 @@ describe('Universal Plugin Architecture - End-to-End Integration', () => {
 
         // Load and activate external plugin
         await act(async () => {
-            await rendererPluginRuntime.registerPlugin(wrappingManifest, wrappingEntry, { source: { kind: 'project-config', spec: 'external.card-decorator@1.0.0' } })
+            await rendererPluginRuntime.registerPlugin(wrappingManifest, wrappingEntry, { source: { kind: 'global-config', spec: 'external.card-decorator@1.0.0' } })
             await rendererPluginRuntime.activatePlugin(wrappingManifest.id)
         })
         expect(rendererPluginRuntime.isPluginActive('external.card-decorator')).toBe(true)

@@ -24,7 +24,6 @@ describe('Plugin Catalog Bootstrap & Graph Revision', () => {
     let homeDir: string
     let projectDir: string
     let globalPluginsDir: string
-    let projectPluginsDir: string
 
     async function createPluginFixture(
         dir: string,
@@ -60,10 +59,8 @@ describe('Plugin Catalog Bootstrap & Graph Revision', () => {
         projectDir = path.join(tempRoot, 'project')
 
         globalPluginsDir = path.join(homeDir, '.coding-professional-agent', 'plugins')
-        projectPluginsDir = path.join(projectDir, '.cpa', 'plugins')
 
         await fs.mkdir(globalPluginsDir, { recursive: true })
-        await fs.mkdir(projectPluginsDir, { recursive: true })
     })
 
     afterEach(async () => {
@@ -76,7 +73,7 @@ describe('Plugin Catalog Bootstrap & Graph Revision', () => {
 
     describe('Bootstrap & Resource Registration', () => {
         it('registers every resolved package before creating the business window', async () => {
-            const pluginADir = path.join(projectPluginsDir, 'plugin-a')
+            const pluginADir = path.join(globalPluginsDir, 'plugin-a')
             const pluginBDir = path.join(globalPluginsDir, 'plugin-b')
 
             await createPluginFixture(pluginADir, {
@@ -238,7 +235,7 @@ describe('Plugin Catalog Bootstrap & Graph Revision', () => {
             expect(computePluginGraphRevision([depChanged])).not.toEqual(baseRevision)
 
             // Source kind change
-            const sourceChanged = { ...basePkg, source: { kind: 'project-directory' as const, spec: 'path:/custom' } }
+            const sourceChanged = { ...basePkg, source: { kind: 'npm' as const, spec: 'path:/custom' } }
             expect(computePluginGraphRevision([sourceChanged])).not.toEqual(baseRevision)
 
             // Integrity change
@@ -342,7 +339,7 @@ describe('Plugin Catalog Bootstrap & Graph Revision', () => {
 
     describe('Resource Access & Boundary Security Post-Bootstrap', () => {
         it('allows reading valid resources and blocks path escapes from bootstrapped packages', async () => {
-            const pluginDir = path.join(projectPluginsDir, 'secured-plugin')
+            const pluginDir = path.join(globalPluginsDir, 'secured-plugin')
             await createPluginFixture(
                 pluginDir,
                 {

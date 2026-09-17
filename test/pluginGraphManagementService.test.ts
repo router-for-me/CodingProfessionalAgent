@@ -24,7 +24,6 @@ describe('PluginGraphManagementService & Graph Transactions', () => {
     let homeDir: string
     let projectDir: string
     let globalPluginsDir: string
-    let projectPluginsDir: string
     let npmPluginsDir: string
     let resourceService: PluginResourceService
     let host: MainPluginRuntimeHost
@@ -36,11 +35,9 @@ describe('PluginGraphManagementService & Graph Transactions', () => {
         homeDir = path.join(tempRoot, 'home')
         projectDir = path.join(tempRoot, 'project')
         globalPluginsDir = path.join(homeDir, '.coding-professional-agent', 'plugins')
-        projectPluginsDir = path.join(projectDir, '.cpa', 'plugins')
         npmPluginsDir = path.join(globalPluginsDir, 'npm')
 
         await fs.mkdir(globalPluginsDir, { recursive: true })
-        await fs.mkdir(projectPluginsDir, { recursive: true })
         await fs.mkdir(npmPluginsDir, { recursive: true })
 
         resourceService = new PluginResourceService()
@@ -106,7 +103,7 @@ describe('PluginGraphManagementService & Graph Transactions', () => {
         await createTestPlugin(path.join(bundledDir, 'cpa.core.bundled'), 'cpa.core.bundled', '1.0.0', {
             criticality: 'required',
         })
-        await createTestPlugin(path.join(projectPluginsDir, 'proj-plugin'), 'proj-plugin', '1.0.0')
+        await createTestPlugin(path.join(globalPluginsDir, 'global-plugin-2'), 'global-plugin-2', '1.0.0')
         await createTestPlugin(path.join(globalPluginsDir, 'global-plugin'), 'global-plugin', '1.0.0')
 
         const initResult = await bootstrapPluginGraph({
@@ -136,7 +133,7 @@ describe('PluginGraphManagementService & Graph Transactions', () => {
         expect(list.plugins.length).toBe(3)
         const ids = list.plugins.map((p) => p.manifest.id)
         expect(ids).toContain('cpa.core.bundled')
-        expect(ids).toContain('proj-plugin')
+        expect(ids).toContain('global-plugin-2')
         expect(ids).toContain('global-plugin')
         expect(list.activeRevision).toBe(initResult.graph.revision)
     })
@@ -240,9 +237,7 @@ describe('PluginGraphManagementService & Graph Transactions', () => {
         expect(ext?.status).toBe('active')
     })
 
-    it('persists disabled state across application restarts and enforces tier precedence', async () => {
-        // High priority project plugin disabled, low priority global plugin with same ID exists
-        await createTestPlugin(path.join(projectPluginsDir, 'same-id-plugin'), 'same-id-plugin', '2.0.0')
+    it('persists disabled state across application restarts', async () => {
         await createTestPlugin(path.join(globalPluginsDir, 'same-id-plugin'), 'same-id-plugin', '1.0.0')
 
         const service = new PluginGraphManagementService({
@@ -253,7 +248,7 @@ describe('PluginGraphManagementService & Graph Transactions', () => {
             npmInstaller,
         })
 
-        const initCandidate = await service.prepareDisable('same-id-plugin', { scope: 'project' })
+        const initCandidate = await service.prepareDisable('same-id-plugin')
         await service.commitTransaction(initCandidate.candidateRevision)
 
         // Simulate restart by bootstrapping fresh from disk
@@ -264,7 +259,6 @@ describe('PluginGraphManagementService & Graph Transactions', () => {
             npmInstaller,
         })
 
-        // High priority project config disabled must NOT fall through to enable global plugin
         const activeIds = restartedResult.graph.activationOrder
         expect(activeIds).not.toContain('same-id-plugin')
         const blocked = restartedResult.rawGraph.blocked.find((b) => b.pluginId === 'same-id-plugin')
@@ -296,9 +290,7 @@ describe('PluginGraphManagementService & Graph Transactions', () => {
         })
 
         // Prepare install
-        const installCandidate = await service.prepareInstall('npm:@scope/managed-test@1.0.0', {
-            scope: 'project',
-        })
+        const installCandidate = await service.prepareInstall('npm:@scope/managed-test@1.0.0')
         expect(installCandidate.candidateRevision).toBeTruthy()
         expect(installCandidate.graph.plugins.some((p) => p.id === 'managed-test')).toBe(true)
 
@@ -309,9 +301,7 @@ describe('PluginGraphManagementService & Graph Transactions', () => {
         expect(listAfterInstall.plugins.some((p) => p.manifest.id === 'managed-test')).toBe(true)
 
         // Prepare uninstall
-        const uninstallCandidate = await service.prepareUninstall('managed-test', {
-            scope: 'project',
-        })
+        const uninstallCandidate = await service.prepareUninstall('managed-test')
         expect(uninstallCandidate.graph.plugins.some((p) => p.id === 'managed-test')).toBe(false)
 
         // Commit uninstall
