@@ -304,7 +304,7 @@ export interface SubAgentHostDependencies {
 
 interface ChildRuntime {
     controller: AbortController
-    inbox: string[]
+    inbox: (UserEntry | string)[]
     entries: ConversationEntry[]
     running: boolean
     runChain: Promise<void>
@@ -983,6 +983,49 @@ export class SubAgentHost {
         )
     }
 
+    resolveAgent(identifier: string): SubAgentRecord | undefined {
+        const trimmed = identifier.trim()
+        if (!trimmed) return undefined
+
+        // 1. Direct ID match
+        const byId = this.agents.get(trimmed)
+        if (byId) return byId
+
+        // 2. Exact match by sessionId
+        for (const agent of this.agents.values()) {
+            if (agent.sessionId === trimmed) return agent
+        }
+
+        // 3. Match from format like "[Sub-agent Name (id)]" or "Name (id)"
+        const parenMatch = trimmed.match(/\(([^)]+)\)/)
+        if (parenMatch && parenMatch[1]) {
+            const extractedId = parenMatch[1].trim()
+            const byExtracted = this.agents.get(extractedId)
+            if (byExtracted) return byExtracted
+            for (const agent of this.agents.values()) {
+                if (agent.sessionId === extractedId) return agent
+            }
+        }
+
+        // 4. Case-insensitive name match
+        const lower = trimmed.toLowerCase()
+        for (const agent of this.agents.values()) {
+            if (agent.name.toLowerCase() === lower) return agent
+        }
+
+        // 5. Name match ignoring "[Sub-agent ...]" wrapper
+        const cleaned = trimmed
+            .replace(/^\[(?:Sub-agent\s+)?/i, '')
+            .replace(/\].*$/, '')
+            .trim()
+            .toLowerCase()
+        for (const agent of this.agents.values()) {
+            if (agent.name.toLowerCase() === cleaned) return agent
+        }
+
+        return undefined
+    }
+
     async sendMessage(
         agentId: string,
         message: string,
@@ -995,34 +1038,39 @@ export class SubAgentHost {
                 true,
             )
         }
-        const record = this.agents.get(agentId)
+        const record = this.resolveAgent(agentId)
         if (!record) {
             return textResult(`Unknown sub-agent: ${agentId}`, true)
         }
-        const runtime = this.runtimes.get(agentId)
+        const resolvedId = record.id
+
+        // Always create user entry and emit to UI immediately so the follow-up message
+        // appears in the sub-agent conversation view just like the initial prompt.
+        const userEntry = this.makeUserEntry(record.sessionId, trimmed)
+        this.emitUserEntry(userEntry)
+
+        const runtime = this.runtimes.get(resolvedId)
         if (runtime?.running) {
-            runtime.inbox.push(trimmed)
+            runtime.inbox.push(userEntry)
             return textResult(`Message sent to ${record.name}`)
         }
 
-        const userEntry = this.makeUserEntry(record.sessionId, trimmed)
-        this.emitUserEntry(userEntry)
         try {
-            await this.runUntilIdle(agentId, userEntry, signal)
+            await this.runUntilIdle(resolvedId, userEntry, signal)
         } catch (error) {
-            this.patch(agentId, {
+            this.patch(resolvedId, {
                 status: 'error',
                 errorMessage: errorMessageOf(error),
             })
             return textResult(errorMessageOf(error), true)
         }
-        const final = this.agents.get(agentId)
+        const final = this.agents.get(resolvedId)
         const last = final?.lastMessage?.trim() ?? ''
         if (final?.status === 'aborted') {
             return textResult(
                 formatAgentResult(
                     record.name,
-                    agentId,
+                    resolvedId,
                     last.length > 0 ? last : `${record.name} was stopped`,
                 ),
                 true,
@@ -1031,7 +1079,7 @@ export class SubAgentHost {
         return textResult(
             formatAgentResult(
                 record.name,
-                agentId,
+                resolvedId,
                 last.length > 0
                     ? last
                     : `${record.name} finished without a text reply`,
@@ -1040,32 +1088,33 @@ export class SubAgentHost {
     }
 
     stop(agentId: string): ReturnType<typeof textResult> {
-        const record = this.agents.get(agentId)
+        const record = this.resolveAgent(agentId)
         if (!record) {
             return textResult(`Unknown sub-agent: ${agentId}`, true)
         }
-        const waiterIdx = this.slotWaiters.findIndex((w) => w.agentId === agentId)
+        const resolvedId = record.id
+        const waiterIdx = this.slotWaiters.findIndex((w) => w.agentId === resolvedId)
         if (waiterIdx !== -1) {
             const waiter = this.slotWaiters.splice(waiterIdx, 1)[0]!
-            this.patch(agentId, { status: 'aborted', completedAt: this.now() })
+            this.patch(resolvedId, { status: 'aborted', completedAt: this.now() })
             waiter.reject(new Error('Subagent stopped'))
             this.drainQueue()
             return textResult(`Stopped ${record.name}`)
         }
-        const runtime = this.runtimes.get(agentId)
+        const runtime = this.runtimes.get(resolvedId)
         if (runtime?.running) {
             runtime.inbox.length = 0
             runtime.controller.abort()
         }
         if (record.status === 'running' || record.status === 'queued') {
-            this.patch(agentId, { status: 'aborted', completedAt: this.now() })
+            this.patch(resolvedId, { status: 'aborted', completedAt: this.now() })
             this.drainQueue()
             return textResult(`Stopped ${record.name}`)
         }
         if (!runtime?.running) {
             return textResult(`${record.name} is not running`)
         }
-        this.patch(agentId, { status: 'aborted', completedAt: this.now() })
+        this.patch(resolvedId, { status: 'aborted', completedAt: this.now() })
         this.drainQueue()
         return textResult(`Stopped ${record.name}`)
     }
@@ -1212,9 +1261,11 @@ export class SubAgentHost {
                     await this.runOneTurn(agentId, runtime, nextUser)
                     const queued = runtime.inbox.shift()
                     nextUser = queued
-                        ? this.makeUserEntry(this.agents.get(agentId)?.sessionId ?? agentId, queued)
+                        ? (typeof queued === 'string'
+                              ? this.makeUserEntry(this.agents.get(agentId)?.sessionId ?? agentId, queued)
+                              : queued)
                         : undefined
-                    if (nextUser) {
+                    if (nextUser && typeof queued === 'string') {
                         this.emitUserEntry(nextUser)
                     }
                 }
@@ -1312,9 +1363,22 @@ export class SubAgentHost {
     ): Promise<void> {
         const existing = this.runtimes.get(agentId)
         if (existing?.running) {
-            existing.inbox.push(userText(firstUser))
+            existing.inbox.push(firstUser)
             await existing.runChain
             return
+        }
+
+        let existingEntries = this.runtimes.get(agentId)?.entries.slice() ?? []
+        const record = this.agents.get(agentId)
+        if (existingEntries.length === 0 && record && this.config?.getEntries) {
+            try {
+                const loaded = await this.config.getEntries(record.sessionId)
+                if (Array.isArray(loaded) && loaded.length > 0) {
+                    existingEntries = [...loaded]
+                }
+            } catch {
+                // ignore
+            }
         }
 
         const controller = new AbortController()
@@ -1322,7 +1386,7 @@ export class SubAgentHost {
         const runtime: ChildRuntime = {
             controller,
             inbox: [],
-            entries: this.runtimes.get(agentId)?.entries.slice() ?? [],
+            entries: existingEntries,
             running: true,
             runChain: Promise.resolve(),
         }
@@ -1336,9 +1400,11 @@ export class SubAgentHost {
                     await this.runOneTurn(agentId, runtime, nextUser)
                     const queued = runtime.inbox.shift()
                     nextUser = queued
-                        ? this.makeUserEntry(this.agents.get(agentId)?.sessionId ?? agentId, queued)
+                        ? (typeof queued === 'string'
+                              ? this.makeUserEntry(this.agents.get(agentId)?.sessionId ?? agentId, queued)
+                              : queued)
                         : undefined
-                    if (nextUser) {
+                    if (nextUser && typeof queued === 'string') {
                         this.emitUserEntry(nextUser)
                     }
                 }
@@ -1535,13 +1601,6 @@ export class SubAgentHost {
             listener.onUserEntry?.(entry)
         }
     }
-}
-
-function userText(entry: UserEntry): string {
-    return entry.content
-        .filter((block): block is { type: 'text'; text: string } => block.type === 'text')
-        .map((block) => block.text)
-        .join('')
 }
 
 function upsertEntry(

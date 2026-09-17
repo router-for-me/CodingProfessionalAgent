@@ -445,3 +445,61 @@ describe('SubAgentConversation stick-to-bottom scrolling', () => {
     expect(scroller.scrollTop).toBe(800)
   })
 })
+
+describe('SubAgentConversation follow-up messages', () => {
+  it('renders multiple user messages from spawn and send_message across turns', () => {
+    pluginMessageHostCalls.length = 0
+    ;(globalThis as any).__subagentTestMessages = [
+      {
+        kind: 'message',
+        id: 'u1',
+        sessionId: 'ag-1',
+        role: 'user',
+        content: 'Initial prompt from spawn_agent',
+        status: 'done',
+        createdAt: 100,
+      },
+      assistant('a1', 200, 'done', {
+        content: 'Reply to initial prompt',
+        parts: [{ type: 'text', text: 'Reply to initial prompt' }],
+      }),
+      {
+        kind: 'message',
+        id: 'u2',
+        sessionId: 'ag-1',
+        role: 'user',
+        content: 'Follow-up message from send_message',
+        status: 'done',
+        createdAt: 300,
+      },
+      assistant('a2', 400, 'streaming', {
+        content: 'Reply to follow-up',
+        parts: [{ type: 'text', text: 'Reply to follow-up' }],
+      }),
+    ]
+
+    render(
+      <SubAgentConversation
+        sessionId="parent-1"
+        agent={runningAgent}
+        onBack={() => undefined}
+      />,
+    )
+
+    // Verify both the initial user message and follow-up user message are rendered
+    expect(screen.getByTestId('plugin-message-u1')).toBeInTheDocument()
+    expect(screen.getByTestId('plugin-message-u2')).toBeInTheDocument()
+
+    const u1Call = pluginMessageHostCalls.find((call) => (call.message as any)?.id === 'u1')
+    const u2Call = pluginMessageHostCalls.find((call) => (call.message as any)?.id === 'u2')
+
+    expect(u1Call?.message).toMatchObject({
+      role: 'user',
+      content: 'Initial prompt from spawn_agent',
+    })
+    expect(u2Call?.message).toMatchObject({
+      role: 'user',
+      content: 'Follow-up message from send_message',
+    })
+  })
+})

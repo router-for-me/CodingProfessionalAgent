@@ -239,10 +239,14 @@ export function createSendMessageTool(
             additionalProperties: false,
         },
         validate(input: unknown): SendMessageArgs {
+            const raw = input && typeof input === 'object' ? (input as Record<string, unknown>) : {}
+            const idVal = raw.agent_id ?? raw.agentId ?? raw.target
+            const msgVal = raw.message ?? raw.prompt ?? raw.text
+            const resolvedInput = { agent_id: idVal, message: msgVal }
             return {
-                agent_id: requireString(input, 'agent_id'),
+                agent_id: requireString(resolvedInput, 'agent_id'),
                 message: requireString(
-                    input,
+                    resolvedInput,
                     'message',
                     'Retry send_message with the follow-up text in message; do not omit message.',
                 ),
@@ -285,7 +289,9 @@ export function createStopAgentTool(
             additionalProperties: false,
         },
         validate(input: unknown): StopAgentArgs {
-            return { agent_id: requireString(input, 'agent_id') }
+            const raw = input && typeof input === 'object' ? (input as Record<string, unknown>) : {}
+            const idVal = raw.agent_id ?? raw.agentId ?? raw.target
+            return { agent_id: requireString({ agent_id: idVal }, 'agent_id') }
         },
         async execute(
             _toolCallId: string,

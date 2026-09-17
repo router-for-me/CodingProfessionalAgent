@@ -43,8 +43,17 @@ describe('sub-agent tools', () => {
             agent_id: 'a1',
             message: 'hi',
         })
+        expect(send?.validate({ target: 'a1', message: 'hi' })).toEqual({
+            agent_id: 'a1',
+            message: 'hi',
+        })
+        expect(send?.validate({ agentId: 'a1', text: 'hi' })).toEqual({
+            agent_id: 'a1',
+            message: 'hi',
+        })
         expect(() => send?.validate({ agent_id: 'a1' })).toThrow(/message/)
         expect(stop?.validate({ agent_id: 'a1' })).toEqual({ agent_id: 'a1' })
+        expect(stop?.validate({ target: 'a1' })).toEqual({ agent_id: 'a1' })
         expect(() => stop?.validate({})).toThrow(/agent_id/)
     })
 

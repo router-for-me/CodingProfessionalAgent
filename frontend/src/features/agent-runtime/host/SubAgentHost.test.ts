@@ -3,6 +3,7 @@ import type {
     AgentTool,
     AssistantEntry,
     ModelCatalogEntry,
+    UserEntry,
 } from '@cpa/plugin-api'
 import type { PreparedAgentRun } from '@/features/agent/types'
 import type { AgentRunEvent } from '../agent/types'
@@ -393,6 +394,107 @@ describe('SubAgentHost', () => {
         expect(result.content[0]?.type).toBe('text')
         expect(String(result.content[0] && 'text' in result.content[0] ? result.content[0].text : '')).toContain(
             'follow-up done',
+        )
+    })
+
+    it('emits userEntry immediately on send_message while running so sidebar displays follow-up message without delay', async () => {
+        let releaseFirst!: () => void
+        const firstTurnStarted = new Promise<void>((resolve) => {
+            releaseFirst = resolve
+        })
+        let releaseHold!: () => void
+        const holdFirst = new Promise<void>((resolve) => {
+            releaseHold = resolve
+        })
+        let turn = 0
+        const host = new SubAgentHost({
+            generateId: (() => {
+                let n = 0
+                return () => `msg-id-${++n}`
+            })(),
+            now: () => 1,
+            run: async function* (request) {
+                turn += 1
+                if (turn === 1) {
+                    releaseFirst()
+                    await holdFirst
+                }
+                yield* scriptedRun(request, ['step 1', 'step 2'])
+            },
+        })
+        host.configure({
+            prepared: preparedRun(),
+            codingTools: [readTool],
+            models: [model],
+        })
+        host.setParentContext({ sessionId: 'parent', runId: 'run-1' })
+
+        const emittedUserEntries: UserEntry[] = []
+        host.subscribe({
+            onStateChange: () => {},
+            onUserEntry: (entry) => {
+                emittedUserEntries.push(entry)
+            },
+        })
+
+        const spawnPromise = host.spawn('first task', { name: 'LiveWorker' })
+        await firstTurnStarted
+        const agent = host.list('parent')[0]!
+        expect(emittedUserEntries).toHaveLength(1)
+        expect(emittedUserEntries[0]?.content[0]).toMatchObject({
+            type: 'text',
+            text: 'first task',
+        })
+
+        // Call send_message while turn 1 is still running
+        const sent = await host.sendMessage(agent.id, 'follow up while running')
+        expect(sent.content[0]).toMatchObject({
+            type: 'text',
+            text: 'Message sent to LiveWorker',
+        })
+
+        // Verify: The second userEntry is emitted IMMEDIATELY before turn 1 completes
+        expect(emittedUserEntries).toHaveLength(2)
+        expect(emittedUserEntries[1]?.content[0]).toMatchObject({
+            type: 'text',
+            text: 'follow up while running',
+        })
+        expect(emittedUserEntries[1]?.sessionId).toBe(agent.sessionId)
+
+        // Complete turn 1 and let turn 2 finish
+        releaseHold()
+        await spawnPromise
+    })
+
+    it('resolves sub-agent by name or bracketed identifier on send_message', async () => {
+        const replies = ['spawned', 'turn by name', 'turn by bracket']
+        const host = new SubAgentHost({
+            generateId: (() => {
+                let n = 0
+                return () => `res-id-${++n}`
+            })(),
+            now: () => 1,
+            run: (request) => scriptedRun(request, replies),
+        })
+        host.configure({
+            prepared: preparedRun(),
+            codingTools: [readTool],
+            models: [model],
+        })
+        host.setParentContext({ sessionId: 'parent', runId: 'run-1' })
+        await host.spawn('task', { name: 'MyWorker' })
+        const agent = host.list('parent')[0]!
+
+        // Send by subagent name directly
+        const resByName = await host.sendMessage('MyWorker', 'do via name')
+        expect(String(resByName.content[0] && 'text' in resByName.content[0] ? resByName.content[0].text : '')).toContain(
+            'turn by name',
+        )
+
+        // Send by bracketed identifier format like "[Sub-agent MyWorker (res-id-1)]"
+        const resByBracket = await host.sendMessage(`[Sub-agent MyWorker (${agent.id})]`, 'do via bracket')
+        expect(String(resByBracket.content[0] && 'text' in resByBracket.content[0] ? resByBracket.content[0].text : '')).toContain(
+            'turn by bracket',
         )
     })
 

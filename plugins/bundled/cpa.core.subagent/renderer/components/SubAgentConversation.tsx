@@ -316,6 +316,22 @@ export function SubAgentConversation({
 
     const turns = useMemo(() => groupMessagesIntoTurns(messages), [messages])
 
+    // Find the currently active turn index when the agent is running/queued:
+    // 1. If an earlier turn still has an assistant message in 'streaming' status, that turn is live.
+    // 2. Otherwise, the last turn is the active one.
+    const activeTurnIdx = useMemo(() => {
+        if (!isRunActive || turns.length === 0) {
+            return -1
+        }
+        const streamingIdx = turns.findIndex((turn) =>
+            turn.assistantMessages.some((msg) => msg.status === 'streaming'),
+        )
+        if (streamingIdx !== -1) {
+            return streamingIdx
+        }
+        return turns.length - 1
+    }, [isRunActive, turns])
+
     return (
         <div className="flex min-h-0 flex-1 flex-col bg-[var(--bg-app)]">
             {/* Header */}
@@ -353,7 +369,7 @@ export function SubAgentConversation({
                                 key={turnIdx}
                                 turn={turn}
                                 agent={agent}
-                                isRunActive={isRunActive && turn.isLastTurn}
+                                isRunActive={turnIdx === activeTurnIdx}
                                 sessionKey={sessionKey}
                                 toolOverlays={toolOverlays}
                                 chatRenderers={chatRenderers}
