@@ -1603,6 +1603,7 @@ export function useAgentStream(
                 throw new Error('A run is already active')
             }
 
+            await ensureSessionLoaded(sessionId)
             const entries = useMessageStore.getState().getEntries(sessionId)
             if (entries.length === 0) {
                 throw new Error('No conversation entries to compact')
@@ -1844,6 +1845,7 @@ export function useAgentStream(
 
                 let sessionId = targetSessionId
                 if (sessionId) {
+                    await ensureSessionLoaded(sessionId)
                     const still = sessionState.sessions.find((s) => s.id === sessionId)
                     if (!still) {
                         sessionId = useSessionStore.getState().createSession({
@@ -2199,6 +2201,7 @@ export function useAgentStream(
                 // Only write the captured session target (or create with captured project).
                 let sessionId = capturedSessionId
                 if (sessionId) {
+                    await ensureSessionLoaded(sessionId)
                     const still = useSessionStore
                         .getState()
                         .sessions.find((item) => item.id === sessionId)

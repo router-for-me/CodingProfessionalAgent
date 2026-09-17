@@ -8,6 +8,7 @@ import type {
 } from '@/features/agent-runtime/session/types'
 import {
   retainMessageSession,
+  setProtectedSessionPredicate,
   useMessageStore,
   resetMessageStoreAccessOrderForTests,
 } from './messageStore'
@@ -614,6 +615,25 @@ describe('messageStore canonical entries', () => {
       } finally {
         release()
       }
+    })
+
+    it('protects session matched by protectedSessionPredicate from LRU eviction', () => {
+      useMessageStore.getState().setMaxCachedSessions(2)
+      useMessageStore.getState().replaceSessionEntries('active-sess', [
+        user({ id: 'u-act', sessionId: 'active-sess' }),
+      ])
+      useMessageStore.getState().replaceSessionEntries('other-sess', [
+        user({ id: 'u-other', sessionId: 'other-sess' }),
+      ])
+      setProtectedSessionPredicate((id) => id === 'active-sess')
+
+      useMessageStore.getState().replaceSessionEntries('third-sess', [
+        user({ id: 'u-third', sessionId: 'third-sess' }),
+      ])
+
+      expect(useMessageStore.getState().getEntries('active-sess')).toHaveLength(1)
+      expect(useMessageStore.getState().getEntries('other-sess')).toEqual([])
+      expect(useMessageStore.getState().getEntries('third-sess')).toHaveLength(1)
     })
   })
 })

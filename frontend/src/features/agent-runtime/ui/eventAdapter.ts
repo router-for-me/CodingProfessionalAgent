@@ -451,7 +451,7 @@ function reconcileAgentEnd(
   authoritative: readonly ConversationEntry[],
   meta: SessionRunMeta | undefined,
 ): ConversationEntry[] {
-  if (!meta) {
+  if (!meta || current.length === 0) {
     return authoritative.map((entry) => stampEntryCompletedAt(deepClone(entry)))
   }
 

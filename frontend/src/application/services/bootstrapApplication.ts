@@ -9,7 +9,7 @@ import {
     withSuppressedPersistence,
 } from './persistenceService'
 import { getHostBridge, subscribeHostNativeEvents, onHostReconnect } from './hostTransport'
-import { useMessageStore } from '@/stores/messageStore'
+import { setProtectedSessionPredicate, useMessageStore } from '@/stores/messageStore'
 import { useProjectStore } from '@/stores/projectStore'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useSessionRunStore } from '@/stores/sessionRunStore'
@@ -166,6 +166,7 @@ export async function bootstrapApplication(): Promise<void> {
     }
 
     await pluginPlatformCoordinator.activate(graph, { mainParticipant })
+    setProtectedSessionPredicate((sessionId) => useSessionStore.getState().currentSessionId === sessionId)
     await initPersistence()
 
     void hostServices.skillUsage.fetchUsageCounts().catch(() => {})

@@ -2237,4 +2237,47 @@ describe('createAgentEventAdapter', () => {
     expect(useMessageStore.getState().getEntries('s1')).toHaveLength(1)
     expect(useMessageStore.getState().getEntries('s1')[0]?.id).toBe('a-run2-1')
   })
+
+  it('agent-end preserves authoritative entries when current in-memory store is empty due to eviction', () => {
+    const adapter = createAgentEventAdapter(useMessageStore)
+    const sessionId = 'evicted-sess-1'
+    const u1: UserEntry = {
+      id: 'u1',
+      sessionId,
+      kind: 'user',
+      version: 1,
+      createdAt: 100,
+      content: [{ type: 'text', text: 'First task' }],
+    }
+    const a1 = baseAssistant({ id: 'a1', sessionId, status: 'done', stopReason: 'stop' })
+    const u2: UserEntry = {
+      id: 'u2',
+      sessionId,
+      kind: 'user',
+      version: 1,
+      createdAt: 200,
+      content: [{ type: 'text', text: 'Second task' }],
+    }
+
+    useMessageStore.getState().replaceSessionEntries(sessionId, [u1, a1, u2])
+
+    adapter.apply({ type: 'agent-start', runId: 'r2', sessionId })
+
+    // Simulate complete LRU eviction clearing the store while run is active
+    useMessageStore.getState().removeSessionMessages(sessionId)
+    expect(useMessageStore.getState().getEntries(sessionId)).toHaveLength(0)
+
+    const a2 = baseAssistant({ id: 'a2', sessionId, status: 'done', stopReason: 'stop' })
+
+    adapter.apply({
+      type: 'agent-end',
+      runId: 'r2',
+      sessionId,
+      entries: [u1, a1, u2, a2],
+    })
+
+    const finalEntries = useMessageStore.getState().getEntries(sessionId)
+    expect(finalEntries).toHaveLength(4)
+    expect(finalEntries.map((e) => e.id)).toEqual(['u1', 'a1', 'u2', 'a2'])
+  })
 })

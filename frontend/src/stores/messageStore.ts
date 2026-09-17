@@ -26,12 +26,20 @@ export type HydrateDiagnostic = {
   code?: string
 }
 
-export const DEFAULT_MAX_CACHED_SESSIONS = 8
+export const DEFAULT_MAX_CACHED_SESSIONS = 32
 
 type EntriesBySession = Record<string, ConversationEntry[]>
 
 let sessionAccessOrder: string[] = []
 const retainedSessionCounts = new Map<string, number>()
+type ProtectedSessionPredicate = (sessionId: string) => boolean
+let protectedSessionPredicate: ProtectedSessionPredicate | null = null
+
+export function setProtectedSessionPredicate(
+  predicate: ProtectedSessionPredicate | null,
+): void {
+  protectedSessionPredicate = predicate
+}
 
 /** Keep a mounted conversation in memory while other sessions stream concurrently. */
 export function retainMessageSession(sessionId: string): () => void {
@@ -69,6 +77,7 @@ function removeSessionAccess(sessionId: string): void {
 export function resetMessageStoreAccessOrderForTests(): void {
   sessionAccessOrder = []
   retainedSessionCounts.clear()
+  protectedSessionPredicate = null
 }
 
 interface MessageState {
@@ -220,6 +229,7 @@ function setSessionEntriesWithLru(
       if (allKeys.length - evictedSessionIds.length <= max) break
       if (candidateId === sessionId) continue // Protect current touched session
       if (retainedSessionCounts.has(candidateId)) continue
+      if (protectedSessionPredicate && protectedSessionPredicate(candidateId)) continue
       const candidateEntries = next[candidateId]
       if (!candidateEntries) continue
 

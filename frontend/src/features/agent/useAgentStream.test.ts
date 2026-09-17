@@ -3129,4 +3129,60 @@ describe('useAgentStream', () => {
         await waitFor(() => expect(result.current.isStreaming).toBe(false))
         expect(notifyMock).not.toHaveBeenCalled()
     })
+
+    it('calling send() on existing session hydrates unhydrated/evicted entries before appending new user message', async () => {
+        const sessionId = useSessionStore.getState().createSession({
+            title: 'Hydrate On Send Session',
+        })
+
+        const initialUserEntry = {
+            id: 'u-persisted-1',
+            sessionId,
+            createdAt: 1000,
+            kind: 'user' as const,
+            content: [{ type: 'text' as const, text: 'First persisted prompt' }],
+        }
+        const initialAssistantEntry = {
+            id: 'a-persisted-1',
+            sessionId,
+            createdAt: 1050,
+            kind: 'assistant' as const,
+            content: [{ type: 'text' as const, text: 'First response' }],
+            status: 'done' as const,
+            stopReason: 'stop' as const,
+        }
+
+        setHostBridge({
+            SessionGet: vi.fn().mockResolvedValue({
+                id: sessionId,
+                version: 2,
+                entries: [initialUserEntry, initialAssistantEntry],
+            }),
+            SessionSet: vi.fn().mockResolvedValue(undefined),
+            SessionBroadcastRunStatus: vi.fn().mockResolvedValue(undefined),
+            SessionBroadcastStreamEvent: vi.fn().mockResolvedValue(undefined),
+        } as any)
+
+        // Ensure in-memory store for this session is empty (simulating LRU eviction)
+        useMessageStore.getState().removeSessionMessages(sessionId)
+        expect(useMessageStore.getState().getEntries(sessionId)).toHaveLength(0)
+
+        const { result } = renderHook(() => useAgentStream(), {
+            wrapper: wrapperFor(service),
+        })
+
+        await act(async () => {
+            await result.current.send({
+                sessionId,
+                text: 'Second follow-up prompt',
+            })
+        })
+
+        const entries = useMessageStore.getState().getEntries(sessionId)
+        expect(entries.length).toBeGreaterThanOrEqual(3)
+        expect(entries[0]?.id).toBe('u-persisted-1')
+        expect(entries[1]?.id).toBe('a-persisted-1')
+        expect(entries[2]?.kind).toBe('user')
+        expect((entries[2] as any)?.content?.[0]?.text).toBe('Second follow-up prompt')
+    })
 })
