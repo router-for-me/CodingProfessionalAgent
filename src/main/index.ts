@@ -207,13 +207,15 @@ function createWindow(services: AppServices): BrowserWindow {
 }
 
 async function bootstrap(): Promise<void> {
-  if (app.isPackaged) {
+  if (app.isPackaged && !process.env.CPA_HOT_PATCH_ACTIVE) {
     const activeEntry = resolveMainEntry(import.meta.url)
     if (activeEntry && path.resolve(activeEntry) !== path.resolve(__filename)) {
       try {
+        process.env.CPA_HOT_PATCH_ACTIVE = '1'
         await import(pathToFileURL(activeEntry).href)
         return
       } catch (err) {
+        delete process.env.CPA_HOT_PATCH_ACTIVE
         console.error('[Bootstrapper] Failed to load active updated asar entry, falling back to base entry:', err)
       }
     }
@@ -318,7 +320,14 @@ async function bootstrap(): Promise<void> {
 
     mainWindow = createWindow(services)
 
-    // Schedule 5-second health confirmation heartbeat
+    // Confirm healthy immediately when main window is ready
+    mainWindow.once('ready-to-show', () => {
+      try {
+        services?.updateService?.confirmHealthy()
+      } catch {}
+    })
+
+    // Schedule 5-second health confirmation heartbeat fallback
     clearHealthTimer()
     healthCheckTimer = setTimeout(() => {
       healthCheckTimer = null
@@ -405,6 +414,9 @@ async function bootstrap(): Promise<void> {
   app.on('before-quit', () => {
     isQuitting = true
     clearHealthTimer()
+    try {
+      services?.updateService?.confirmHealthy()
+    } catch {}
     if (services) {
       void services.disposeAll()
     }

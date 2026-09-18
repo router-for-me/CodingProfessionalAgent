@@ -10,6 +10,7 @@ import {
     resolveMainScriptToExecute,
     addFallbackModulePaths,
     ensureNativeModuleBridges,
+    getBaseBinaryVersion,
 } from '../../src/main/bootstrapper.js'
 import { UpdateStateStorage } from '../../src/main/services/update/updateStateStorage.js'
 
@@ -32,6 +33,26 @@ describe('bootstrapper', () => {
     it('returns baseDefaultMainPath when running in unpackaged/dev mode', () => {
         const entry = resolveMainEntry(defaultPath, { isPackaged: false, storage })
         expect(entry).toBe(defaultPath)
+    })
+
+    it('returns baseDefaultMainPath immediately when CPA_HOT_PATCH_ACTIVE is set', () => {
+        process.env.CPA_HOT_PATCH_ACTIVE = '1'
+        try {
+            const entry = resolveMainEntry(defaultPath, { isPackaged: true, storage })
+            expect(entry).toBe(defaultPath)
+        } finally {
+            delete process.env.CPA_HOT_PATCH_ACTIVE
+        }
+    })
+
+    it('resolves base binary version from resourcesPath package.json', () => {
+        const mockResources = path.join(tempDir, 'mock-resources-ver')
+        const asarDir = path.join(mockResources, 'app.asar')
+        fs.mkdirSync(asarDir, { recursive: true })
+        fs.writeFileSync(path.join(asarDir, 'package.json'), JSON.stringify({ version: '1.0.0' }), 'utf8')
+
+        const resolved = getBaseBinaryVersion(mockResources)
+        expect(resolved).toBe('1.0.0')
     })
 
     it('returns baseDefaultMainPath when packaged but no active asar is configured', () => {

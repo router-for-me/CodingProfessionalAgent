@@ -11,6 +11,7 @@ import {
 import { UpdateStateStorage } from '../services/update/updateStateStorage.js'
 
 let cachedAppVersion: string | null = null
+let initialElectronVersion: string | null = null
 
 function getElectronApp(): any {
   try {
@@ -19,6 +20,16 @@ function getElectronApp(): any {
     return undefined
   }
 }
+
+try {
+  const app = getElectronApp()
+  if (typeof app === 'object' && app !== null && typeof app.getVersion === 'function') {
+    const v = app.getVersion()
+    if (typeof v === 'string' && v.trim().length > 0 && v !== '0.0.0') {
+      initialElectronVersion = v.trim()
+    }
+  }
+} catch {}
 
 function trySetElectronAppVersion(version: string): void {
   try {
@@ -157,6 +168,62 @@ export function getAppVersion(): string {
 export function getUserAgent(): string {
   const version = getAppVersion()
   return `CodingProfessionalAgent/${version}`
+}
+
+/**
+ * Resolves the immutable base binary version shipped in the native installer / bundle.
+ * Unlike getAppVersion() or electron.app.getVersion(), this function is immune to
+ * app.setVersion() mutations and hot-patch asar overlays.
+ */
+export function getBaseBinaryVersion(resourcesPath?: string): string {
+  const resPath =
+    resourcesPath ||
+    (typeof process !== 'undefined' && process.resourcesPath ? process.resourcesPath : undefined)
+
+  if (resPath) {
+    // 1. Try reading package.json inside base app.asar
+    try {
+      const basePkgPath = path.join(resPath, 'app.asar', 'package.json')
+      if (fs.existsSync(basePkgPath)) {
+        const content = fs.readFileSync(basePkgPath, 'utf8')
+        const parsed = JSON.parse(content) as { version?: unknown }
+        if (typeof parsed.version === 'string' && parsed.version.trim().length > 0) {
+          return parsed.version.trim()
+        }
+      }
+    } catch {}
+
+    // 2. On macOS, try reading CFBundleShortVersionString from Info.plist
+    try {
+      const infoPlistPath = path.join(resPath, '..', 'Info.plist')
+      if (fs.existsSync(infoPlistPath)) {
+        const plistContent = fs.readFileSync(infoPlistPath, 'utf8')
+        const match = plistContent.match(/<key>CFBundleShortVersionString<\/key>\s*<string>([^<]+)<\/string>/)
+        if (match && match[1]?.trim()) {
+          return match[1].trim()
+        }
+      }
+    } catch {}
+  }
+
+  // 3. Fallback to initialElectronVersion captured at startup
+  if (initialElectronVersion && initialElectronVersion !== '1.0.0') {
+    return initialElectronVersion
+  }
+
+  // 4. Try package.json from process.cwd()
+  try {
+    const cwdPkgPath = path.resolve(process.cwd(), 'package.json')
+    if (fs.existsSync(cwdPkgPath)) {
+      const content = fs.readFileSync(cwdPkgPath, 'utf8')
+      const parsed = JSON.parse(content) as { version?: unknown }
+      if (typeof parsed.version === 'string' && parsed.version.trim().length > 0) {
+        return parsed.version.trim()
+      }
+    }
+  } catch {}
+
+  return initialElectronVersion || '1.0.0'
 }
 
 /**

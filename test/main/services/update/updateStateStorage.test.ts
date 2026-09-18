@@ -117,6 +117,47 @@ describe('UpdateStateStorage', () => {
         expect(stateAfter.consecutiveFailures).toBe(0)
     })
 
+    it('does not reset hot-patch state when runtime baseVersion matches activeVersion', () => {
+        // Setup state with an active hot patch 1.0.14
+        storage.recordPendingVersion('1.0.14', 'versions/1.0.14/app.asar')
+        storage.activatePendingVersion()
+
+        // When runtime incorrectly passes activeVersion as baseVersion (e.g. via app.getVersion()),
+        // it must NOT treat it as a new full base binary installer.
+        const sameStorage = new UpdateStateStorage({ runtimeDir: tempDir, baseVersion: '1.0.14' })
+        const state = sameStorage.loadState()
+
+        expect(state.baseBinaryVersion).toBe('1.0.0')
+        expect(state.activeVersion).toBe('1.0.14')
+        expect(state.activeAsarPath).toBe('versions/1.0.14/app.asar')
+    })
+
+    it('auto-heals missing activeAsarPath when activeVersion asar file exists on disk', () => {
+        const versionsDir = path.join(tempDir, 'versions', '1.0.14')
+        fs.mkdirSync(versionsDir, { recursive: true })
+        fs.writeFileSync(path.join(versionsDir, 'app.asar'), 'dummy asar content')
+
+        // Simulate a corrupted state where activeAsarPath is null but 1.0.14 is active
+        const corruptedState = {
+            activeVersion: '1.0.14',
+            activeAsarPath: null,
+            baseBinaryVersion: '1.0.14',
+            consecutiveFailures: 0,
+            pendingVersion: null,
+            pendingAsarPath: null,
+            lastCheckTime: null,
+        }
+        const stateFile = path.join(tempDir, 'update-state.json')
+        fs.writeFileSync(stateFile, JSON.stringify(corruptedState, null, 2), 'utf8')
+
+        const healingStorage = new UpdateStateStorage({ runtimeDir: tempDir, baseVersion: '1.0.0' })
+        const state = healingStorage.loadState()
+
+        expect(state.baseBinaryVersion).toBe('1.0.0')
+        expect(state.activeVersion).toBe('1.0.14')
+        expect(state.activeAsarPath).toBe(path.join('versions', '1.0.14', 'app.asar'))
+    })
+
     it('constructs with default options', () => {
         const defaultStorage = new UpdateStateStorage()
         expect(defaultStorage.getRuntimeDir()).toContain('.coding-professional-agent')

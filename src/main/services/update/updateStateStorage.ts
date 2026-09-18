@@ -54,13 +54,20 @@ export class UpdateStateStorage {
         try {
             const content = fs.readFileSync(this.stateFilePath, 'utf8')
             const parsed = JSON.parse(content) as Partial<UpdateState>
-            const storedBaseBinary = parsed.baseBinaryVersion || this.baseVersion
+            let storedBaseBinary = parsed.baseBinaryVersion || this.baseVersion
 
-            // Check if user installed a newer full binary installer
+            // Check if user installed a newer full binary installer.
+            // Guard against the active hot-patch version being incorrectly treated as a new base installer.
             let isNewerBase = false
             try {
                 if (semver.valid(this.baseVersion) && semver.valid(storedBaseBinary)) {
-                    isNewerBase = semver.gt(this.baseVersion, storedBaseBinary)
+                    const isPatchVersion =
+                        (parsed.activeVersion && this.baseVersion === parsed.activeVersion) ||
+                        (parsed.pendingVersion && this.baseVersion === parsed.pendingVersion)
+
+                    if (!isPatchVersion && semver.gt(this.baseVersion, storedBaseBinary)) {
+                        isNewerBase = true
+                    }
                 }
             } catch {}
 
@@ -78,9 +85,50 @@ export class UpdateStateStorage {
                 return refreshedState
             }
 
+            // Auto-heal: if baseBinaryVersion was previously corrupted to match the patch version
+            // while runtime this.baseVersion is the genuine lower base binary, restore genuine baseBinaryVersion
+            if (
+                semver.valid(this.baseVersion) &&
+                semver.valid(storedBaseBinary) &&
+                semver.lt(this.baseVersion, storedBaseBinary) &&
+                storedBaseBinary === parsed.activeVersion
+            ) {
+                storedBaseBinary = this.baseVersion
+            }
+
+            // Auto-heal: if activeAsarPath was incorrectly cleared or null, but activeVersion exists,
+            // the corresponding asar file exists on disk, and activeVersion is strictly newer than baseBinary,
+            // recover activeAsarPath so cold start loads the latest patched version seamlessly.
+            let activeAsarPath = parsed.activeAsarPath ?? null
+            if (
+                !activeAsarPath &&
+                parsed.activeVersion &&
+                parsed.activeVersion !== storedBaseBinary &&
+                semver.valid(parsed.activeVersion) &&
+                semver.valid(storedBaseBinary) &&
+                semver.gt(parsed.activeVersion, storedBaseBinary)
+            ) {
+                const candidateRelPath = path.join('versions', parsed.activeVersion, 'app.asar')
+                const candidateAbsPath = path.join(this.runtimeDir, candidateRelPath)
+                if (fs.existsSync(candidateAbsPath)) {
+                    activeAsarPath = candidateRelPath
+                    const healedState: UpdateState = {
+                        activeVersion: parsed.activeVersion,
+                        activeAsarPath,
+                        baseBinaryVersion: storedBaseBinary,
+                        consecutiveFailures: 0,
+                        pendingVersion: parsed.pendingVersion ?? null,
+                        pendingAsarPath: parsed.pendingAsarPath ?? null,
+                        lastCheckTime: parsed.lastCheckTime ?? null,
+                    }
+                    this.saveState(healedState)
+                    return healedState
+                }
+            }
+
             return {
                 activeVersion: parsed.activeVersion || this.baseVersion,
-                activeAsarPath: parsed.activeAsarPath ?? null,
+                activeAsarPath,
                 baseBinaryVersion: storedBaseBinary,
                 consecutiveFailures: typeof parsed.consecutiveFailures === 'number' ? parsed.consecutiveFailures : 0,
                 pendingVersion: parsed.pendingVersion ?? null,

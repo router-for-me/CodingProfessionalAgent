@@ -4,6 +4,7 @@ import { pathToFileURL, fileURLToPath } from 'node:url'
 import Module from 'node:module'
 import * as electron from 'electron'
 import { UpdateStateStorage } from './services/update/updateStateStorage.js'
+import { getBaseBinaryVersion } from './utils/version.js'
 
 export interface ResolveMainEntryOptions {
     isPackaged?: boolean
@@ -288,8 +289,8 @@ export function resolveMainEntry(baseDefaultMainPath: string, options?: ResolveM
               ? electron.app.isPackaged
               : false
 
-    // If running in development mode, load default entry directly
-    if (!isPackaged) {
+    // If running in development mode or already inside active hot patch, load default entry directly
+    if (!isPackaged || process.env.CPA_HOT_PATCH_ACTIVE === '1') {
         return resolvedBasePath
     }
 
@@ -303,10 +304,11 @@ export function resolveMainEntry(baseDefaultMainPath: string, options?: ResolveM
         ])
     }
 
+    const baseVersion = getBaseBinaryVersion(resourcesPath)
     const storage =
         options?.storage ||
         new UpdateStateStorage({
-            baseVersion: (typeof electron !== 'undefined' && electron.app?.getVersion?.()) || '1.0.0',
+            baseVersion,
         })
 
     // Guard against consecutive startup crashes
@@ -354,3 +356,4 @@ export function resolveMainEntry(baseDefaultMainPath: string, options?: ResolveM
 }
 
 export const resolveMainScriptToExecute = resolveMainEntry
+export { getBaseBinaryVersion } from './utils/version.js'
