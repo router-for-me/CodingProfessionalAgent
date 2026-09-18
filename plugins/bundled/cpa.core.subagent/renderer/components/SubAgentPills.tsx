@@ -123,6 +123,7 @@ export function SubAgentPills(props: {
             size={16}
           />
           <span
+            key={pill.name}
             className={cn(
               'max-w-[140px] truncate',
               pill.isRunning && 'animate-text-shimmer',

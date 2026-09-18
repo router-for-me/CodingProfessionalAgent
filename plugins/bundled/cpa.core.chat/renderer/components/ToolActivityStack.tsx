@@ -104,6 +104,7 @@ export const ToolActivityStack = memo(function ToolActivityStack({
           )}
           <ActivityIcon kind={header.kind} />
           <span
+            key={header.text}
             className={cn(
               'min-w-0 truncate',
               isStackActive && 'animate-text-shimmer',
@@ -133,6 +134,7 @@ export const ToolActivityStack = memo(function ToolActivityStack({
         >
           <ActivityIcon kind={header.kind} />
           <span
+            key={header.text}
             className={cn(
               'min-w-0 truncate',
               isStackActive && 'animate-text-shimmer',
@@ -184,6 +186,7 @@ export const ToolActivityStack = memo(function ToolActivityStack({
                 >
                   <ActivityIcon kind={summary.kind} />
                   <span
+                    key={summary.text}
                     className={cn(
                       'min-w-0 truncate',
                       shouldShimmer && 'animate-text-shimmer',

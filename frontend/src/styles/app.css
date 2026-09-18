@@ -194,31 +194,38 @@ select {
   animation: diff-card-flash 0.45s ease-in-out 3;
 }
 
-/* Tool Activity Shimmer Text Animation (Flowing light gradient for running tools) */
+/* Tool Activity Shimmer Text Animation (10s cycle: 8s wait + 1.6s sweep + 0.4s settle)
+ * Sweeps left-to-right (0% to -200%).
+ * Uses currentColor with -webkit-text-fill-color so the element preserves its natural CSS color
+ * during the 8s idle period and after the sweep finishes without blanking or disappearing.
+ */
 @keyframes text-shimmer {
-  0% {
-    background-position: 100% 0;
+  0%,
+  80% {
+    background-position: 0% 0;
   }
+  96%,
   100% {
-    background-position: -100% 0;
+    background-position: -200% 0;
   }
 }
 
 .animate-text-shimmer {
+  display: inline-block;
+  vertical-align: bottom;
   background-image: linear-gradient(
     90deg,
-    var(--text-muted) 0%,
-    var(--text-muted) 20%,
-    var(--text-primary) 50%,
-    var(--text-muted) 80%,
-    var(--text-muted) 100%
+    currentColor 0%,
+    currentColor 60%,
+    var(--text-shimmer-highlight, rgba(255, 255, 255, 0.9)) 75%,
+    currentColor 90%,
+    currentColor 100%
   );
   background-size: 200% 100%;
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
-  color: transparent;
-  animation: text-shimmer 2.5s ease-in-out infinite;
+  animation: text-shimmer 10s ease-in-out infinite;
 }
 
 /* Hide native browser scrollbars globally so custom macOS-style overlay scrollbars take over */
@@ -380,7 +387,8 @@ select {
 .cpa-paused-animations .animate-spin-steps-12,
 .cpa-paused-animations .animate-spin-steps-24,
 .cpa-paused-animations .animate-spin,
-.cpa-paused-animations .animate-pulse {
+.cpa-paused-animations .animate-pulse,
+.cpa-paused-animations .animate-text-shimmer {
   animation-play-state: paused !important;
 }
 

@@ -33,6 +33,7 @@
   --scrollbar-thumb: rgba(255, 255, 255, 0.28);
   --scrollbar-thumb-hover: rgba(255, 255, 255, 0.55);
   --scrollbar-thumb-active: rgba(255, 255, 255, 0.72);
+  --text-shimmer-highlight: rgba(255, 255, 255, 0.9);
 }
 
 [data-theme="light"] {
@@ -62,6 +63,7 @@
   --scrollbar-thumb: rgba(0, 0, 0, 0.32);
   --scrollbar-thumb-hover: rgba(0, 0, 0, 0.60);
   --scrollbar-thumb-active: rgba(0, 0, 0, 0.75);
+  --text-shimmer-highlight: rgba(255, 255, 255, 0.95);
 }
 
 @theme {
