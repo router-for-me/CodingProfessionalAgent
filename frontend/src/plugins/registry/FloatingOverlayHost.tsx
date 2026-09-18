@@ -106,28 +106,22 @@ export function isAnchorVisible(el: Element): boolean {
         return false
     }
 
+    // Explicitly check for hidden, inert, or aria-hidden on the element or any ancestor
+    if (el.closest('[hidden], [inert], [aria-hidden="true"]')) {
+        return false
+    }
+
     if (typeof el.checkVisibility === 'function') {
         try {
-            if (!el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) {
-                return false
-            }
+            return el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })
         } catch {
-            if (!el.checkVisibility()) {
-                return false
-            }
+            return el.checkVisibility()
         }
     }
 
-    // Check if element or any ancestor has hidden/inert/aria-hidden attribute or display: none / visibility: hidden / opacity: 0
+    // Fallback for environments lacking native checkVisibility (e.g. jsdom)
     let curr: Element | null = el
     while (curr && curr !== document.body && curr !== document.documentElement) {
-        if (
-            curr.hasAttribute('hidden') ||
-            curr.hasAttribute('inert') ||
-            curr.getAttribute('aria-hidden') === 'true'
-        ) {
-            return false
-        }
         if (curr instanceof HTMLElement) {
             if (
                 curr.style.display === 'none' ||
@@ -308,7 +302,7 @@ function FloatingOverlayItem<P = Record<string, unknown>>({
 
         if (typeof ResizeObserver !== 'undefined') {
             resizeObserver = new ResizeObserver(() => {
-                startTracking(350)
+                scheduleUpdate()
             })
             const initialAnchor = findAnchorElement(item.anchor)
             if (initialAnchor) {
@@ -344,13 +338,14 @@ function FloatingOverlayItem<P = Record<string, unknown>>({
 
         if (typeof MutationObserver !== 'undefined') {
             mutationObserver = new MutationObserver((mutations) => {
-                // Ignore mutations occurring inside our own floating overlay
+                // Ignore mutations occurring inside any floating overlay or custom mac scrollbar host
                 const hasRelevantMutation = mutations.some((mutation) => {
                     const target =
                         mutation.target instanceof Element
                             ? mutation.target
                             : mutation.target.parentElement
-                    if (target && target.closest(`[data-floating-id="${item.id}"]`)) {
+                    if (!target) return false
+                    if (target.closest('[data-floating-id]') || target.closest('#cpa-mac-scrollbars-host')) {
                         return false
                     }
                     return true
@@ -361,7 +356,7 @@ function FloatingOverlayItem<P = Record<string, unknown>>({
                 }
 
                 updateObservedAnchor()
-                startTracking(350)
+                scheduleUpdate()
             })
 
             const root = document.body ?? document.documentElement

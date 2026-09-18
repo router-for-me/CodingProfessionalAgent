@@ -182,6 +182,21 @@ describe('FloatingOverlayHost & computeFloatingCoords', () => {
             expect(isAnchorVisible(el)).toBe(true)
         })
 
+        it('returns false when checkVisibility returns true but ancestor has inert or aria-hidden="true"', () => {
+            const parent = document.createElement('div')
+            parent.setAttribute('inert', '')
+            const child = document.createElement('div')
+            parent.appendChild(child)
+            document.body.appendChild(parent)
+
+            child.checkVisibility = vi.fn(() => true)
+            expect(isAnchorVisible(child)).toBe(false)
+
+            parent.removeAttribute('inert')
+            parent.setAttribute('aria-hidden', 'true')
+            expect(isAnchorVisible(child)).toBe(false)
+        })
+
         it('returns false when ancestor element is hidden', () => {
             const parent = document.createElement('div')
             parent.style.display = 'none'
@@ -911,6 +926,56 @@ describe('FloatingOverlayHost & computeFloatingCoords', () => {
 
             // Should have scheduled only 1 rAF request
             expect(rafCallCount).toBe(countBefore + 1)
+        })
+
+        it('MutationObserver ignores mutations occurring inside other floating overlays and custom mac scrollbar host', async () => {
+            const anchor = document.createElement('div')
+            anchor.id = 'isolate-anchor'
+            document.body.appendChild(anchor)
+            vi.spyOn(anchor, 'getBoundingClientRect').mockReturnValue(sampleRect)
+
+            const scrollbarHost = document.createElement('div')
+            scrollbarHost.id = 'cpa-mac-scrollbars-host'
+            document.body.appendChild(scrollbarHost)
+
+            const rafSpy = vi.spyOn(window, 'requestAnimationFrame')
+
+            registry.registerFloating({
+                id: 'float-a',
+                pluginId: 'p1',
+                anchor: '#isolate-anchor',
+                component: () => <div data-testid="float-a-content">Float A</div>,
+            })
+            registry.registerFloating({
+                id: 'float-b',
+                pluginId: 'p2',
+                anchor: '#isolate-anchor',
+                component: () => <div data-testid="float-b-content">Float B</div>,
+            })
+
+            render(<FloatingOverlayHost registry={registry} />)
+            expect(screen.getByTestId('float-a-content')).toBeInTheDocument()
+            expect(screen.getByTestId('float-b-content')).toBeInTheDocument()
+
+            rafSpy.mockClear()
+
+            // Mutate float-a's wrapper
+            const floatAWrapper = screen
+                .getByTestId('float-a-content')
+                .closest('[data-floating-id="float-a"]') as HTMLElement
+            floatAWrapper.style.opacity = '0.5'
+
+            // Mutate scrollbar host
+            scrollbarHost.style.top = '10px'
+
+            // Wait for MutationObserver to flush microtasks
+            await new Promise((resolve) => setTimeout(resolve, 50))
+
+            // Mutating float-a or scrollbars host must not trigger rAF on float-b or float-a
+            expect(rafSpy).not.toHaveBeenCalled()
+
+            rafSpy.mockRestore()
+            scrollbarHost.remove()
         })
 
         it('cleans up all observers, listeners, and pending rAF on unmount without warnings', () => {

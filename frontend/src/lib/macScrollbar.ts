@@ -568,6 +568,8 @@ export class MacScrollbarManager {
             if (!host) {
                 host = document.createElement('div')
                 host.id = 'cpa-mac-scrollbars-host'
+                host.setAttribute('data-cpa-isolated', 'true')
+                host.setAttribute('aria-hidden', 'true')
                 document.body.appendChild(host)
             }
             this.host = host
@@ -679,6 +681,10 @@ export class MacScrollbarManager {
                     this.activeInstances.delete(instance)
                     this.dirtyInstances.delete(instance)
                 }
+            }
+            if (this.activeInstances.size === 0 && this.trackingFrameId !== null) {
+                window.cancelAnimationFrame(this.trackingFrameId)
+                this.trackingFrameId = null
             }
         })
 
