@@ -423,7 +423,7 @@ export function TodoProgressBar({
                     ) : isRunning ? (
                         <Loader2
                             data-testid="todo-pill-icon-running"
-                            className="size-3.5 animate-spin text-sky-400"
+                            className="size-3.5 animate-spin-smooth text-sky-400"
                         />
                     ) : null
                 ) : (

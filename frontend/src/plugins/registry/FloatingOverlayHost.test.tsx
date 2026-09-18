@@ -974,6 +974,11 @@ describe('FloatingOverlayHost & computeFloatingCoords', () => {
             // Mutating float-a or scrollbars host must not trigger rAF on float-b or float-a
             expect(rafSpy).not.toHaveBeenCalled()
 
+            // Discard transition/animation inside overlay without scheduling tracking
+            const floatAContent = screen.getByTestId('float-a-content')
+            floatAContent.dispatchEvent(new Event('animationstart', { bubbles: true }))
+            expect(rafSpy).not.toHaveBeenCalled()
+
             rafSpy.mockRestore()
             scrollbarHost.remove()
         })

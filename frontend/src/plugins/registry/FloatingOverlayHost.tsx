@@ -315,11 +315,31 @@ function FloatingOverlayItem<P = Record<string, unknown>>({
             scheduleUpdate()
         }
 
-        const handleTransitionEvent = () => {
+        const isInternalOrIrrelevantEvent = (e?: Event): boolean => {
+            if (e && e.target instanceof Element) {
+                // Ignore transitions/animations inside any floating overlay or custom mac scrollbar host
+                if (e.target.closest('[data-floating-id]') || e.target.closest('#cpa-mac-scrollbars-host')) {
+                    return true
+                }
+                // If an anchor element is observed, only track animations on the anchor or its ancestors
+                if (observedElement && e.target !== observedElement && !e.target.contains(observedElement)) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        const handleTransitionEvent = (e?: Event) => {
+            if (isInternalOrIrrelevantEvent(e)) {
+                return
+            }
             startTracking(400)
         }
 
-        const handleTransitionEnd = () => {
+        const handleTransitionEnd = (e?: Event) => {
+            if (isInternalOrIrrelevantEvent(e)) {
+                return
+            }
             updatePosition()
             startTracking(100)
         }

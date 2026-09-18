@@ -344,6 +344,54 @@ select {
   pointer-events: none !important;
 }
 
+/* Silky-smooth GPU-accelerated spin (pure 60/120 FPS continuous rotation) */
+@keyframes spin-smooth {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin-smooth {
+  display: inline-block;
+  animation: spin-smooth 0.85s linear infinite;
+  will-change: transform;
+}
+
+/* Low-overhead stepped spin animation */
+@keyframes spin-step {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin-steps {
+  display: inline-block;
+  animation: spin-step 1s steps(8) infinite;
+  will-change: transform;
+}
+
+.animate-spin-steps-12 {
+  display: inline-block;
+  animation: spin-step 1.2s steps(12) infinite;
+  will-change: transform;
+}
+
+/* Pause animations when window is hidden or backgrounded */
+.cpa-paused-animations .animate-spin-smooth,
+.cpa-paused-animations .animate-spin-steps,
+.cpa-paused-animations .animate-spin-steps-12,
+.cpa-paused-animations .animate-spin,
+.cpa-paused-animations .animate-pulse {
+  animation-play-state: paused !important;
+}
+
+
 
 
 

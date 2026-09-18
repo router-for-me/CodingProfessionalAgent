@@ -651,7 +651,7 @@ export function SessionRow({ session }: SessionRowProps) {
                             aria-label={t('session.running', 'Running')}
                             className="flex size-3.5 shrink-0 items-center justify-center text-[var(--accent-blue)]"
                         >
-                            <Loader2 className="size-3 animate-spin" aria-hidden />
+                            <Loader2 className="size-3 animate-spin-smooth" aria-hidden />
                         </span>
                     ) : null}
                     {session.unread && (!isCurrent || isManuallyMarkedUnread) ? (
@@ -742,7 +742,7 @@ export function SessionRow({ session }: SessionRowProps) {
                                       data-testid="session-running-badge"
                                       className="inline-flex items-center gap-1 rounded-full bg-[var(--accent-blue)]/10 px-2 py-0.5 text-[11px] font-medium text-[var(--accent-blue)]"
                                   >
-                                      <Loader2 className="size-3 animate-spin" aria-hidden />
+                                      <Loader2 className="size-3 animate-spin-smooth" aria-hidden />
                                       {t('session.running', 'Running')}
                                   </span>
                               ) : null}
