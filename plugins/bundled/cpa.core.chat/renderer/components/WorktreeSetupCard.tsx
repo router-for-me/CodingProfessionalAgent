@@ -51,7 +51,7 @@ function renderStepIcon(status?: WorktreeSetupStepStatus) {
         case 'done':
             return <CheckCircle2 className="size-4 shrink-0 text-sky-400" aria-hidden />
         case 'running':
-            return <Loader2 className="size-4 shrink-0 animate-spin-smooth text-sky-400" aria-hidden />
+            return <Loader2 className="size-4 shrink-0 animate-spin-steps-24 text-sky-400" aria-hidden />
         case 'error':
             return <XCircle className="size-4 shrink-0 text-red-500" aria-hidden />
         case 'pending':
