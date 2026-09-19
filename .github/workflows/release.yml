@@ -91,10 +91,14 @@ jobs:
       - name: Sync package version from release tag
         run: node scripts/sync-version.js "${{ github.event.inputs.tag_name || github.ref }}"
 
-      - name: Install dependencies
+      - name: Install dependencies (skip native rebuilds for pure ASAR)
+        env:
+          CPA_SKIP_NATIVE_BUILD: '1'
+          SKIP_NATIVE_BUILD: '1'
         run: |
-          pnpm install --frozen-lockfile
+          pnpm install --frozen-lockfile --ignore-scripts
           pnpm --dir frontend install --frozen-lockfile
+          node scripts/fix-minipass.js
 
       - name: Build patch archive
         run: node scripts/build-update-patch.mjs
@@ -149,6 +153,19 @@ jobs:
         with:
           node-version: 22
           cache: 'pnpm'
+
+      - name: Restore native modules and node-gyp cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/cpa-native-bindings
+            ~/.cache/node-gyp
+            ~/Library/Caches/node-gyp
+            ~/AppData/Local/node-gyp/Cache
+          key: native-deps-${{ runner.os }}-${{ matrix.target_bin }}-${{ hashFiles('pnpm-lock.yaml', 'scripts/setup-better-sqlite3.js', 'package.json') }}
+          restore-keys: |
+            native-deps-${{ runner.os }}-${{ matrix.target_bin }}-
+            native-deps-${{ runner.os }}-
 
       - name: Sync package version from release tag
         run: node scripts/sync-version.js "${{ github.event.inputs.tag_name || github.ref }}"
