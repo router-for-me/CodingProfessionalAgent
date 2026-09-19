@@ -13,13 +13,14 @@
 
 import type { NativeBridge, NativeEvent, ProcessOperation } from './types.js'
 import type { AgentTool, ToolExecutionContext, ToolResult } from './types.js'
-import { OutputAccumulator } from './outputAccumulator.js'
+import { OutputAccumulator, type OutputAccumulatorSnapshot } from './outputAccumulator.js'
 import { resolvePowerShell, UTF8_OUTPUT_PREFIX, type ShellEnv } from './shell.js'
 import {
     DEFAULT_MAX_BYTES,
     DEFAULT_MAX_LINES,
-    formatSize,
+    formatTruncatedOutput,
     type TruncateResult,
+    utf8ByteLength,
 } from './truncate.js'
 
 export const DEFAULT_PWSH_TIMEOUT_SECONDS = 30
@@ -95,7 +96,7 @@ export function createPwshTool(
     return {
         name: 'pwsh',
         label: 'pwsh',
-        description: `Execute a PowerShell/pwsh command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds (default: ${DEFAULT_PWSH_TIMEOUT_SECONDS}).`,
+        description: `Execute a PowerShell/pwsh command in the current working directory. Returns stdout and stderr. Output is truncated (preserving head and tail up to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB total). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds (default: ${DEFAULT_PWSH_TIMEOUT_SECONDS}).`,
         parameters: pwshParameters,
         validate(input: unknown): PwshArgs {
             return validatePwshArgs(input)
@@ -245,17 +246,17 @@ async function executePwsh(
         }
         updateDirty = false
         lastUpdateAt = options.now()
-        const snapshot = output.snapshot()
-        const details: PwshToolDetails = {}
-        if (snapshot.truncation.truncated) {
-            details.truncation = snapshot.truncation
-            if (fullOutputPath) {
-                details.fullOutputPath = fullOutputPath
-            }
+        const snapshot = output.snapshot({ fullOutputPath })
+        const formatted = formatOutput(snapshot, output.getLastLineBytes(), fullOutputPath, '')
+        const details: PwshToolDetails = {
+            ...formatted.details,
+        }
+        if (fullOutputPath && snapshot.truncation.truncated) {
+            details.fullOutputPath = fullOutputPath
         }
         safeUpdate({
-            content: snapshot.content
-                ? [{ type: 'text', text: snapshot.content }]
+            content: formatted.text
+                ? [{ type: 'text', text: formatted.text }]
                 : [],
             details: Object.keys(details).length > 0 ? details : undefined,
         })
@@ -519,7 +520,7 @@ async function executePwsh(
             emitOutputUpdate()
         }
 
-        const snapshot = output.snapshot()
+        const snapshot = output.snapshot({ fullOutputPath })
         const formatted = formatOutput(snapshot, output.getLastLineBytes(), fullOutputPath)
 
         let cleanupDiagnostic: string | undefined
@@ -854,31 +855,54 @@ function formatCleanupDiagnostic(path: string, error: unknown): string {
 }
 
 function formatOutput(
-    snapshot: { content: string; truncation: TruncateResult },
+    snapshot: OutputAccumulatorSnapshot,
     lastLineBytes: number,
     fullOutputPath: string | undefined,
     emptyText = '(no output)',
 ): { text: string; details?: PwshToolDetails } {
     const truncation = snapshot.truncation
-    let text = snapshot.content || emptyText
-    let details: PwshToolDetails | undefined
 
-    if (truncation.truncated) {
-        details = {
-            truncation,
-            fullOutputPath,
-        }
-        const startLine = Math.max(1, truncation.totalLines - truncation.outputLines + 1)
-        const endLine = truncation.totalLines
-        if (truncation.lastLinePartial) {
-            const lastLineSize = formatSize(lastLineBytes)
-            text += `\n\n[Showing last ${formatSize(truncation.outputBytes)} of line ${endLine} (line is ${lastLineSize}). Full output: ${fullOutputPath}]`
-        } else if (truncation.truncatedBy === 'lines') {
-            text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}. Full output: ${fullOutputPath}]`
-        } else {
-            text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(truncation.maxBytes)} limit). Full output: ${fullOutputPath}]`
-        }
+    if (!truncation.truncated) {
+        return { text: snapshot.content || emptyText }
     }
+
+    const details: PwshToolDetails = {
+        truncation,
+        fullOutputPath,
+    }
+
+    const headContent = snapshot.headContent ?? ''
+    const tailContent = snapshot.tailContent ?? snapshot.content
+    const headLines = snapshot.headLines ?? 0
+    const tailLines = snapshot.tailLines ?? truncation.outputLines
+    const omittedLines =
+        snapshot.omittedLines ??
+        (truncation.totalLines === 1
+            ? 0
+            : Math.max(0, truncation.totalLines - (headLines + tailLines)))
+    const omittedBytes =
+        snapshot.omittedBytes ??
+        Math.max(
+            0,
+            truncation.totalBytes -
+                (utf8ByteLength(headContent) + utf8ByteLength(tailContent)),
+        )
+
+    const text = formatTruncatedOutput({
+        headContent,
+        tailContent,
+        omittedLines,
+        omittedBytes,
+        totalLines: truncation.totalLines,
+        headLines,
+        tailLines,
+        fullOutputPath,
+        truncatedBy: truncation.truncatedBy,
+        maxBytes: truncation.maxBytes,
+        lastLinePartial: truncation.lastLinePartial,
+        lastLineBytes,
+        totalBytes: truncation.totalBytes,
+    })
 
     return { text, details }
 }

@@ -236,4 +236,54 @@ describe('createPwshTool', () => {
 
         expect(textOf(result)).toContain('line 1\nline 2')
     })
+
+    it('returns head and tail with middle omission and retains full log for truncated pwsh output', async () => {
+        const bridge = new FakeNativeBridge()
+        prepareWindowsPwsh(bridge)
+
+        const longLines = Array.from({ length: 40 }, (_, i) => `pwsh_item_${i + 1}`).join('\r\n') + '\r\n'
+        bridge.queueProcess({
+            chunks: [longLines],
+            exitCode: 0,
+            fullOutputPath: 'C:\\temp\\pwsh-trunc.log',
+        })
+
+        const tool = createPwshTool('C:\\repo', bridge, { maxLines: 6, maxBytes: 10_000 })
+        const result = await tool.execute('call-trunc', { command: 'Get-ChildItem' }, toolContext())
+        const text = textOf(result)
+
+        // Head lines present
+        expect(text).toContain('pwsh_item_1')
+        expect(text).toContain('pwsh_item_3')
+        // Middle lines omitted
+        expect(text).not.toContain('pwsh_item_20')
+        // Tail lines present
+        expect(text).toContain('pwsh_item_38')
+        expect(text).toContain('pwsh_item_40')
+        // Middle omission marker and footer with full path
+        expect(text).toContain('truncated')
+        expect(text).toContain('Full output: C:\\temp\\pwsh-trunc.log')
+        expect(text).toContain('[Showing lines')
+        expect((result.details as { fullOutputPath?: string }).fullOutputPath).toBe('C:\\temp\\pwsh-trunc.log')
+        // Preserved without deletion
+        expect(bridge.calls.some((call) => call.method === 'removeFile')).toBe(false)
+    })
+
+    it('does not drop tail when head and tail content strings are identical in pwsh', async () => {
+        const bridge = new FakeNativeBridge()
+        prepareWindowsPwsh(bridge)
+        bridge.queueProcess({
+            chunks: ['READY\r\nitem_1\r\nitem_2\r\nitem_3\r\nREADY\r\n'],
+            exitCode: 0,
+            fullOutputPath: 'C:\\temp\\same-pwsh.log',
+        })
+        const tool = createPwshTool('C:\\repo', bridge, { maxLines: 2, maxBytes: 10_000 })
+        const result = await tool.execute('call-same-pwsh', { command: 'Test-Command' }, toolContext())
+        const text = textOf(result)
+
+        const matches = text.match(/READY/g)
+        expect(matches?.length).toBe(2)
+        expect(text).toContain('truncated')
+        expect(text).toContain('Full output: C:\\temp\\same-pwsh.log')
+    })
 })

@@ -129,7 +129,7 @@ describe('validateBashArgs', () => {
 })
 
 describe('createBashTool', () => {
-    it('keeps the last complete lines and exposes the full output path', async () => {
+    it('preserves head and tail complete lines and exposes the full output path when truncated', async () => {
         const bridge = new FakeNativeBridge()
         prepareUnixBash(bridge)
         bridge.queueProcess({
@@ -141,7 +141,10 @@ describe('createBashTool', () => {
             maxLines: 2,
             maxBytes: 1024,
         }).execute('call', { command: 'test' }, toolContext())
-        expect(textOf(result)).toContain('line2\nline3')
+        const text = textOf(result)
+        expect(text).toContain('line1')
+        expect(text).toContain('line3')
+        expect(text).toContain('1 line truncated')
         expect((result.details as { fullOutputPath?: string }).fullOutputPath).toBe('/tmp/full.log')
         // Truncated output keeps the path (no delete).
         expect(bridge.calls.some((call) => call.method === 'removeFile')).toBe(false)
@@ -279,10 +282,95 @@ describe('createBashTool', () => {
             maxBytes: 1024,
         }).execute('call-trunc', { command: 'seq' }, toolContext())
         const text = textOf(result)
-        expect(text).toContain('line3')
+        expect(text).toContain('line1')
         expect(text).toMatch(/Full output: \/tmp\/trunc\.log/)
         expect((result.details as { truncation?: { truncated?: boolean } }).truncation?.truncated).toBe(
             true,
         )
+    })
+
+    it('returns head and tail with middle omission for large multi-line bash output', async () => {
+        const bridge = new FakeNativeBridge()
+        prepareUnixBash(bridge)
+        const longLines = Array.from({ length: 50 }, (_, i) => `cmd_output_line_${i + 1}`).join('\n') + '\n'
+        bridge.queueProcess({
+            chunks: [longLines],
+            exitCode: 0,
+            fullOutputPath: '/tmp/large-bash.log',
+        })
+        const tool = createBashTool('/repo', bridge, { maxLines: 6, maxBytes: 10_000 })
+        const result = await tool.execute('call-large', { command: 'seq 50' }, toolContext())
+        const text = textOf(result)
+        // Head lines present
+        expect(text).toContain('cmd_output_line_1')
+        expect(text).toContain('cmd_output_line_3')
+        // Middle omitted
+        expect(text).not.toContain('cmd_output_line_25')
+        // Tail lines present
+        expect(text).toContain('cmd_output_line_48')
+        expect(text).toContain('cmd_output_line_50')
+        // Middle marker and footer with fullOutputPath
+        expect(text).toContain('truncated')
+        expect(text).toContain('Full output: /tmp/large-bash.log')
+        expect(text).toContain('[Showing lines')
+        expect((result.details as { fullOutputPath?: string }).fullOutputPath).toBe('/tmp/large-bash.log')
+        expect(bridge.calls.some((call) => call.method === 'removeFile')).toBe(false)
+    })
+
+    it('does not drop tail when head and tail content strings are identical', async () => {
+        const bridge = new FakeNativeBridge()
+        prepareUnixBash(bridge)
+        bridge.queueProcess({
+            chunks: ['STATUS_OK\nmiddle_1\nmiddle_2\nmiddle_3\nSTATUS_OK\n'],
+            exitCode: 0,
+            fullOutputPath: '/tmp/same-content.log',
+        })
+        const tool = createBashTool('/repo', bridge, { maxLines: 2, maxBytes: 10_000 })
+        const result = await tool.execute('call-same', { command: 'check' }, toolContext())
+        const text = textOf(result)
+
+        // Both STATUS_OK occurrences must be present
+        const matches = text.match(/STATUS_OK/g)
+        expect(matches?.length).toBe(2)
+        expect(text).toContain('truncated')
+        expect(text).toContain('Full output: /tmp/same-content.log')
+    })
+
+    it('formats single long line with trailing newline using head and tail footer', async () => {
+        const bridge = new FakeNativeBridge()
+        prepareUnixBash(bridge)
+        const longSingleLine = 'x'.repeat(40) + 'END\n'
+        bridge.queueProcess({
+            chunks: [longSingleLine],
+            exitCode: 0,
+            fullOutputPath: '/tmp/single-newline.log',
+        })
+        const tool = createBashTool('/repo', bridge, { maxLines: 10, maxBytes: 10 })
+        const result = await tool.execute('call-single', { command: 'echo long' }, toolContext())
+        const text = textOf(result)
+
+        expect(text).toContain('END')
+        expect(text).toContain('Showing head and tail of line 1')
+        expect(text).not.toContain('line is 0B')
+        expect(text).toContain('Full output: /tmp/single-newline.log')
+    })
+
+    it('formats single long line with maxLines=1 as showing head of line 1', async () => {
+        const bridge = new FakeNativeBridge()
+        prepareUnixBash(bridge)
+        bridge.queueProcess({
+            chunks: ['abcdefghijklmnop'],
+            exitCode: 0,
+            fullOutputPath: '/tmp/head-only.log',
+        })
+        const tool = createBashTool('/repo', bridge, { maxLines: 1, maxBytes: 10 })
+        const result = await tool.execute('call-head-only', { command: 'echo abc' }, toolContext())
+        const text = textOf(result)
+
+        expect(text).toContain('abcde')
+        expect(text).toContain('Showing head of line 1')
+        expect(text).not.toContain('Showing last')
+        expect(text).not.toContain('line is 16B')
+        expect(text).toContain('Full output: /tmp/head-only.log')
     })
 })

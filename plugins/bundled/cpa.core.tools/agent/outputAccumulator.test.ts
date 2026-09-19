@@ -251,4 +251,106 @@ describe('OutputAccumulator', () => {
         expect(snap.truncation.totalLines).toBe(2)
         expect(acc.getLastLineBytes()).toBe(0)
     })
+
+    it('collects head and tail separately with omitted line count when truncated', () => {
+        const acc = new OutputAccumulator({
+            maxLines: 4,
+            maxBytes: 10_000,
+            fullOutputPath: '/tmp/acc-test.log',
+        })
+        const lines = Array.from({ length: 20 }, (_, i) => `item_${i + 1}\n`).join('')
+        acc.appendStdout(encode(lines))
+        acc.finish()
+
+        const snap = acc.snapshot()
+        expect(snap.truncation.truncated).toBe(true)
+        expect(snap.headContent).toContain('item_1')
+        expect(snap.headContent).toContain('item_2')
+        expect(snap.tailContent).toContain('item_19')
+        expect(snap.tailContent).toContain('item_20')
+        expect(snap.headLines).toBe(2)
+        expect(snap.tailLines).toBe(2)
+        expect(snap.omittedLines).toBe(16)
+        expect(snap.fullOutputPath).toBe('/tmp/acc-test.log')
+    })
+
+    it('does not drop untruncated content when custom tailBytes is small', () => {
+        // maxBytes is 10, custom tailBytes is 2. Total input is 8 bytes (< 10).
+        // It must NOT be trimmed before exceeding total maxBytes.
+        const acc = new OutputAccumulator({
+            maxLines: 100,
+            maxBytes: 10,
+            headBytes: 8,
+            tailBytes: 2,
+        })
+        acc.appendStdout(encode('abcdefgh')) // 8 bytes
+        acc.finish()
+
+        const snap = acc.snapshot()
+        expect(snap.truncation.truncated).toBe(false)
+        expect(snap.content).toBe('abcdefgh')
+        expect(snap.truncation.totalBytes).toBe(8)
+    })
+
+    it('produces identical head content regardless of chunking boundaries', () => {
+        const text = 'abcdefghijklmno'
+        // maxBytes = 10, headBytes = 5
+        const accSingle = new OutputAccumulator({ maxBytes: 10, headBytes: 5, tailBytes: 5 })
+        accSingle.appendStdout(encode(text))
+        accSingle.finish()
+
+        const accChunked = new OutputAccumulator({ maxBytes: 10, headBytes: 5, tailBytes: 5 })
+        accChunked.appendStdout(encode('ab'))
+        accChunked.appendStdout(encode('cdefghijklmno'))
+        accChunked.finish()
+
+        const snapSingle = accSingle.snapshot()
+        const snapChunked = accChunked.snapshot()
+        expect(snapSingle.headContent).toBe('abcde')
+        expect(snapChunked.headContent).toBe(snapSingle.headContent)
+    })
+
+    it('handles zero-side budget without error after rolling trim', () => {
+        // maxLines: 1, maxBytes: 1 -> headLines=1, tailLines=0, headBytes=1, tailBytes=0
+        const acc = new OutputAccumulator({ maxLines: 1, maxBytes: 1 })
+        acc.appendStdout(encode('abcde'))
+        acc.finish()
+
+        expect(() => acc.snapshot()).not.toThrow()
+        const snap = acc.snapshot()
+        expect(snap.truncation.truncated).toBe(true)
+        expect(snap.headLines).toBeLessThanOrEqual(1)
+        expect(snap.tailLines).toBe(0)
+    })
+
+    it('retains tail for long single line ending with newline after rolling trim', () => {
+        // maxBytes: 10, input > maxRollingBytes
+        const acc = new OutputAccumulator({ maxBytes: 10, headBytes: 5, tailBytes: 5 })
+        const longSingleLine = 'H' + 'x'.repeat(40) + 'END\n'
+        acc.appendStdout(encode(longSingleLine))
+        acc.finish()
+
+        const snap = acc.snapshot()
+        expect(snap.truncation.truncated).toBe(true)
+        expect(snap.headContent).toBe('Hxxxx')
+        // Tail content must retain the non-empty suffix ending with END
+        expect(snap.tailContent).toContain('END')
+    })
+
+    it('preserves U+FEFF correctly across chunking boundaries', () => {
+        const text = 'a\uFEFFbc' + 'x'.repeat(30)
+        const accSingle = new OutputAccumulator({ maxBytes: 10, headBytes: 5, tailBytes: 5 })
+        accSingle.appendStdout(encode(text))
+        accSingle.finish()
+
+        const accChunked = new OutputAccumulator({ maxBytes: 10, headBytes: 5, tailBytes: 5 })
+        accChunked.appendStdout(encode('a'))
+        accChunked.appendStdout(encode('\uFEFFbc' + 'x'.repeat(30)))
+        accChunked.finish()
+
+        const snapSingle = accSingle.snapshot()
+        const snapChunked = accChunked.snapshot()
+        expect(snapSingle.headContent).toBe('a\uFEFFb')
+        expect(snapChunked.headContent).toBe(snapSingle.headContent)
+    })
 })
