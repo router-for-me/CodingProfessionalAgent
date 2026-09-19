@@ -714,6 +714,7 @@ async function executeBash(
             executable: shell.shell,
             cwd,
             signal: internal.signal,
+            ...(options.env ? { env: options.env as Record<string, string> } : {}),
             ...(shell.commandTransport === 'stdin'
                 ? {
                       args: shell.args,

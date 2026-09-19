@@ -3,6 +3,7 @@ import * as fsSync from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import type { DirEntry, FileData, FileStat, RuntimeInfo } from '../../shared/types.js'
+import { enrichPath } from './shellEnvironment.js'
 
 export class FileService {
   private isDebug: boolean
@@ -175,7 +176,7 @@ export class FileService {
       }
     }
 
-    const envPath = process.env.PATH || ''
+    const envPath = enrichPath(process.env.PATH || '')
     const pathEntries = envPath.split(path.delimiter).filter(Boolean)
     const isWindows = process.platform === 'win32'
     const pathExts = isWindows

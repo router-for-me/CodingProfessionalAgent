@@ -23,6 +23,10 @@ import { MainPluginActivationCoordinator } from './plugins/runtime/MainPluginAct
 import { rotateNativeImage45 } from './utils/imageRotate.js'
 import { registerWin32AppUserModelId } from './services/notificationBadgeService.js'
 import { getAppVersion } from './utils/version.js'
+import { syncUserShellEnvironment } from './services/shellEnvironment.js'
+
+// Synchronize user shell environment (PATH, toolchains, homebrew, go) on app startup
+syncUserShellEnvironment()
 
 // Prevent unhandled EPIPE errors when stdout/stderr or IPC pipes close abruptly
 process.stdout?.on?.('error', (err: NodeJS.ErrnoException) => {

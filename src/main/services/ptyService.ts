@@ -5,6 +5,7 @@ import * as fsSync from 'node:fs'
 import { createRequire } from 'node:module'
 import type { NativeEvent, PtyStartRequest } from '../../shared/types.js'
 import type { EventEmitter } from './processService.js'
+import { enrichPath } from './shellEnvironment.js'
 
 const require = createRequire(import.meta.url)
 
@@ -72,6 +73,7 @@ export class PtyService {
         cwd: normalizedCwd,
         env: {
           ...(process.env as Record<string, string>),
+          PATH: enrichPath(process.env.PATH || ''),
           TERM: 'xterm-256color',
           COLORTERM: 'truecolor',
         },

@@ -8,6 +8,7 @@ import type {
   ProcessStartRequest,
   ProcessStartResult,
 } from '../../shared/types.js'
+import { enrichPath } from './shellEnvironment.js'
 
 export type EventEmitter = (event: NativeEvent) => void
 
@@ -83,6 +84,10 @@ export class ProcessService {
     const mergedEnv: Record<string, string> = {
       ...(process.env as Record<string, string>),
       ...(env || {}),
+    }
+
+    if (mergedEnv.PATH) {
+      mergedEnv.PATH = enrichPath(mergedEnv.PATH)
     }
 
     let proc: child_process.ChildProcess

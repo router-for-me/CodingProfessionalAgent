@@ -140,4 +140,32 @@ describe('ProcessService', () => {
     expect(result.cancelled).toBe(true)
     expect(result.exitCode).toBe(130)
   })
+
+  it('enriches process PATH so child processes inherit developer toolchain paths', async () => {
+    const originalPath = process.env.PATH
+    try {
+      process.env.PATH = '/usr/bin:/bin'
+      const result = await service.runProcess({
+        operationId: 'op-proc-path-enrich',
+        executable: process.execPath,
+        args: ['-e', 'console.log(process.env.PATH);'],
+        cwd: '',
+        env: null,
+      })
+
+      expect(result.exitCode).toBe(0)
+      const childPath = Buffer.from(result.stdoutBase64, 'base64').toString('utf8')
+      expect(childPath).toContain('/usr/bin')
+      if (process.platform === 'darwin') {
+        expect(
+          childPath.includes('/usr/local/go/bin') ||
+          childPath.includes('/opt/homebrew/bin') ||
+          childPath.includes('/usr/local/bin'),
+        ).toBe(true)
+      }
+      await fs.unlink(result.fullOutputPath).catch(() => {})
+    } finally {
+      process.env.PATH = originalPath
+    }
+  })
 })
