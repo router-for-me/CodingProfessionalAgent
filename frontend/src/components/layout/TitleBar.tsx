@@ -66,9 +66,13 @@ export function TitleBar() {
         <SidebarToggle />
       </TitlebarChrome>
 
-      <div className="flex h-10 items-center gap-1 px-2.5">
+      <div className="flex h-10 items-center gap-1 pl-[18px] pr-2.5">
         <div
-          className="flex min-w-0 flex-1 items-center overflow-hidden text-sm font-semibold text-[var(--text-primary)] select-none"
+          className="flex min-w-0 flex-1 items-center overflow-hidden leading-tight tracking-[-0.025em] text-[var(--text-primary)] select-none"
+          style={{
+            fontSize: 'calc(var(--ui-font-size, 14px) + 2px)',
+            fontWeight: 'var(--font-weight-ui, 600)',
+          }}
           title="Coding Professional Agent"
           aria-label="Coding Professional Agent"
         >
@@ -77,7 +81,7 @@ export function TitleBar() {
               key={segment.letter}
               type="button"
               onClick={() => handleSegmentClick(segment.letter)}
-              className="group inline-flex items-baseline cursor-default border-none bg-transparent p-0 text-inherit font-inherit outline-none focus:outline-none"
+              className="group inline-flex items-baseline cursor-default border-none bg-transparent p-0 text-inherit [font:inherit] [letter-spacing:inherit] outline-none focus:outline-none"
             >
               <span>{segment.letter}</span>
               <span

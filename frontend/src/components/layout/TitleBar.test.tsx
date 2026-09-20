@@ -38,6 +38,24 @@ describe('TitleBar', () => {
     expect(screen.getByText('gent')).toBeInTheDocument()
   })
 
+  it('keeps the brand proportionate to UI typography and aligned with navigation', () => {
+    render(<TitleBar />)
+
+    const brand = screen.getByLabelText('Coding Professional Agent')
+    expect(brand).toHaveStyle({
+      fontSize: 'calc(var(--ui-font-size, 14px) + 2px)',
+      fontWeight: 'var(--font-weight-ui, 600)',
+    })
+    expect(brand).toHaveClass('leading-tight', 'tracking-[-0.025em]')
+    expect(brand.parentElement).toHaveClass('pl-[18px]')
+    for (const letter of ['C', 'P', 'A']) {
+      expect(screen.getByText(letter).closest('button')).toHaveClass(
+        '[font:inherit]',
+        '[letter-spacing:inherit]',
+      )
+    }
+  })
+
   it('has accessible title and action buttons', () => {
     render(<TitleBar />)
 
