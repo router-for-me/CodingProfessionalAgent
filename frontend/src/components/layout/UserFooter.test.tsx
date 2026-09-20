@@ -89,7 +89,7 @@ describe('UserFooter', () => {
     expect(screen.queryByRole('menu')).toBeNull()
   })
 
-  it('renders React Grab and profiling buttons to the left of settings button in dev mode', () => {
+  it('renders settings, profiling, and React Grab from left to right in dev mode', () => {
     render(<UserFooter />)
 
     const reactGrabButton = screen.getByRole('button', {
@@ -104,8 +104,9 @@ describe('UserFooter', () => {
     expect(profileButton).toBeInTheDocument()
     expect(settingsButton).toBeInTheDocument()
 
-    expect(reactGrabButton.nextElementSibling).toBe(profileButton)
-    expect(profileButton.nextElementSibling).toBe(settingsButton)
+    expect(settingsButton.parentElement).toHaveClass('justify-start')
+    expect(settingsButton.nextElementSibling).toBe(profileButton)
+    expect(profileButton.nextElementSibling).toBe(reactGrabButton)
   })
 
   it('does not render profiling and react grab buttons in production mode', () => {

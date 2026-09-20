@@ -243,8 +243,29 @@ function DevControls({ isWeb }: { isWeb?: boolean }) {
     }
   }
 
+  const profilingButton = !isWeb && (
+    <button
+      type="button"
+      aria-label={isProfiling ? t('nav.profilingActive', { seconds: remainingSeconds }) : t('nav.profile')}
+      title={isProfiling ? t('nav.profilingActive', { seconds: remainingSeconds }) : t('nav.profile')}
+      className={cn(
+        'flex h-7 shrink-0 items-center justify-center gap-1 rounded-md px-1.5 text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-sidebar-hover)] hover:text-[var(--text-primary)]',
+        isProfiling && 'bg-red-500/10 text-red-400 hover:bg-red-500/20 hover:text-red-300',
+      )}
+      onClick={handleProfilingClick}
+    >
+      <Activity className={cn('size-3.5', isProfiling && 'animate-pulse text-red-400')} />
+      {isProfiling && (
+        <span className="text-[10px] font-mono font-medium leading-none">
+          {remainingSeconds}s
+        </span>
+      )}
+    </button>
+  )
+
   return (
     <>
+      {profilingButton}
       <button
         type="button"
         aria-label={
@@ -278,39 +299,6 @@ function DevControls({ isWeb }: { isWeb?: boolean }) {
           )}
         />
       </button>
-      {!isWeb && (
-        <button
-          type="button"
-          aria-label={
-            isProfiling
-              ? t('nav.profilingActive', { seconds: remainingSeconds })
-              : t('nav.profile')
-          }
-          title={
-            isProfiling
-              ? t('nav.profilingActive', { seconds: remainingSeconds })
-              : t('nav.profile')
-          }
-          className={cn(
-            'flex h-7 shrink-0 items-center justify-center gap-1 rounded-md px-1.5 text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-sidebar-hover)] hover:text-[var(--text-primary)]',
-            isProfiling &&
-              'bg-red-500/10 text-red-400 hover:bg-red-500/20 hover:text-red-300',
-          )}
-          onClick={handleProfilingClick}
-        >
-          <Activity
-            className={cn(
-              'size-3.5',
-              isProfiling && 'animate-pulse text-red-400',
-            )}
-          />
-          {isProfiling && (
-            <span className="text-[10px] font-mono font-medium leading-none">
-              {remainingSeconds}s
-            </span>
-          )}
-        </button>
-      )}
     </>
   )
 }
@@ -340,8 +328,7 @@ export function UserFooter() {
   return (
     <>
       <ResumePromptBanner />
-      <div className="relative flex shrink-0 items-center justify-end gap-1 border-t border-[var(--border-subtle)] px-2.5 py-2">
-        {isDev && <DevControls isWeb={isWeb} />}
+      <div className="relative flex shrink-0 items-center justify-start gap-1 border-t border-[var(--border-subtle)] px-2.5 py-2">
         <button
           type="button"
           aria-label={t('settings.title')}
@@ -351,6 +338,7 @@ export function UserFooter() {
         >
           <Settings className="size-4" />
         </button>
+        {isDev && <DevControls isWeb={isWeb} />}
       </div>
     </>
   )
