@@ -53,6 +53,8 @@ export type PersistVersion = 1 | 2
 export interface SessionFilePayload {
   id: string
   version: PersistVersion
+  expectedEntriesRevision?: string
+  removedEntryIds?: string[]
   entries: ConversationEntry[]
   title?: string
   subAgents?: SubAgentRecord[]
@@ -180,6 +182,22 @@ export const UI_LAYOUT_KEYS = [
 export const deletedRemoteSessionIds = new Set<string>()
 const loadedSessionIds = new Set<string>()
 const staleSessionIds = new Set<string>()
+const sessionEntriesRevisions = new Map<string, string>()
+const pendingEntryRemovals = new Map<string, Map<string, number>>()
+let entryRemovalSequence = 0
+const sessionReadEpochs = new Map<string, number>()
+const sessionHydrations = new Map<string, { epoch: number; promise: Promise<ConversationEntry[]> }>()
+const sessionWrites = new Map<string, Promise<void>>()
+const sessionWriteEpochs = new Map<string, number>()
+const persistingSessionIds = new Set<string>()
+const historyConflicts = new Map<string, { payload: SessionFilePayload; toastId: string }>()
+const historyRecoveries = new Map<string, Promise<void>>()
+
+export function hasUnsavedSessionHistory(sessionId: string): boolean {
+    return dirtySessionIds.has(sessionId) || persistingSessionIds.has(sessionId) ||
+        sessionWrites.has(sessionId) || historyConflicts.has(sessionId) ||
+        historyRecoveries.has(sessionId) || Boolean(pendingEntryRemovals.get(sessionId)?.size)
+}
 let reloadDepth = 0
 
 export function withSuppressedPersistence<T>(fn: () => T): T {
@@ -201,11 +219,20 @@ export function withSuppressedPersistence<T>(fn: () => T): T {
 
 export function markRemoteSessionDeleted(sessionId: string): void {
   deletedRemoteSessionIds.add(sessionId)
+  sessionWriteEpochs.set(sessionId, (sessionWriteEpochs.get(sessionId) ?? 0) + 1)
+  invalidateSessionDiskCache(sessionId)
+  dirtySessionIds.delete(sessionId)
+  const conflict = historyConflicts.get(sessionId)
+  if (conflict) useUiStore.getState().dismissToast(conflict.toastId)
+  historyConflicts.delete(sessionId)
+  pendingEntryRemovals.delete(sessionId)
+  sessionEntriesRevisions.delete(sessionId)
 }
 
 export function invalidateSessionDiskCache(sessionId: string): void {
   loadedSessionIds.delete(sessionId)
   staleSessionIds.add(sessionId)
+  sessionReadEpochs.set(sessionId, (sessionReadEpochs.get(sessionId) ?? 0) + 1)
 }
 
 onRemoteSessionDelete((sessionId) => {
@@ -213,8 +240,16 @@ onRemoteSessionDelete((sessionId) => {
 })
 
 subscribeMessageEvents((event) => {
-  if (event.type === 'session-evicted') {
+  if ((event.type === 'session-evicted' || event.type === 'session-cleared') && !hasUnsavedSessionHistory(event.sessionId)) {
     loadedSessionIds.delete(event.sessionId)
+    sessionEntriesRevisions.delete(event.sessionId)
+    pendingEntryRemovals.delete(event.sessionId)
+    sessionReadEpochs.set(event.sessionId, (sessionReadEpochs.get(event.sessionId) ?? 0) + 1)
+  }
+  if (event.type === 'entries-updated' && reloadDepth === 0 && event.removedEntryIds?.length) {
+    const removed = pendingEntryRemovals.get(event.sessionId) ?? new Map<string, number>()
+    for (const id of event.removedEntryIds) removed.set(id, ++entryRemovalSequence)
+    pendingEntryRemovals.set(event.sessionId, removed)
   }
 })
 
@@ -1444,6 +1479,7 @@ function syncLoadedWorktreeSetup(
 export async function loadSessionData(
   sessionId: string,
 ): Promise<{
+  entriesRevision?: string
   entries: ConversationEntry[]
   subAgents?: SubAgentRecord[]
   modelId?: string
@@ -1459,13 +1495,27 @@ export async function loadSessionData(
   const bridge = getHostBridge()
   if (bridge?.SessionGet) {
     try {
+      const baseline = sessionEntriesRevisions.get(sessionId)
+      const epoch = sessionReadEpochs.get(sessionId)
       const data = await bridge.SessionGet(sessionId)
       if (data) {
+        const revision = (data as { entriesRevision?: unknown }).entriesRevision
+        const hasLiveEntries = useMessageStore.getState().entriesBySession[sessionId] !== undefined
+        // A merge must not silently authorize old live entries against a newer remote history.
+        const canReplaceBaseline = baseline === undefined || (!hasLiveEntries && !hasUnsavedSessionHistory(sessionId))
+        if (typeof revision === 'string' &&
+          sessionReadEpochs.get(sessionId) === epoch &&
+          sessionEntriesRevisions.get(sessionId) === baseline && canReplaceBaseline) {
+          sessionEntriesRevisions.set(sessionId, revision)
+        }
         const parsed = parseSessionFilePayload(sessionId, data)
         if (parsed) {
           syncLoadedWorktreeSetup(sessionId, parsed)
         }
-        return parsed
+        return parsed && {
+          ...parsed,
+          ...(typeof revision === 'string' ? { entriesRevision: revision } : {}),
+        }
       }
       return null
     } catch {
@@ -1505,6 +1555,26 @@ export async function saveSessionData(
   subAgents?: SubAgentRecord[],
 ): Promise<void> {
   if (!sessionId) return
+  if (deletedRemoteSessionIds.has(sessionId)) return
+  const epoch = sessionWriteEpochs.get(sessionId) ?? 0
+  const previous = sessionWrites.get(sessionId)
+  const write = (previous ?? Promise.resolve()).catch(() => {}).then(() => {
+    if (deletedRemoteSessionIds.has(sessionId) || (sessionWriteEpochs.get(sessionId) ?? 0) !== epoch) return
+    return writeSessionData(sessionId, entries, subAgents)
+  })
+  sessionWrites.set(sessionId, write)
+  try {
+    await write
+  } finally {
+    if (sessionWrites.get(sessionId) === write) sessionWrites.delete(sessionId)
+  }
+}
+
+async function writeSessionData(
+  sessionId: string,
+  entries: ConversationEntry[],
+  subAgents?: SubAgentRecord[],
+): Promise<void> {
   const sanitized =
     sanitizeConversationEntries({ [sessionId]: entries })[sessionId] ?? []
   const sessionAgents =
@@ -1542,10 +1612,15 @@ export async function saveSessionData(
     useWorktreeSetupStore.getState().getSetup(sessionId) ??
     session?.worktreeSetup
 
+  const retainedIds = new Set(sanitized.map((entry) => entry.id))
+  const removals = new Map(Array.from(pendingEntryRemovals.get(sessionId) ?? [])
+    .filter(([id]) => !retainedIds.has(id)))
   const payload: SessionFilePayload = {
     id: sessionId,
     version: CURRENT_VERSION,
     entries: sanitized,
+    expectedEntriesRevision: sessionEntriesRevisions.get(sessionId),
+    removedEntryIds: Array.from(removals.keys()),
     ...(session?.title ? { title: session.title } : {}),
     ...(session?.pinned !== undefined ? { pinned: session.pinned } : {}),
     unread: session?.unread ?? false,
@@ -1573,12 +1648,38 @@ export async function saveSessionData(
 
   const bridge = getHostBridge()
   if (bridge?.SessionSet) {
-    try {
-      await bridge.SessionSet(sessionId, payload)
-      return
-    } catch {
-      // Fall through to localStorage
+    // Freeze conflicting writes until the user preserves a copy and explicitly recovers.
+    const conflict = historyConflicts.get(sessionId)
+    if (conflict) {
+      conflict.payload = payload
+      throw new Error('SESSION_HISTORY_CONFLICT: Preserve a local copy and reload to recover')
     }
+    let revision: string
+    try {
+      revision = await bridge.SessionSet(sessionId, payload)
+    } catch (error) {
+      if (String(error).includes('SESSION_DELETED')) markRemoteSessionDeleted(sessionId)
+      if (String(error).includes('SESSION_HISTORY_CONFLICT') && !deletedRemoteSessionIds.has(sessionId)) {
+        const toastId = useUiStore.getState().pushToast(
+          `History conflict in "${payload.title || sessionId}". Stop this session, then preserve a local copy and reload.`,
+          { label: 'Preserve & reload', run: () => {
+            void recoverSessionHistory(sessionId).catch((recoveryError) => {
+              useUiStore.getState().pushToast(String(recoveryError))
+            })
+          } },
+        )
+        historyConflicts.set(sessionId, { payload, toastId })
+      }
+      throw error
+    }
+    if (deletedRemoteSessionIds.has(sessionId)) return
+    sessionEntriesRevisions.set(sessionId, revision)
+    sessionReadEpochs.set(sessionId, (sessionReadEpochs.get(sessionId) ?? 0) + 1)
+    const removed = pendingEntryRemovals.get(sessionId)
+    for (const [id, sequence] of removals) {
+      if (removed?.get(id) === sequence) removed.delete(id)
+    }
+    return
   }
 
   if (typeof localStorage !== 'undefined') {
@@ -1590,6 +1691,73 @@ export async function saveSessionData(
   }
 }
 
+/** Preserve the complete local history before adopting a fresh remote baseline. */
+export function recoverSessionHistory(sessionId: string): Promise<void> {
+    const pending = historyRecoveries.get(sessionId)
+    if (pending) return pending
+    if (!historyConflicts.has(sessionId)) return Promise.resolve()
+    const recovery = (async () => {
+        if (isSessionRunning(sessionId)) throw new Error('Stop the session before recovering history.')
+        // Drain failed queued snapshots before choosing the copy; invalidate leftovers only on recovery commit.
+        await sessionWrites.get(sessionId)?.catch(() => {})
+        const conflict = historyConflicts.get(sessionId)
+        const bridge = getHostBridge()
+        if (!conflict) return
+        if (!bridge?.SessionSet || !bridge.SessionGet) throw new Error('Session storage is unavailable; try recovery again later.')
+        if (deletedRemoteSessionIds.has(sessionId)) throw new Error('Session was deleted.')
+        const conflictPayload = conflict.payload
+        const live = useMessageStore.getState().entriesBySession[sessionId]
+        const localEntries = live ?? conflict.payload.entries
+        const localRemovals = new Map(pendingEntryRemovals.get(sessionId))
+        const copyId = createId()
+        const title = `${conflict.payload.title || 'Chat'} (History conflict copy)`
+        const copyEntries = localEntries.map((entry) => ({ ...entry, id: createId(), sessionId: copyId }))
+        // Child sessions retain their original identities; never duplicate their global IDs.
+        const copyRevision = await bridge.SessionSet(copyId, {
+            ...conflict.payload, id: copyId, title, pinned: false, entries: copyEntries,
+            expectedEntriesRevision: undefined, removedEntryIds: [],
+            subAgents: [], parentSessionId: undefined, isSubagent: false,
+        })
+        withSuppressedPersistence(() => {
+            useSessionStore.getState().upsertRemoteSession({
+                id: copyId, title, pinned: false, projectId: conflict.payload.projectId ?? undefined,
+                createdAt: Date.now(), updatedAt: Date.now(),
+            })
+            useMessageStore.getState().replaceSessionEntries(copyId, copyEntries)
+        })
+        sessionEntriesRevisions.set(copyId, copyRevision)
+        const remote = await loadSessionData(sessionId)
+        if (!remote?.entriesRevision) throw new Error('Remote history unavailable. Local conflict copy was preserved.')
+        const removals = pendingEntryRemovals.get(sessionId)
+        if (conflict.payload !== conflictPayload || deletedRemoteSessionIds.has(sessionId) || isSessionRunning(sessionId) ||
+            useMessageStore.getState().entriesBySession[sessionId] !== live ||
+            localRemovals.size !== (removals?.size ?? 0) ||
+            [...localRemovals].some(([id, sequence]) => removals?.get(id) !== sequence)) {
+            throw new Error('Session changed during recovery. Local copy preserved; stop editing and try again.')
+        }
+        // No local changes are discarded until their independent copy is durably committed.
+        withSuppressedPersistence(() => {
+            useMessageStore.getState().replaceSessionEntries(sessionId, remote.entries)
+            useSubAgentStore.getState().setAgentsForParent(sessionId, remote.subAgents ?? [])
+        })
+        sessionEntriesRevisions.set(sessionId, remote.entriesRevision)
+        pendingEntryRemovals.delete(sessionId)
+        dirtySessionIds.delete(sessionId)
+        historyConflicts.delete(sessionId)
+        sessionWriteEpochs.set(sessionId, (sessionWriteEpochs.get(sessionId) ?? 0) + 1)
+        invalidateSessionDiskCache(sessionId)
+        loadedSessionIds.add(sessionId)
+        staleSessionIds.delete(sessionId)
+        useUiStore.getState().dismissToast(conflict.toastId)
+        useUiStore.getState().pushToast(`Local history preserved in "${title}". Remote history reloaded.`)
+    })()
+    historyRecoveries.set(sessionId, recovery)
+    void recovery.finally(() => {
+        if (historyRecoveries.get(sessionId) === recovery) historyRecoveries.delete(sessionId)
+    }).catch(() => {})
+    return recovery
+}
+
 export async function saveSessionEntries(
   sessionId: string,
   entries: ConversationEntry[],
@@ -1599,6 +1767,7 @@ export async function saveSessionEntries(
 
 export async function deleteSessionLocalCache(sessionId: string): Promise<void> {
   if (!sessionId) return
+  markRemoteSessionDeleted(sessionId)
   return withSuppressedPersistence(async () => {
     loadedSessionIds.delete(sessionId)
     staleSessionIds.delete(sessionId)
@@ -1610,6 +1779,7 @@ export async function deleteSessionLocalCache(sessionId: string): Promise<void> 
     for (const child of memoryChildAgents) {
       const childSessionId = child.sessionId || child.id
       if (childSessionId && childSessionId !== sessionId) {
+        markRemoteSessionDeleted(childSessionId)
         loadedSessionIds.delete(childSessionId)
         staleSessionIds.delete(childSessionId)
         useMessageStore.getState().removeSessionMessages(childSessionId)
@@ -1638,6 +1808,9 @@ export async function deleteSessionLocalCache(sessionId: string): Promise<void> 
 
 export async function deleteSessionEntries(sessionId: string): Promise<void> {
   if (!sessionId) return
+  markRemoteSessionDeleted(sessionId)
+  const pendingWrite = sessionWrites.get(sessionId)
+  if (pendingWrite) await pendingWrite.catch(() => {})
   loadedSessionIds.delete(sessionId)
   staleSessionIds.delete(sessionId)
 
@@ -1668,6 +1841,9 @@ export async function deleteSessionEntries(sessionId: string): Promise<void> {
 
   // 4. Cascade delete all child sessions
   for (const childSessionId of allChildSessionIds) {
+    markRemoteSessionDeleted(childSessionId)
+    const pendingChildWrite = sessionWrites.get(childSessionId)
+    if (pendingChildWrite) await pendingChildWrite.catch(() => {})
     loadedSessionIds.delete(childSessionId)
     staleSessionIds.delete(childSessionId)
     useMessageStore.getState().removeSessionMessages(childSessionId)
@@ -1711,112 +1887,82 @@ export async function deleteSessionEntries(sessionId: string): Promise<void> {
   }
 }
 
+function isSessionRunning(sessionId: string): boolean {
+  const run = useSessionRunStore.getState().activeRuns[sessionId]
+  return Boolean(run && run.status !== 'idle')
+}
+
+function hydrateSessionFromDisk(
+  sessionId: string,
+  replaceIdle: boolean,
+): Promise<ConversationEntry[]> {
+  if (!sessionId) return Promise.resolve([])
+  const epoch = sessionReadEpochs.get(sessionId) ?? 0
+  const pending = sessionHydrations.get(sessionId)
+  if (pending?.epoch === epoch) return pending.promise
+  const initialEntries = useMessageStore.getState().entriesBySession[sessionId]
+  const initiallyUnsaved = hasUnsavedSessionHistory(sessionId)
+  const promise = (async () => {
+    const loaded = await loadSessionData(sessionId)
+    const live = useMessageStore.getState().getEntries(sessionId)
+    if (deletedRemoteSessionIds.has(sessionId) || (sessionReadEpochs.get(sessionId) ?? 0) !== epoch) return live
+    if (!loaded) return live
+
+    const changed = useMessageStore.getState().entriesBySession[sessionId] !== initialEntries
+    const mergeLive = !replaceIdle || changed || isSessionRunning(sessionId) ||
+      initiallyUnsaved || hasUnsavedSessionHistory(sessionId)
+    const removed = pendingEntryRemovals.get(sessionId)
+    const diskEntries = loaded.entries.filter((entry) => !removed?.has(entry.id))
+    const liveIds = new Set(live.map((entry) => entry.id))
+    const entries = mergeLive && live.length > 0
+      ? [...diskEntries.filter((entry) => !liveIds.has(entry.id)), ...live]
+        .sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))
+      : diskEntries
+
+    // Suppress only our synchronous hydration, not live events arriving during I/O.
+    withSuppressedPersistence(() => {
+      useMessageStore.getState().replaceSessionEntries(sessionId, entries)
+      if (mergeLive) {
+        if (loaded.subAgents) useSubAgentStore.getState().mergeAgentsForParent(sessionId, loaded.subAgents)
+      } else {
+        useSubAgentStore.getState().setAgentsForParent(sessionId, loaded.subAgents ?? [])
+      }
+    })
+    if (!mergeLive && loaded.entriesRevision) {
+      sessionEntriesRevisions.set(sessionId, loaded.entriesRevision)
+    }
+    loadedSessionIds.add(sessionId)
+    staleSessionIds.delete(sessionId)
+    return entries
+  })()
+  sessionHydrations.set(sessionId, { epoch, promise })
+  void promise.finally(() => {
+    if (sessionHydrations.get(sessionId)?.promise === promise) sessionHydrations.delete(sessionId)
+  }).catch(() => {})
+  return promise
+}
+
 export async function reloadSessionFromDisk(
   sessionId: string,
 ): Promise<ConversationEntry[]> {
-  if (!sessionId) return []
-  return withSuppressedPersistence(async () => {
-    const loaded = await loadSessionData(sessionId)
-    loadedSessionIds.add(sessionId)
-    staleSessionIds.delete(sessionId)
-
-    if (loaded) {
-      useMessageStore.getState().replaceSessionEntries(sessionId, loaded.entries)
-      if (loaded.subAgents) {
-        useSubAgentStore
-          .getState()
-          .setAgentsForParent(sessionId, loaded.subAgents)
-      }
-      return loaded.entries ?? []
-    }
-
-    return []
-  })
+  return hydrateSessionFromDisk(sessionId, true)
 }
 
 export async function hydrateEmptySessionFromDisk(
   sessionId: string,
 ): Promise<ConversationEntry[]> {
-  if (!sessionId) return []
-  const loaded = await loadSessionData(sessionId)
-  loadedSessionIds.add(sessionId)
-  staleSessionIds.delete(sessionId)
-
-  const live = useMessageStore.getState().getEntries(sessionId)
-  if (live.length === 0) {
-    withSuppressedPersistence(() => {
-      useMessageStore.getState().replaceSessionEntries(sessionId, loaded?.entries ?? [])
-      if (loaded?.subAgents) {
-        useSubAgentStore.getState().setAgentsForParent(sessionId, loaded.subAgents)
-      }
-    })
-    return loaded?.entries ?? []
-  }
-
-  const liveIds = new Set(live.map((e) => e.id))
-  const missing = (loaded?.entries ?? []).filter((e) => !liveIds.has(e.id))
-  if (missing.length > 0) {
-    const merged = [...missing, ...live].sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))
-    withSuppressedPersistence(() => {
-      useMessageStore.getState().replaceSessionEntries(sessionId, merged)
-    })
-  }
-  if (loaded?.subAgents) {
-    withSuppressedPersistence(() => {
-      useSubAgentStore.getState().mergeAgentsForParent(sessionId, loaded.subAgents!)
-    })
-  }
-  return useMessageStore.getState().getEntries(sessionId)
+  return hydrateSessionFromDisk(sessionId, false)
 }
 
 export async function ensureSessionLoaded(
   sessionId: string,
 ): Promise<ConversationEntry[]> {
   if (!sessionId) return []
-  const isRunning =
-    useSessionRunStore.getState().activeRuns[sessionId]?.status !== undefined &&
-    useSessionRunStore.getState().activeRuns[sessionId]?.status !== 'idle'
-  if (isRunning) {
-    return hydrateEmptySessionFromDisk(sessionId)
-  }
-  if (staleSessionIds.has(sessionId)) {
-    staleSessionIds.delete(sessionId)
-    return reloadSessionFromDisk(sessionId)
-  }
-  if (loadedSessionIds.has(sessionId)) {
+  if (!staleSessionIds.has(sessionId) && loadedSessionIds.has(sessionId)) {
     const inMem = useMessageStore.getState().getEntries(sessionId)
-    if (inMem && inMem.length > 0) {
-      return inMem
-    }
+    if (inMem.length > 0) return inMem
   }
-
-  const loaded = await loadSessionData(sessionId)
-  loadedSessionIds.add(sessionId)
-  staleSessionIds.delete(sessionId)
-
-  const inMemoryEntries =
-    useMessageStore.getState().getEntries(sessionId)
-
-  if (loaded) {
-    // If entries are not already in memory (re-read after await), populate from disk
-    if (
-      (!inMemoryEntries || inMemoryEntries.length === 0) &&
-      loaded.entries &&
-      loaded.entries.length > 0
-    ) {
-      useMessageStore.getState().replaceSessionEntries(sessionId, loaded.entries)
-    }
-    if (loaded.subAgents && loaded.subAgents.length > 0) {
-      useSubAgentStore
-        .getState()
-        .mergeAgentsForParent(sessionId, loaded.subAgents)
-    }
-    return inMemoryEntries && inMemoryEntries.length > 0
-      ? inMemoryEntries
-      : loaded.entries
-  }
-
-  return inMemoryEntries ?? []
+  return hydrateSessionFromDisk(sessionId, staleSessionIds.has(sessionId) && !isSessionRunning(sessionId))
 }
 
 function loadFromLocalStorage(): PersistedAppState | null {
@@ -2238,6 +2384,8 @@ export async function savePersistedState(
         ),
       )
 
+      const historyErrors: unknown[] = []
+      const captureHistoryError = (error: unknown) => { historyErrors.push(error) }
       // 1. Save only changed in-memory session files when a scope is provided.
       await Promise.all(
         Array.from(activeMemorySessionIds)
@@ -2246,7 +2394,7 @@ export async function savePersistedState(
             saveSessionData(
               sessionId,
               state.messagesBySession[sessionId] ?? [],
-            ),
+            ).catch(captureHistoryError),
           ),
       )
 
@@ -2283,7 +2431,7 @@ export async function savePersistedState(
             const mergedAgentsMap = new Map<string, SubAgentRecord>()
             for (const a of diskAgents) mergedAgentsMap.set(a.id, a)
             for (const a of storeAgents) mergedAgentsMap.set(a.id, a)
-            await saveSessionData(parentId, entries, Array.from(mergedAgentsMap.values()))
+            await saveSessionData(parentId, entries, Array.from(mergedAgentsMap.values())).catch(captureHistoryError)
           }),
       )
 
@@ -2356,10 +2504,12 @@ export async function savePersistedState(
         delete (stateToSave as unknown as Record<string, unknown>)[key]
       }
       await store.Set(STORE_KEY, stateToSave)
+      if (historyErrors.length) throw historyErrors[0]
 
       succeeded = true
       return
     } catch (error) {
+      if (typeof getHostBridge()?.SessionSet === 'function') throw error
       errors.push(error)
     }
   }
@@ -2449,6 +2599,7 @@ async function runPersistWrite(): Promise<void> {
   const sessionIdsAtStart = new Set(dirtySessionIds)
   for (const sessionId of sessionIdsAtStart) {
     dirtySessionIds.delete(sessionId)
+    persistingSessionIds.add(sessionId)
   }
   try {
     // Always snapshot at write time so retries use the latest state.
@@ -2462,7 +2613,7 @@ async function runPersistWrite(): Promise<void> {
   } catch (error) {
     writeError = error
     for (const sessionId of sessionIdsAtStart) {
-      dirtySessionIds.add(sessionId)
+      if (!deletedRemoteSessionIds.has(sessionId)) dirtySessionIds.add(sessionId)
     }
     lastWriteError =
       error instanceof Error ? error.message : 'persist write failed'
@@ -2472,7 +2623,7 @@ async function runPersistWrite(): Promise<void> {
       // Diagnostic hooks must never break persistence.
     }
     // Bounded retry with injectable delays; never a permanent timer loop.
-    if (attempt < maxRetryAttempts && !disposed) {
+    if (attempt < maxRetryAttempts && !disposed && !String(error).includes('SESSION_HISTORY_CONFLICT')) {
       clearRetryTimer()
       const delay = delayForRetryAttempt(attempt)
       const epoch = retryEpoch + 1
@@ -2488,6 +2639,7 @@ async function runPersistWrite(): Promise<void> {
       clearRetryTimer()
     }
   } finally {
+    for (const sessionId of sessionIdsAtStart) persistingSessionIds.delete(sessionId)
     writeInFlight = false
     // Generation loop: state changed during the write → rewrite immediately.
     if (!disposed && dirtyGeneration !== generationAtStart) {
@@ -2807,7 +2959,6 @@ export function bindPersistence(options?: BindPersistenceOptions): void {
       for (const id of previousSessionIds) {
         if (!currentIds.has(id)) {
           if (deletedRemoteSessionIds.has(id)) {
-            deletedRemoteSessionIds.delete(id)
             void deleteSessionLocalCache(id)
           } else {
             void deleteSessionEntries(id)
@@ -3011,6 +3162,16 @@ export function __resetPersistenceForTests(): void {
   reloadDepth = 0
   loadedSessionIds.clear()
   staleSessionIds.clear()
+  sessionEntriesRevisions.clear()
+  pendingEntryRemovals.clear()
+  entryRemovalSequence = 0
+  sessionReadEpochs.clear()
+  sessionHydrations.clear()
+  sessionWrites.clear()
+  sessionWriteEpochs.clear()
+  persistingSessionIds.clear()
+  historyConflicts.clear()
+  historyRecoveries.clear()
   deletedRemoteSessionIds.clear()
 }
 

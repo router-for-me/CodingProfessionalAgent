@@ -10,12 +10,15 @@ describe('KVStoreService', () => {
   let storeFile: string
 
   beforeEach(async () => {
+    // This suite injects its own home provider when testing the default-path fallback.
+    vi.stubEnv('CPA_HOME', undefined)
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cpa-kv-test-'))
     storeFile = path.join(tempDir, 'settings.json')
     service = new KVStoreService(storeFile)
   })
 
   afterEach(async () => {
+    vi.unstubAllEnvs()
     try {
       await fs.rm(tempDir, { recursive: true, force: true })
     } catch {

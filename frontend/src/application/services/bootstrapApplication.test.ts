@@ -3,7 +3,7 @@ import { rendererRegistry } from '@/plugins/platform/rendererRegistry'
 import { rendererPluginRuntime } from '@/plugins/platform/RendererPluginRuntimeHost'
 import { bootstrapApplication, resyncFromMain } from './bootstrapApplication'
 import { setHostBridge } from './hostTransport'
-import { __resetPersistenceForTests } from './persistenceService'
+import { __resetPersistenceForTests, withSuppressedPersistence } from './persistenceService'
 import { useSessionRunStore } from '@/stores/sessionRunStore'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useMessageStore } from '@/stores/messageStore'
@@ -52,6 +52,40 @@ describe('bootstrapApplication', () => {
         expect(rendererRegistry.getSlotContributions('layout.right_panel.content')).toHaveLength(1)
         expect(rendererRegistry.getSettingsSections()).toHaveLength(15)
         expect(rendererRegistry.getSettingsSections().some((s) => s.id === 'subagents')).toBe(true)
+    })
+
+    it('keeps background active runs ending in a tool result out of LRU eviction', async () => {
+        setHostBridge({
+            StorageGet: vi.fn().mockResolvedValue(null),
+            StorageSet: vi.fn().mockResolvedValue(undefined),
+            PluginsScan: vi.fn().mockResolvedValue([]),
+        } as any)
+        await bootstrapApplication()
+        const previousMessages = useMessageStore.getState()
+        const previousRuns = useSessionRunStore.getState().activeRuns
+        const previousCurrent = useSessionStore.getState().currentSessionId
+        try {
+            useMessageStore.setState({ entriesBySession: {}, maxCachedSessions: 2 })
+            useSessionStore.setState({ currentSessionId: 'foreground' })
+            useSessionRunStore.getState().setRun('background', {
+                sessionId: 'background', runId: 'run', clientId: 'desktop', status: 'running', updatedAt: 1,
+            })
+            useMessageStore.getState().appendEntry({
+                id: 'tool-result', sessionId: 'background', kind: 'toolResult', version: 1,
+                createdAt: 1, toolCallId: 'call', toolName: 'bash', content: [], isError: false,
+            } as any)
+            for (const sessionId of ['idle', 'new']) {
+                withSuppressedPersistence(() => useMessageStore.getState().appendEntry({
+                    id: sessionId, sessionId, kind: 'user', version: 1, createdAt: 2, content: [],
+                }))
+            }
+            expect(useMessageStore.getState().entriesBySession.background).toHaveLength(1)
+            expect(useMessageStore.getState().entriesBySession.idle).toBeUndefined()
+        } finally {
+            useMessageStore.setState({ entriesBySession: previousMessages.entriesBySession, maxCachedSessions: previousMessages.maxCachedSessions })
+            useSessionRunStore.setState({ activeRuns: previousRuns })
+            useSessionStore.setState({ currentSessionId: previousCurrent })
+        }
     })
 
     it('scans and activates external catalog packages during startup', async () => {

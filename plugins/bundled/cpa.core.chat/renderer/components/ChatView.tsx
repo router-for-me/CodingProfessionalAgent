@@ -102,7 +102,7 @@ export function ChatView(props: ChatViewProps) {
             chatService.replaceSessionEntries(targetSessionId, [
                 ...entries.slice(0, lastUserIndex),
                 restartedUser,
-            ])
+            ], { historyMutation: 'truncate' })
             return restartedUser
         },
         [chatService],

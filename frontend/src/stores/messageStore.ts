@@ -93,6 +93,7 @@ interface MessageState {
   replaceSessionEntries: (
     sessionId: string,
     entries: readonly ConversationEntry[],
+    options?: { historyMutation: 'truncate' },
   ) => void
   removeSessionMessages: (sessionId: string) => void
   hydrate: (rawBySession: Record<string, unknown>) => void
@@ -565,11 +566,13 @@ export const useMessageStore = create<MessageState>((set, get) => ({
   },
 
   removeEntry: (sessionId, entryId) => {
+    let removed = false
     set((state) => {
       const list = ownSessionEntries(state.entriesBySession, sessionId)
       if (!list) return state
       const next = list.filter((entry) => entry.id !== entryId)
       if (next.length === list.length) return state
+      removed = true
       return setSessionEntries(state, sessionId, next)
     })
     const entries = ownSessionEntries(get().entriesBySession, sessionId)
@@ -577,6 +580,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       type: 'entries-updated',
       sessionId,
       entries: entries ?? [],
+      removedEntryIds: removed ? [entryId] : [],
     })
   },
 
@@ -598,19 +602,24 @@ export const useMessageStore = create<MessageState>((set, get) => ({
     return []
   },
 
-  replaceSessionEntries: (sessionId, entries) => {
+  replaceSessionEntries: (sessionId, entries, options) => {
     let evicted: string[] = []
+    let removedEntryIds: string[] = []
     set((state) => {
       const existing = ownSessionEntries(state.entriesBySession, sessionId)
       if (areEntriesEqual(existing, entries)) {
         touchSessionAccess(sessionId)
         return state
       }
+      const nextIds = new Set(entries.map((entry) => entry.id))
+      if (options?.historyMutation === 'truncate') {
+        removedEntryIds = (existing ?? []).filter((entry) => !nextIds.has(entry.id)).map((entry) => entry.id)
+      }
       const res = setSessionEntriesWithLru(state, sessionId, cloneEntries(entries))
       evicted = res.evictedSessionIds
       return res.nextState
     })
-    emitMessageEvent({ type: 'entries-updated', sessionId, entries })
+    emitMessageEvent({ type: 'entries-updated', sessionId, entries, removedEntryIds })
     for (const evictedId of evicted) {
       emitMessageEvent({ type: 'session-evicted', sessionId: evictedId })
     }

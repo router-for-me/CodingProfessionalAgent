@@ -76,6 +76,7 @@ function syncWidth(width: number): void {
 export interface ToastItem {
   id: string
   message: string
+  action?: { label: string; run: () => void }
 }
 
 export interface PendingSessionContext {
@@ -139,7 +140,7 @@ interface UiState {
   setComposerDraft: (draft: string) => void
   setComposerDraftForSession: (sessionId: string | null, draft: string) => void
   setPendingSessionContext: (context: PendingSessionContext) => void
-  pushToast: (message: string) => string
+  pushToast: (message: string, action?: ToastItem['action']) => string
   dismissToast: (id: string) => void
   hydrate: (data: {
     collapsedGroups?: Record<string, boolean>
@@ -396,10 +397,10 @@ export const useUiStore = create<UiState>((set, get) => ({
   setPendingSessionContext: (pendingSessionContext) =>
     set({ pendingSessionContext }),
 
-  pushToast: (message) => {
+  pushToast: (message, action) => {
     const id = createId()
     set((state) => ({
-      toasts: [...state.toasts, { id, message }],
+      toasts: [...state.toasts, { id, message, action }],
     }))
     return id
   },

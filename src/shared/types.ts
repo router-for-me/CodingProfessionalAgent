@@ -641,7 +641,7 @@ export interface ElectronBridgeApi {
 
   // Sessions
   SessionGet(sessionId: string): Promise<unknown>
-  SessionSet(sessionId: string, data: unknown): Promise<void>
+  SessionSet(sessionId: string, data: unknown): Promise<string>
   SessionDelete(sessionId: string): Promise<void>
   SessionList(): Promise<string[]>
   SessionListSessions(): Promise<SessionItem[]>

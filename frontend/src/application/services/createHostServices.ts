@@ -1857,8 +1857,8 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
         getEntries(sessionId: string): readonly any[] {
             return useMessageStore.getState().getEntries(sessionId)
         },
-        replaceSessionEntries(sessionId: string, entries: readonly any[]): void {
-            useMessageStore.getState().replaceSessionEntries(sessionId, entries as any)
+        replaceSessionEntries(sessionId: string, entries: readonly any[], options?: { historyMutation: 'truncate' }): void {
+            useMessageStore.getState().replaceSessionEntries(sessionId, entries as any, options)
         },
         subscribeMessages(sessionId: string, listener: () => void): () => void {
             const releaseSession = retainMessageSession(sessionId)

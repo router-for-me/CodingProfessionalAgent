@@ -27,6 +27,7 @@ export class SessionService {
   ): Promise<{
     id: string
     version: number
+    entriesRevision: string
     entries: any[]
     subAgents?: any[]
     workLocation?: 'local' | 'worktree'
@@ -37,7 +38,7 @@ export class SessionService {
     return this.dbService.get(sessionId)
   }
 
-  async set(sessionId: string, data: unknown): Promise<void> {
+  async set(sessionId: string, data: unknown): Promise<string> {
     return this.dbService.set(sessionId, data)
   }
 

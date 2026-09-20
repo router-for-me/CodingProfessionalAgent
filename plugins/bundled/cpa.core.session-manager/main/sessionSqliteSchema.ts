@@ -67,6 +67,12 @@ export interface PluginStorageRow {
 }
 
 export const SESSIONS_TABLE_SQL = `
+-- Session IDs are never reused. Tombstones reject delayed writes across restarts and clients.
+CREATE TABLE IF NOT EXISTS session_tombstones (
+    id TEXT PRIMARY KEY,
+    deleted_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     project_id TEXT,

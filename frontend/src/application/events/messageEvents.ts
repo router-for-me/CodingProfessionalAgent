@@ -6,6 +6,7 @@ export type MessageApplicationEvent =
       type: 'entries-updated'
       sessionId: string
       entries: readonly ConversationEntry[]
+      removedEntryIds?: readonly string[]
       skipExpensiveProjections?: boolean
     }
   | {

@@ -31,13 +31,14 @@ function ToastCard({ toast }: { toast: ToastItem }) {
   const dismissToast = useUiStore((s) => s.dismissToast)
 
   useEffect(() => {
+    if (toast.action) return
     const timer = window.setTimeout(() => {
       dismissToast(toast.id)
     }, AUTO_DISMISS_MS)
     return () => {
       window.clearTimeout(timer)
     }
-  }, [dismissToast, toast.id])
+  }, [dismissToast, toast.id, toast.action])
 
   return (
     <div
@@ -49,7 +50,16 @@ function ToastCard({ toast }: { toast: ToastItem }) {
       )}
     >
       <p className="min-w-0 flex-1 leading-snug">{toast.message}</p>
-      <button
+      {toast.action && (
+        <button
+          type="button"
+          className="shrink-0 rounded-md px-2 py-1 font-[inherit] hover:bg-[var(--bg-sidebar-hover)]"
+          onClick={toast.action.run}
+        >
+          {toast.action.label}
+        </button>
+      )}
+      {!toast.action && <button
         type="button"
         aria-label={t('settings.close')}
         className={cn(
@@ -60,7 +70,7 @@ function ToastCard({ toast }: { toast: ToastItem }) {
         onClick={() => dismissToast(toast.id)}
       >
         <X className="size-3.5" />
-      </button>
+      </button>}
     </div>
   )
 }

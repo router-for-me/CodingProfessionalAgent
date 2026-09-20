@@ -3,6 +3,7 @@ import { pluginPlatformCoordinator, type MainGenerationParticipant } from '@/plu
 import { getHostServices } from './createHostServices'
 import {
     hydrateEmptySessionFromDisk,
+    hasUnsavedSessionHistory,
     initPersistence,
     invalidateSessionDiskCache,
     reloadSessionFromDisk,
@@ -166,7 +167,11 @@ export async function bootstrapApplication(): Promise<void> {
     }
 
     await pluginPlatformCoordinator.activate(graph, { mainParticipant })
-    setProtectedSessionPredicate((sessionId) => useSessionStore.getState().currentSessionId === sessionId)
+    setProtectedSessionPredicate((sessionId) => {
+        const run = useSessionRunStore.getState().activeRuns[sessionId]
+        return useSessionStore.getState().currentSessionId === sessionId ||
+            Boolean(run && run.status !== 'idle') || hasUnsavedSessionHistory(sessionId)
+    })
     await initPersistence()
 
     void hostServices.skillUsage.fetchUsageCounts().catch(() => {})

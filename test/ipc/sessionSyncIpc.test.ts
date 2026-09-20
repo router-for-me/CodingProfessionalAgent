@@ -86,14 +86,16 @@ describe('Session Sync IPC & Broadcast', () => {
             },
         }
 
+        // Plugin activation precedes createServices; isolate its default storage before activation.
+        expect(os.homedir()).toContain('cpa-test-home-')
         const host = new MainPluginRuntimeHost()
         await host.activateAll()
 
-        // Use isolated in-memory SQLite and temp home directory
+        // The test setup also isolates default-path plugin databases.
         services = createServices(() => mockWindow, {
             isDebug: true,
             pluginRuntimeHost: host,
-            sessionDatabaseOptions: { dbPath: ':memory:', getHomeDir: () => tempDir },
+            homeDir: tempDir,
         })
         registerIpcHandlers(services, () => mockWindow)
     })

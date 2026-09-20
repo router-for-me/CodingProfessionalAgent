@@ -44,6 +44,8 @@ export interface SessionFilePayload {
   id: string
   version?: number
   entries: any[]
+  expectedEntriesRevision?: string
+  removedEntryIds?: string[]
   subAgents?: any[]
   projectId?: string | null
   scheduleId?: string | null
@@ -67,6 +69,10 @@ export interface SessionFilePayload {
   reasoningEffort?: string
   modelId?: string
   model?: string
+}
+
+function entriesRevision(payloads: string[]): string {
+  return crypto.createHash('sha256').update(JSON.stringify(payloads)).digest('hex')
 }
 
 export class SessionDatabaseService {
@@ -158,6 +164,7 @@ export class SessionDatabaseService {
   ): Promise<{
     id: string
     version: number
+    entriesRevision: string
     entries: any[]
     subAgents?: any[]
     modelId?: string
@@ -261,6 +268,7 @@ export class SessionDatabaseService {
     return {
       id: sessionId,
       version: 2,
+      entriesRevision: entriesRevision(entryRows.map((row) => row.payload_json)),
       entries,
       ...(subAgents.length > 0 ? { subAgents } : {}),
       ...(sessionRow.schedule_id ? { scheduleId: sessionRow.schedule_id } : {}),
@@ -282,8 +290,8 @@ export class SessionDatabaseService {
     }
   }
 
-  async set(sessionId: string, data: unknown): Promise<void> {
-    if (!sessionId || typeof sessionId !== 'string') return
+  async set(sessionId: string, data: unknown): Promise<string> {
+    if (!sessionId || typeof sessionId !== 'string') throw new Error('Invalid session ID')
     const db = this.getDb()
 
     let entries: any[] = []
@@ -597,7 +605,31 @@ export class SessionDatabaseService {
       )
     `)
 
+    const incomingPayloads = entries.map((entry) => JSON.stringify(entry))
+    const guard = data && !Array.isArray(data) && typeof data === 'object'
+      ? data as { expectedEntriesRevision?: string; removedEntryIds?: string[] }
+      : {}
     const saveTransaction = db.transaction(() => {
+      this.assertSessionWritable(sessionId, parentSessionId)
+      const existing = this.getStatement(
+        'SELECT id, payload_json FROM session_entries WHERE session_id = ? ORDER BY entry_index ASC',
+      ).all(sessionId) as Array<{ id: string; payload_json: string }>
+      const currentRevision = entriesRevision(existing.map((row) => row.payload_json))
+      if (guard.expectedEntriesRevision !== undefined) {
+        if (guard.expectedEntriesRevision !== currentRevision) {
+          throw new Error('SESSION_HISTORY_CONFLICT: Session history changed; reload before saving')
+        }
+      } else if (existing.length > 0 && (existing.length !== incomingPayloads.length ||
+        existing.some((row, index) => row.payload_json !== incomingPayloads[index]))) {
+        // Legacy writers may repeat an identical snapshot, but cannot replace unread history.
+        throw new Error('SESSION_HISTORY_CONFLICT: A complete history baseline is required')
+      }
+      const incomingIds = new Set(entries.map((entry) => entry?.id))
+      const removedIds = new Set(guard.expectedEntriesRevision !== undefined ? guard.removedEntryIds : [])
+      if (existing.some((row) => !incomingIds.has(row.id) && !removedIds.has(row.id))) {
+        throw new Error('SESSION_HISTORY_CONFLICT: Session history removal was not explicit')
+      }
+
       // 1. Upsert session row
       upsertSessionStmt.run({
         id: sessionId,
@@ -714,6 +746,8 @@ export class SessionDatabaseService {
         }
 
         for (const sa of validSubAgents) {
+          if (this.getStatement('SELECT id FROM session_tombstones WHERE id = ? OR id = ?')
+            .get(sa.sessionId, sa.parentSessionId)) continue
           upsertSubAgentStmt.run({
             id: sa.id,
             session_id: sa.sessionId,
@@ -987,21 +1021,42 @@ export class SessionDatabaseService {
     })
 
     saveTransaction()
+    return entriesRevision(incomingPayloads)
+  }
+
+  private assertSessionWritable(sessionId: string, parentSessionId?: string | null): void {
+    const tombstone = this.getStatement(
+      'SELECT id FROM session_tombstones WHERE id = ? OR id = ? LIMIT 1',
+    ).get(sessionId, parentSessionId ?? sessionId)
+    if (tombstone) throw new Error('SESSION_DELETED: Deleted session IDs cannot be reused')
   }
 
   async delete(sessionId: string): Promise<void> {
     if (!sessionId || typeof sessionId !== 'string') return
     const db = this.getDb()
 
-    const selectChildStmt = this.getStatement('SELECT id FROM sessions WHERE parent_session_id = ?')
+    const selectChildStmt = this.getStatement(`
+      WITH RECURSIVE descendants(id) AS (
+        SELECT id FROM sessions WHERE parent_session_id = ?
+        UNION SELECT sessions.id FROM sessions JOIN descendants ON sessions.parent_session_id = descendants.id
+      ) SELECT id FROM descendants
+    `)
+    const tombstoneStmt = this.getStatement(
+      'INSERT OR IGNORE INTO session_tombstones (id, deleted_at) VALUES (?, ?)',
+    )
     const deleteSessionStmt = this.getStatement('DELETE FROM sessions WHERE id = ?')
+    const deleteAgentStmt = this.getStatement('DELETE FROM subagents WHERE session_id = ?')
 
     const deleteTx = db.transaction(() => {
       // Find all child sessions where parent_session_id = sessionId and delete them first
       const childSessions = selectChildStmt.all(sessionId) as Array<{ id: string }>
       for (const child of childSessions) {
+        tombstoneStmt.run(child.id, Date.now())
+        deleteAgentStmt.run(child.id)
         deleteSessionStmt.run(child.id)
       }
+      tombstoneStmt.run(sessionId, Date.now())
+      deleteAgentStmt.run(sessionId)
 
       // Delete the main session (cascades to session_entries, subagents, turns, skills)
       deleteSessionStmt.run(sessionId)
@@ -1078,6 +1133,7 @@ export class SessionDatabaseService {
       .get(meta.id) as SessionRow | undefined
 
     const setMetaTx = db.transaction(() => {
+      this.assertSessionWritable(meta.id, meta.parentSessionId)
       if (existing) {
         const newTitle =
           'title' in meta && meta.title !== undefined && meta.title !== ''
@@ -1227,6 +1283,7 @@ export class SessionDatabaseService {
     if (!subAgent || !subAgent.id || typeof subAgent.id !== 'string') return
     const db = this.getDb()
     const now = Date.now()
+    this.assertSessionWritable(subAgent.sessionId ?? subAgent.id, subAgent.parentSessionId)
 
     const stmt = this.getStatement(`
       INSERT INTO subagents (

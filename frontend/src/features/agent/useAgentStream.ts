@@ -1914,7 +1914,7 @@ export function useAgentStream(
                         userEntry = replaceUserEntryText(target, trimmed)
                         const priorEntries = existingEntries.slice(0, targetIndex)
                         const keptEntries = [...priorEntries, userEntry]
-                        useMessageStore.getState().replaceSessionEntries(sessionId, keptEntries)
+                        useMessageStore.getState().replaceSessionEntries(sessionId, keptEntries, { historyMutation: 'truncate' })
                     } else {
                         userEntry = buildUserEntry(sessionId, trimmed, images)
                         useMessageStore.getState().appendEntry(userEntry)
@@ -1940,7 +1940,7 @@ export function useAgentStream(
                     }
                     const priorEntries = existingEntries.slice(0, targetIndex)
                     const keptEntries = [...priorEntries, userEntry]
-                    useMessageStore.getState().replaceSessionEntries(sessionId, keptEntries)
+                    useMessageStore.getState().replaceSessionEntries(sessionId, keptEntries, { historyMutation: 'truncate' })
                 } else {
                     userEntry = buildUserEntry(sessionId, trimmed, images)
                     if (payload.userEntryId) {
@@ -2356,7 +2356,7 @@ export function useAgentStream(
                     const keptEntries = [...priorEntries, userEntry]
                     useMessageStore
                         .getState()
-                        .replaceSessionEntries(sessionId, keptEntries)
+                        .replaceSessionEntries(sessionId, keptEntries, { historyMutation: 'truncate' })
                     pruneHistoricalSubAgents(service, sessionId, keptEntries)
                 } else if (
                     payload.userEntryId &&
@@ -2380,7 +2380,7 @@ export function useAgentStream(
                     const keptEntries = [...priorEntries, userEntry]
                     useMessageStore
                         .getState()
-                        .replaceSessionEntries(sessionId, keptEntries)
+                        .replaceSessionEntries(sessionId, keptEntries, { historyMutation: 'truncate' })
                     pruneHistoricalSubAgents(service, sessionId, keptEntries)
                 } else {
                     priorEntries = existingEntries
@@ -3007,7 +3007,7 @@ function applyTurnPauseDelta(entries: readonly ConversationEntry[]): Conversatio
             const entriesWithPause = applyTurnPauseDelta(rawEntries)
             const entries = cleanUnfinishedEntries(entriesWithPause)
             if (entries.length !== rawEntries.length || entries.some((e, i) => e !== rawEntries[i])) {
-                useMessageStore.getState().replaceSessionEntries(sessionId, entries)
+                useMessageStore.getState().replaceSessionEntries(sessionId, entries, { historyMutation: 'truncate' })
                 schedulePersist(true)
             }
 
@@ -3018,7 +3018,7 @@ function applyTurnPauseDelta(entries: readonly ConversationEntry[]): Conversatio
                 const childWithPause = applyTurnPauseDelta(childRaw)
                 const childEntries = cleanUnfinishedEntries(childWithPause)
                 if (childEntries.length !== childRaw.length || childEntries.some((e, i) => e !== childRaw[i])) {
-                    useMessageStore.getState().replaceSessionEntries(subAgent.sessionId, childEntries)
+                    useMessageStore.getState().replaceSessionEntries(subAgent.sessionId, childEntries, { historyMutation: 'truncate' })
                     schedulePersist(true)
                 }
             }
@@ -3026,7 +3026,7 @@ function applyTurnPauseDelta(entries: readonly ConversationEntry[]): Conversatio
             const refreshedEntries = useMessageStore.getState().getEntries(sessionId)
             const cleanedRefreshed = cleanUnfinishedEntries(refreshedEntries)
             if (cleanedRefreshed.length !== refreshedEntries.length || cleanedRefreshed.some((e, i) => e !== refreshedEntries[i])) {
-                useMessageStore.getState().replaceSessionEntries(sessionId, cleanedRefreshed)
+                useMessageStore.getState().replaceSessionEntries(sessionId, cleanedRefreshed, { historyMutation: 'truncate' })
                 schedulePersist(true)
             }
 
@@ -3150,7 +3150,7 @@ function applyTurnPauseDelta(entries: readonly ConversationEntry[]): Conversatio
 
             useMessageStore
                 .getState()
-                .replaceSessionEntries(sessionId, refreshedEntries)
+                .replaceSessionEntries(sessionId, refreshedEntries, { historyMutation: 'truncate' })
             schedulePersist(true)
             hydrateSubAgentHost(service)
 

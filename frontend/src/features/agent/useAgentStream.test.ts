@@ -35,6 +35,7 @@ import { useSubAgentStore } from '@/stores/subAgentStore'
 import { useUiStore } from '@/stores/uiStore'
 import { getHostAgentController } from '@/application/services/createHostServices'
 import { useWorktreeSetupStore } from '@/stores/worktreeSetupStore'
+import { subscribeMessageEvents } from '@/application/events/messageEvents'
 
 const persistTestState = vi.hoisted(() => ({
     flushPendingPersistence: vi.fn<() => Promise<void>>(),
@@ -1534,6 +1535,35 @@ describe('useAgentStream', () => {
             type: 'text',
             text: 'New conversation starting from home',
         })
+    })
+
+    it.each(['resumeSession', 'retrySession'] as const)('authorizes removal of interrupted entries during %s', async (operation) => {
+        const sessionId = useSessionStore.getState().createSession({ title: 'Interrupted cleanup' })
+        useSessionStore.getState().setCurrentSession(sessionId)
+        useMessageStore.getState().appendEntry({
+            id: 'user', sessionId, createdAt: 1, kind: 'user',
+            content: [{ type: 'text', text: 'Continue' }],
+        })
+        useMessageStore.getState().appendEntry({
+            id: 'interrupted', sessionId, createdAt: 2, kind: 'assistant',
+            content: [], stopReason: 'aborted', status: 'aborted',
+        })
+        const removed: string[] = []
+        const unsubscribe = subscribeMessageEvents((event) => {
+            if (event.type === 'entries-updated' && event.sessionId === sessionId) {
+                removed.push(...event.removedEntryIds ?? [])
+            }
+        })
+        try {
+            const { result } = renderHook(() => useAgentStream(), { wrapper: wrapperFor(service) })
+            await act(async () => { await result.current[operation](sessionId) })
+            await waitFor(() => expect(result.current.isStreaming).toBe(false))
+            expect(removed).toContain('interrupted')
+            const call = service.streamCalls[0] as AgentStreamChatInput
+            expect(call.entries.map((entry) => entry.id)).toEqual(['user'])
+        } finally {
+            unsubscribe()
+        }
     })
 
     it('resumes unfinished session without appending extra user message', async () => {

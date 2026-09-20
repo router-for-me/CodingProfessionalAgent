@@ -772,7 +772,8 @@ export interface AgentRunState {
 export interface ChatMessageService {
     getDisplayMessages(sessionId: string): readonly any[]
     getEntries(sessionId: string): readonly any[]
-    replaceSessionEntries(sessionId: string, entries: readonly any[]): void
+    /** Only explicit user edits/retries/clears may authorize truncation; snapshots must omit options. */
+    replaceSessionEntries(sessionId: string, entries: readonly any[], options?: { historyMutation: 'truncate' }): void
     subscribeMessages?(sessionId: string, listener: () => void): () => void
     ensureSessionLoaded?(sessionId: string): Promise<void>
     schedulePersist?(immediate?: boolean): void

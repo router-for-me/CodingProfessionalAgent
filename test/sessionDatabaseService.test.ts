@@ -24,6 +24,129 @@ describe('SessionDatabaseService', () => {
     }
   })
 
+  async function replaceHistory(sessionId: string, payload: any): Promise<void> {
+    const baseline = await service.get(sessionId)
+    const data = Array.isArray(payload) ? { entries: payload } : payload
+    const retainedIds = new Set(data.entries.map((entry: any) => entry.id))
+    await service.set(sessionId, {
+      ...data,
+      expectedEntriesRevision: baseline?.entriesRevision,
+      removedEntryIds: baseline?.entries.filter((entry) => !retainedIds.has(entry.id)).map((entry) => entry.id),
+    })
+  }
+
+  it('rejects partial snapshots before changing history, metadata, or derived turns', async () => {
+    const entries = [
+      { id: 'prefix-user', kind: 'user', createdAt: 1, content: [{ type: 'text', text: 'Keep this prompt' }] },
+      { id: 'suffix-assistant', kind: 'assistant', createdAt: 2, content: [] },
+      { id: 'suffix-tool', kind: 'toolResult', createdAt: 3, content: [] },
+    ]
+    const revision = await service.set('partial', { entries, title: 'Original' })
+    const turns = service.getDb().prepare('SELECT * FROM conversation_turns').all()
+    for (const expectedEntriesRevision of [undefined, revision]) {
+      await expect(service.set('partial', {
+        entries: entries.slice(1),
+        expectedEntriesRevision,
+        title: 'Corrupted',
+      })).rejects.toThrow('SESSION_HISTORY_CONFLICT')
+    }
+    expect((await service.get('partial'))?.entries).toEqual(entries)
+    expect((await service.getMeta('partial'))?.title).toBe('Original')
+    expect(service.getDb().prepare('SELECT * FROM conversation_turns').all()).toEqual(turns)
+  })
+
+  it('rejects stale snapshots and stale explicit truncations atomically', async () => {
+    const entries = [{ id: 'user', kind: 'user', content: [] }]
+    const baseline = await service.set('stale', { entries })
+    const appended = [...entries, { id: 'assistant', kind: 'assistant', content: [] }]
+    const latest = await service.set('stale', { entries: appended, expectedEntriesRevision: baseline })
+    await expect(service.set('stale', {
+      entries,
+      expectedEntriesRevision: baseline,
+      removedEntryIds: ['assistant'],
+    })).rejects.toThrow('SESSION_HISTORY_CONFLICT')
+    const changed = [entries[0], { ...appended[1], content: [{ type: 'text', text: 'New text' }] }]
+    await service.set('stale', { entries: changed, expectedEntriesRevision: latest })
+    await expect(service.set('stale', {
+      entries: appended,
+      expectedEntriesRevision: latest,
+    })).rejects.toThrow('SESSION_HISTORY_CONFLICT')
+    expect((await service.get('stale'))?.entries).toEqual(changed)
+  })
+
+  it('allows explicit edit, retry, replacement, and clear only against the current baseline', async () => {
+    const entries = [
+      { id: 'edit-user', kind: 'user', content: [] },
+      { id: 'edit-assistant', kind: 'assistant', content: [] },
+    ]
+    const original = await service.set('edit', { entries })
+    const edited = [{ ...entries[0], content: [{ type: 'text', text: 'Edited prompt' }] }]
+    const editRevision = await service.set('edit', {
+      entries: edited,
+      expectedEntriesRevision: original,
+      removedEntryIds: ['edit-assistant'],
+    })
+    const replacement = [{ id: 'replacement', kind: 'user', content: [] }]
+    const replacementRevision = await service.set('edit', {
+      entries: replacement,
+      expectedEntriesRevision: editRevision,
+      removedEntryIds: ['edit-user'],
+    })
+    await expect(service.set('edit', { entries, expectedEntriesRevision: original })).rejects.toThrow('SESSION_HISTORY_CONFLICT')
+    await expect(service.set('edit', { entries })).rejects.toThrow('SESSION_HISTORY_CONFLICT')
+    await service.set('edit', {
+      entries: [],
+      expectedEntriesRevision: replacementRevision,
+      removedEntryIds: ['replacement'],
+    })
+    expect((await service.get('edit'))?.entries).toEqual([])
+    expect(service.getDb().prepare('SELECT * FROM conversation_turns').all()).toEqual([])
+  })
+
+  it('rejects late saves with or without baselines after deletion and database reopen', async () => {
+    const entry = { id: 'entry', kind: 'user', content: [] }
+    const revision = await service.set('deleted', { entries: [entry] })
+    await service.delete('deleted')
+    await service.delete('never-created')
+    service.close()
+    service = new SessionDatabaseService({ customDir: tempDir })
+    for (const expectedEntriesRevision of [undefined, revision]) {
+      await expect(service.set('deleted', { entries: [entry], expectedEntriesRevision }))
+        .rejects.toThrow('SESSION_DELETED')
+    }
+    await expect(service.set('never-created', { entries: [] })).rejects.toThrow('SESSION_DELETED')
+    await expect(service.setMeta({ id: 'deleted', title: 'Late metadata' })).rejects.toThrow('SESSION_DELETED')
+    expect(await service.list()).toEqual([])
+    expect(await service.set('new-session', { entries: [entry] })).toEqual(expect.any(String))
+  })
+
+  it('tombstones descendants and rejects late children of deleted parents', async () => {
+    await service.set('parent', { entries: [] })
+    await service.set('child', { entries: [], parentSessionId: 'parent' })
+    await service.set('grandchild', { entries: [], parentSessionId: 'child' })
+    const otherClient = new SessionDatabaseService({ customDir: tempDir })
+    try {
+      await service.delete('parent')
+      for (const id of ['parent', 'child', 'grandchild']) {
+        await expect(otherClient.set(id, { entries: [] })).rejects.toThrow('SESSION_DELETED')
+      }
+      await expect(otherClient.set('late-child', { entries: [], parentSessionId: 'parent' }))
+        .rejects.toThrow('SESSION_DELETED')
+      expect(await otherClient.list()).toEqual([])
+    } finally {
+      otherClient.close()
+    }
+  })
+
+  it('does not recreate a deleted child from a stale parent subagent snapshot', async () => {
+    const subAgents = [{ id: 'agent', sessionId: 'child', name: 'Child' }]
+    const revision = await service.set('parent', { entries: [], subAgents })
+    await service.delete('child')
+    await service.set('parent', { entries: [], subAgents, expectedEntriesRevision: revision })
+    expect(await service.get('child')).toBeNull()
+    expect((await service.get('parent'))?.subAgents ?? []).toEqual([])
+  })
+
   it('initializes WAL mode, busy_timeout, and chat/accounting indexes on file-based database', () => {
     const db = service.getDb()
     expect(db).toBeDefined()
@@ -158,7 +281,7 @@ describe('SessionDatabaseService', () => {
       ...mockEntries,
       { id: 'e3', kind: 'user', content: [{ type: 'text', text: 'what is 1+1?' }] },
     ]
-    await service.set('sess-1', {
+    await replaceHistory('sess-1', {
       id: 'sess-1',
       version: 2,
       entries: updatedEntries,
@@ -362,7 +485,7 @@ describe('SessionDatabaseService', () => {
     const childId = 'child-preserved-sess'
 
     // Create child session with full metadata
-    await service.set(childId, {
+    await replaceHistory(childId, {
       id: childId,
       version: 2,
       entries: [{ id: 'e1', kind: 'user', content: [{ type: 'text', text: 'initial child prompt' }] }],
@@ -384,7 +507,7 @@ describe('SessionDatabaseService', () => {
     expect(initialRow.title).toBe('Child Subagent Session')
 
     // Update child session with standard payload where isSubagent/parentSessionId/etc. are not specified
-    await service.set(childId, {
+    await replaceHistory(childId, {
       id: childId,
       version: 2,
       entries: [
@@ -400,8 +523,8 @@ describe('SessionDatabaseService', () => {
     expect(updatedRow.branch).toBe('feature/auth')
     expect(updatedRow.pinned).toBe(1)
 
-    // Update child session with raw array payload
-    await service.set(childId, [
+    // Explicitly replace child history using the current baseline
+    await replaceHistory(childId, [
       { id: 'e1', kind: 'user', content: [{ type: 'text', text: 'updated prompt' }] },
     ])
 
@@ -431,7 +554,7 @@ describe('SessionDatabaseService', () => {
     }
 
     // 1. Initial save with 2 subagents
-    await service.set(parentId, {
+    await replaceHistory(parentId, {
       id: parentId,
       version: 2,
       entries: [{ id: 'pe1', kind: 'user', content: [] }],
@@ -446,7 +569,7 @@ describe('SessionDatabaseService', () => {
     expect(parentData?.subAgents).toHaveLength(2)
 
     // 2. Update with only agent1 (agent2 removed)
-    await service.set(parentId, {
+    await replaceHistory(parentId, {
       id: parentId,
       version: 2,
       entries: [{ id: 'pe1', kind: 'user', content: [] }],
@@ -462,7 +585,7 @@ describe('SessionDatabaseService', () => {
     expect(parentData?.subAgents?.[0].id).toBe('agent-reconcile-1')
 
     // 3. Update without specifying subAgents (undefined) - should keep existing agent1
-    await service.set(parentId, {
+    await replaceHistory(parentId, {
       id: parentId,
       version: 2,
       entries: [{ id: 'pe1', kind: 'user', content: [] }, { id: 'pe2', kind: 'assistant', content: [] }],
@@ -473,7 +596,7 @@ describe('SessionDatabaseService', () => {
     expect(rawSubAgents[0].id).toBe('agent-reconcile-1')
 
     // 4. Update with empty subAgents array - should delete all subagents for this parent
-    await service.set(parentId, {
+    await replaceHistory(parentId, {
       id: parentId,
       version: 2,
       entries: [{ id: 'pe1', kind: 'user', content: [] }],
@@ -513,7 +636,7 @@ describe('SessionDatabaseService', () => {
     expect(fetched?.entries).toHaveLength(3)
 
     // 3. Upsert with 5 entries
-    await service.set(sessId, {
+    await replaceHistory(sessId, {
       id: sessId,
       version: 2,
       entries: makeEntries(5),
@@ -531,7 +654,7 @@ describe('SessionDatabaseService', () => {
     expect(entryIndices).toEqual([0, 1, 2, 3, 4])
 
     // 4. Shrink entries to 2
-    await service.set(sessId, makeEntries(2))
+    await replaceHistory(sessId, makeEntries(2))
     countRow = db.prepare('SELECT COUNT(*) as c FROM session_entries WHERE session_id = ?').get(sessId) as any
     expect(countRow.c).toBe(2)
     fetched = await service.get(sessId)
@@ -543,8 +666,8 @@ describe('SessionDatabaseService', () => {
     expect(await service.get(null as any)).toBeNull()
     expect(await service.get(undefined as any)).toBeNull()
 
-    await service.set('', [])
-    await service.set(null as any, [])
+    await expect(service.set('', [])).rejects.toThrow('Invalid session ID')
+    await expect(service.set(null as any, [])).rejects.toThrow('Invalid session ID')
     await service.delete('')
     await service.delete(null as any)
 
@@ -860,7 +983,7 @@ describe('SessionDatabaseService', () => {
   })
 
   it('migrates the additive isolated accounting schema and cascades session deletion', async () => {
-    await service.set('legacy-accounting-session', {
+    await replaceHistory('legacy-accounting-session', {
       entries: [
         { id: 'legacy-u', kind: 'user', createdAt: 1000, content: [] },
         { id: 'legacy-a', kind: 'assistant', model: 'model-a', usage: { input: 1, output: 1, totalTokens: 2 } },
@@ -878,7 +1001,7 @@ describe('SessionDatabaseService', () => {
     expect(tables).toContain('usage_metrics')
     expect((await service.queryMetrics()).summary.totalTokens).toBe(2)
 
-    await service.set('legacy-accounting-session', {
+    await replaceHistory('legacy-accounting-session', {
       entries: [
         { id: 'legacy-u', kind: 'user', createdAt: 1000, content: [] },
         {
@@ -1031,7 +1154,7 @@ describe('SessionDatabaseService', () => {
     ]
 
     // 1. Initial save: 1 turn, 1 skill
-    await service.set(sessionId, {
+    await replaceHistory(sessionId, {
       id: sessionId,
       version: 2,
       entries: turn1Entries,
@@ -1062,7 +1185,7 @@ describe('SessionDatabaseService', () => {
       },
     ]
 
-    await service.set(sessionId, {
+    await replaceHistory(sessionId, {
       id: sessionId,
       version: 2,
       entries: turn2Entries,
@@ -1074,7 +1197,7 @@ describe('SessionDatabaseService', () => {
     expect(skills).toHaveLength(2)
 
     // 3. Truncate back to Turn 1: 1 turn, 1 skill (no orphaned Turn 2 rows)
-    await service.set(sessionId, {
+    await replaceHistory(sessionId, {
       id: sessionId,
       version: 2,
       entries: turn1Entries,
@@ -2387,7 +2510,7 @@ describe('SessionDatabaseService', () => {
     }
 
     // Step 1: Save with speed = 'standard' and reasoningEffort = 'low'
-    await service.set(sessId, {
+    await replaceHistory(sessId, {
       id: sessId,
       version: 2,
       speed: 'standard',
@@ -2418,7 +2541,7 @@ describe('SessionDatabaseService', () => {
       usage: { input: 20, output: 20, totalTokens: 40 },
     }
 
-    await service.set(sessId, {
+    await replaceHistory(sessId, {
       id: sessId,
       version: 2,
       speed: 'fast',
@@ -2992,7 +3115,7 @@ describe('SessionDatabaseService', () => {
 
     it('does not restore stale unread status when saving entries after setMeta marks a session read', async () => {
       const sessionId = 'sess-read-preserve'
-      await service.set(sessionId, {
+      await replaceHistory(sessionId, {
         id: sessionId,
         version: 2,
         unread: true,
@@ -3001,7 +3124,7 @@ describe('SessionDatabaseService', () => {
       await service.setMeta({ id: sessionId, unread: false })
 
       // Simulate a stale client saving conversation content after another client marked it read.
-      await service.set(sessionId, {
+      await replaceHistory(sessionId, {
         id: sessionId,
         version: 2,
         unread: true,
@@ -3021,7 +3144,7 @@ describe('SessionDatabaseService', () => {
       const sessId = 'sess-title-preserve'
 
       // 1. Initial creation with prompt entries
-      await service.set(sessId, {
+      await replaceHistory(sessId, {
         id: sessId,
         version: 2,
         entries: [
@@ -3050,7 +3173,7 @@ describe('SessionDatabaseService', () => {
       expect(sessions.find((s) => s.id === sessId)?.title).toBe('Concise Auto Title')
 
       // 3. Subsequent set() call with new assistant entry and NO explicit title in payload
-      await service.set(sessId, {
+      await replaceHistory(sessId, {
         id: sessId,
         version: 2,
         entries: [
