@@ -104,6 +104,7 @@ const DEFAULT_FALLBACK_SETTINGS: AppSettings = Object.freeze({
     resumeUnfinishedConversations: true,
     preventSleep: true,
     showInMenuBar: true,
+    headlessCloseAction: 'continue_headless',
     showBottomPanel: true,
     terminalPosition: 'bottom',
     cliProxyApi: { baseUrl: '', apiKey: '' },

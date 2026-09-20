@@ -4553,6 +4553,27 @@ describe('persist pure helpers', () => {
         modelOrder: [],
       })
     })
+
+    it('persists and sanitizes headlessCloseAction setting', async () => {
+      let writtenState: any = null
+      const KVStoreSet = vi.fn(async (key: string, value: unknown) => {
+        if (key === 'app-state') {
+          writtenState = value
+        }
+      })
+      setHostBridge({
+        KVStoreGet: vi.fn(async () => null),
+        KVStoreSet,
+      } as any)
+
+      useSettingsStore.getState().setHeadlessCloseAction('quit')
+
+      await flushPendingPersistence()
+      await flushWrites()
+
+      expect(writtenState?.settings?.headlessCloseAction).toBe('quit')
+    })
   })
 })
+
 

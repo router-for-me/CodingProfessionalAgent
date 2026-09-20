@@ -10,6 +10,7 @@ import {
     type EditorFollowUpMode,
     type EditorSendShortcut,
     type EditorSettings,
+    type HeadlessCloseAction,
     type Locale,
     type Speed,
     type TerminalPosition,
@@ -62,6 +63,11 @@ export function GeneralSection() {
     const showInMenuBar = settings.showInMenuBar ?? true
     const setShowInMenuBar = (val: boolean) =>
         settingsService?.setShowInMenuBar?.(val)
+
+    const headlessCloseAction: HeadlessCloseAction =
+        settings.headlessCloseAction ?? 'continue_headless'
+    const setHeadlessCloseAction = (val: HeadlessCloseAction) =>
+        settingsService?.setHeadlessCloseAction?.(val)
 
     const showBottomPanel = settings.showBottomPanel ?? true
     const setShowBottomPanel = (val: boolean) =>
@@ -219,6 +225,28 @@ export function GeneralSection() {
                                 checked={showInMenuBar}
                                 label={t('settings.general.menuBar')}
                                 onChange={setShowInMenuBar}
+                            />
+                        }
+                    />
+                    <SettingsRow
+                        id="setting-headlessCloseAction"
+                        title={t('settings.general.headlessCloseAction')}
+                        description={t('settings.general.headlessCloseAction.desc')}
+                        control={
+                            <SettingsSelect<HeadlessCloseAction>
+                                ariaLabel={t('settings.general.headlessCloseAction')}
+                                value={headlessCloseAction}
+                                options={[
+                                    {
+                                        value: 'continue_headless',
+                                        label: t('settings.general.headlessCloseAction.continue'),
+                                    },
+                                    {
+                                        value: 'quit',
+                                        label: t('settings.general.headlessCloseAction.quit'),
+                                    },
+                                ]}
+                                onChange={setHeadlessCloseAction}
                             />
                         }
                     />

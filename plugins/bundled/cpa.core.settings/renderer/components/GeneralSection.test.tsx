@@ -226,4 +226,18 @@ describe('GeneralSection', () => {
         expect(steerOption).toHaveAttribute('aria-checked', 'false')
         expect(useSettingsStore.getState().settings.editor?.followUpMode).toBe('queue')
     })
+
+    it('renders and changes headlessCloseAction setting', async () => {
+        const user = userEvent.setup()
+        render(<GeneralSection />)
+
+        const select = screen.getByRole('combobox', { name: 'When Window is Closed' })
+        expect(select).toBeInTheDocument()
+
+        await user.click(select)
+        const quitOption = await screen.findByRole('option', { name: 'Exit application completely' })
+        await user.click(quitOption)
+
+        expect(useSettingsStore.getState().settings.headlessCloseAction).toBe('quit')
+    })
 })

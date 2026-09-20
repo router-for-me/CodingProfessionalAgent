@@ -53,6 +53,8 @@ export interface CreateServicesOptions {
   updateService?: UpdateService
   notificationBadgeService?: NotificationBadgeService
   gatewayDiscoveryService?: GatewayDiscoveryService
+  trayService?: TrayService
+  isHeadless?: () => boolean
 }
 
 export interface AppServices {
@@ -205,6 +207,8 @@ export function createServices(
     updateService: options?.updateService,
     notificationBadgeService: options?.notificationBadgeService,
     gatewayDiscoveryService: options?.gatewayDiscoveryService,
+    trayService: options?.trayService,
+    isHeadless: options?.isHeadless,
   })
 
   for (const descriptor of serviceDescriptors) {
@@ -360,13 +364,13 @@ export function createServices(
     handleMethod(method: string, args: unknown[], context?: RpcInvocationContext): Promise<unknown> {
       return registry.dispatchRpc(method, args, context)
     },
-    disposeAll() {
+    async disposeAll(): Promise<void> {
       if (options?.pluginActivationCoordinator) {
-        void options.pluginActivationCoordinator.dispose()
+        await options.pluginActivationCoordinator.dispose()
       } else if (options?.pluginRuntimeHost) {
-        void options.pluginRuntimeHost.dispose()
+        await options.pluginRuntimeHost.dispose()
       }
-      return registry.disposeAll()
+      await registry.disposeAll()
     },
   }
 

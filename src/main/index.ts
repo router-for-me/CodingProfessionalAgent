@@ -24,6 +24,8 @@ import { rotateNativeImage45 } from './utils/imageRotate.js'
 import { registerWin32AppUserModelId } from './services/notificationBadgeService.js'
 import { getAppVersion } from './utils/version.js'
 import { syncUserShellEnvironment } from './services/shellEnvironment.js'
+import { parseCommandLineArgs } from './utils/cliArgs.js'
+import { HeadlessLifecycleService } from './services/headlessLifecycleService.js'
 
 // Synchronize user shell environment (PATH, toolchains, homebrew, go) on app startup
 syncUserShellEnvironment()
@@ -50,8 +52,16 @@ const __dirname = path.dirname(__filename)
 let mainWindow: BrowserWindow | null = null
 let services: AppServices | null = null
 let pluginRuntimeHost: MainPluginRuntimeHost | null = null
+let lifecycleService: HeadlessLifecycleService | null = null
 let isQuitting = false
 let healthCheckTimer: NodeJS.Timeout | null = null
+
+const cliArgs = parseCommandLineArgs(process.argv)
+
+// In headless mode on macOS, hide Dock as early as possible
+if (cliArgs.isHeadless && process.platform === 'darwin') {
+  app.dock?.hide?.()
+}
 
 function clearHealthTimer(): void {
   if (healthCheckTimer) {
@@ -185,7 +195,14 @@ function createWindow(services: AppServices): BrowserWindow {
   }
 
   win.on('close', (event) => {
-    if (!isQuitting && services.trayService.isEnabled()) {
+    if (isQuitting) return
+    if (lifecycleService) {
+      const handled = lifecycleService.handleWindowClose(event, isQuitting)
+      if (handled) return
+      // User explicitly requested quit; do not fall back to hiding in tray
+      return
+    }
+    if (services.trayService.isEnabled()) {
       event.preventDefault()
       const hideWindow = () => {
         win.hide()
@@ -231,31 +248,38 @@ async function bootstrap(): Promise<void> {
   const gotTheLock = app.requestSingleInstanceLock()
 
   if (!gotTheLock) {
+    if (cliArgs.isHeadless) {
+      console.log('[CPA] Another instance is already running.')
+    }
     app.quit()
     return
   }
 
-  app.on('second-instance', () => {
-    if (process.platform === 'darwin' && app.dock) {
-      app.dock.show()
-      const appIcon = getAppIcon()
-      if (appIcon) {
-        app.dock.setIcon(appIcon)
-      }
+  let pendingForegroundActivation = false
+  let isAppReadyForWindows = false
+
+  app.on('second-instance', (_event, commandLine) => {
+    // Explicitly pass empty env so primary instance's CPA_HEADLESS does not taint second instance
+    const secondArgs = parseCommandLineArgs(commandLine, {})
+    if (secondArgs.isHeadless) {
+      console.log('[CPA] Second instance invoked with --headless; primary instance remains running in background.')
+      return
     }
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      if (mainWindow.isMinimized()) mainWindow.restore()
-      if (!mainWindow.isVisible()) mainWindow.show()
-      mainWindow.focus()
+    if (isAppReadyForWindows && lifecycleService) {
+      void lifecycleService.transitionToForeground()
+    } else {
+      pendingForegroundActivation = true
     }
   })
 
   app.whenReady().then(async () => {
-    registerWin32AppUserModelId(app)
-    if (process.platform === 'darwin' && app.dock) {
-      const appIcon = getAppIcon()
-      if (appIcon) {
-        app.dock.setIcon(appIcon)
+    if (!cliArgs.isHeadless) {
+      registerWin32AppUserModelId(app)
+      if (process.platform === 'darwin' && app.dock) {
+        const appIcon = getAppIcon()
+        if (appIcon) {
+          app.dock.setIcon(appIcon)
+        }
       }
     }
 
@@ -294,6 +318,77 @@ async function bootstrap(): Promise<void> {
       pluginRuntimeHost,
       pluginActivationCoordinator: coordinator,
       pluginResourceService: bootstrapResult.resourceService,
+      isHeadless: () => lifecycleService?.isHeadless() ?? false,
+    })
+
+    lifecycleService = new HeadlessLifecycleService({
+      isHeadlessInitially: cliArgs.isHeadless,
+      cliPort: cliArgs.port,
+      cliHost: cliArgs.host,
+      getMainWindow: () => mainWindow,
+      createMainWindow: () => {
+        if (!mainWindow || mainWindow.isDestroyed()) {
+          mainWindow = createWindow(services!)
+          services?.updateService?.confirmHealthy()
+        }
+        return mainWindow
+      },
+      getAppIcon,
+      getTrayService: () => services?.trayService,
+      getSettings: async () => {
+        try {
+          const appState = await services?.kvStoreService?.get('app-state')
+          return {
+            headlessCloseAction: appState?.settings?.headlessCloseAction,
+            showInMenuBar: appState?.settings?.showInMenuBar,
+          }
+        } catch {
+          return undefined
+        }
+      },
+      getSettingsSync: () => {
+        try {
+          const appState = services?.kvStoreService?.getSync?.('app-state') as any
+          return {
+            headlessCloseAction: appState?.settings?.headlessCloseAction,
+            showInMenuBar: appState?.settings?.showInMenuBar,
+          }
+        } catch {
+          return undefined
+        }
+      },
+      ensureWebServerRunning: async () => {
+        if (!services) return
+        try {
+          const currentStatus = services.webServerService.getStatus()
+          if (!currentStatus.running) {
+            const appState = services.kvStoreService?.getSync?.('app-state')
+            const plan = resolveWebServerStartupPlan(appState, isDev, {
+              isHeadless: true,
+              cliPort: cliArgs.port,
+              cliHost: cliArgs.host,
+            })
+            if (plan.startConfig) {
+              const status = await services.webServerService.start(plan.startConfig)
+              if (status.running) {
+                console.log(`[Headless] Web server listening at http://${status.host}:${status.port}`)
+              } else {
+                console.error(`[Headless] Web server failed to start: ${status.error ?? 'Unknown error'}`)
+              }
+            }
+          }
+        } catch (err) {
+          console.error('[Headless] Failed to ensure web server running:', err)
+        }
+      },
+    })
+    lifecycleService.applyInitialPlatformState()
+
+    // Subscribe to live settings updates to keep lifecycle closeAction cache synchronized in real-time
+    services.kvStoreService?.subscribe?.('app-state', (appState: any) => {
+      if (appState?.settings?.headlessCloseAction) {
+        lifecycleService?.setCachedCloseAction(appState.settings.headlessCloseAction)
+      }
     })
 
     // Retry staging after host services exist. The first attempt can fail after a
@@ -322,14 +417,23 @@ async function bootstrap(): Promise<void> {
     })
     registerPluginProtocol(services.pluginResourceService)
 
-    mainWindow = createWindow(services)
+    isAppReadyForWindows = true
 
-    // Confirm healthy immediately when main window is ready
-    mainWindow.once('ready-to-show', () => {
-      try {
-        services?.updateService?.confirmHealthy()
-      } catch {}
-    })
+    if (pendingForegroundActivation) {
+      pendingForegroundActivation = false
+      void lifecycleService.transitionToForeground()
+    } else if (!lifecycleService.isHeadless()) {
+      if (!mainWindow || mainWindow.isDestroyed()) {
+        mainWindow = createWindow(services)
+
+        // Confirm healthy immediately when main window is ready
+        mainWindow.once('ready-to-show', () => {
+          try {
+            services?.updateService?.confirmHealthy()
+          } catch {}
+        })
+      }
+    }
 
     // Schedule 5-second health confirmation heartbeat fallback
     clearHealthTimer()
@@ -352,18 +456,46 @@ async function bootstrap(): Promise<void> {
         if (appState?.settings && typeof appState.settings.preventSleep === 'boolean') {
           services.powerSaveService.setPreventSleepEnabled(appState.settings.preventSleep, true)
         }
-        const plan = resolveWebServerStartupPlan(appState, isDev)
+        const plan = resolveWebServerStartupPlan(appState, isDev, {
+          isHeadless: lifecycleService?.isHeadless(),
+          cliPort: cliArgs.port,
+          cliHost: cliArgs.host,
+        })
         if (plan.configureConfig) {
           services.webServerService.configure(plan.configureConfig)
         }
         if (plan.startConfig) {
-          void services.webServerService.start(plan.startConfig)
+          void services.webServerService.start(plan.startConfig).then((status) => {
+            if (status.running) {
+              if (lifecycleService?.isHeadless()) {
+                console.log(`[Headless] Web server listening at http://${status.host}:${status.port}`)
+              }
+            } else {
+              console.error(`[Headless] Web server failed to start on port ${status.port}: ${status.error ?? 'Unknown error'}`)
+            }
+          }).catch((err) => {
+            console.error('[Headless] Web server start error:', err)
+          })
         }
       } catch {
         if (!services) return
-        const fallbackConfig = resolveWebServerFallbackPlan(isDev)
+        const fallbackConfig = resolveWebServerFallbackPlan(isDev, {
+          isHeadless: lifecycleService?.isHeadless(),
+          cliPort: cliArgs.port,
+          cliHost: cliArgs.host,
+        })
         if (fallbackConfig) {
-          void services.webServerService.start(fallbackConfig)
+          void services.webServerService.start(fallbackConfig).then((status) => {
+            if (status.running) {
+              if (lifecycleService?.isHeadless()) {
+                console.log(`[Headless] Web server listening at http://${status.host}:${status.port}`)
+              }
+            } else {
+              console.error(`[Headless] Web server fallback failed to start on port ${status.port}: ${status.error ?? 'Unknown error'}`)
+            }
+          }).catch((err) => {
+            console.error('[Headless] Web server fallback start error:', err)
+          })
         }
       }
     }
@@ -377,6 +509,10 @@ async function bootstrap(): Promise<void> {
     }
 
     app.on('activate', () => {
+      if (lifecycleService) {
+        void lifecycleService.transitionToForeground()
+        return
+      }
       if (process.platform === 'darwin' && app.dock) {
         app.dock.show()
         const appIcon = getAppIcon()
@@ -404,29 +540,52 @@ async function bootstrap(): Promise<void> {
     })
   })
 
-  app.on('window-all-closed', () => {
-    clearHealthTimer()
-    if (services) {
-      void services.disposeAll()
-    }
-    if (pluginRuntimeHost) {
-      void pluginRuntimeHost.dispose()
-    }
-    app.quit()
-  })
+  let isShuttingDown = false
+  let isShutdownComplete = false
 
-  app.on('before-quit', () => {
+  async function gracefulShutdown(code = 0): Promise<void> {
+    if (isShuttingDown) return
+    isShuttingDown = true
     isQuitting = true
     clearHealthTimer()
+
     try {
-      services?.updateService?.confirmHealthy()
-    } catch {}
-    if (services) {
-      void services.disposeAll()
+      await Promise.race([
+        Promise.allSettled([
+          services?.disposeAll?.(),
+          pluginRuntimeHost?.dispose?.(),
+        ]),
+        new Promise((resolve) => setTimeout(resolve, 3000)),
+      ])
+    } catch (err) {
+      console.error('[Main] Error during graceful shutdown:', err)
+    } finally {
+      isShutdownComplete = true
+      app.exit(code)
     }
-    if (pluginRuntimeHost) {
-      void pluginRuntimeHost.dispose()
+  }
+
+  app.on('window-all-closed', () => {
+    if (lifecycleService?.isHeadless()) {
+      return // Keep running in headless background
     }
+    void gracefulShutdown(0)
+  })
+
+  app.on('before-quit', (event) => {
+    if (!isShutdownComplete) {
+      event.preventDefault()
+      void gracefulShutdown(0)
+    }
+  })
+
+  // Handle termination signals for clean, bounded shutdown in background mode
+  process.on('SIGINT', () => {
+    void gracefulShutdown(0)
+  })
+
+  process.on('SIGTERM', () => {
+    void gracefulShutdown(0)
   })
 }
 

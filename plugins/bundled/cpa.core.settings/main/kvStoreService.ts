@@ -83,6 +83,8 @@ export class KVStoreService {
     private dirtyShortcuts = false
     private dirtyUi = false
     private dirtySchedule = false
+
+    private readonly keySubscribers: Map<string, Set<(value: unknown) => void>> = new Map()
     private savePromise: Promise<void> | null = null
 
     private readonly getHomeDir: () => string
@@ -687,6 +689,31 @@ export class KVStoreService {
         return this.data[key]
     }
 
+    subscribe(key: string, listener: (value: unknown) => void): () => void {
+        let set = this.keySubscribers.get(key)
+        if (!set) {
+            set = new Set()
+            this.keySubscribers.set(key, set)
+        }
+        set.add(listener)
+        return () => {
+            this.keySubscribers.get(key)?.delete(listener)
+        }
+    }
+
+    private notifySubscribers(key: string, value: unknown): void {
+        const listeners = this.keySubscribers.get(key)
+        if (listeners) {
+            for (const listener of listeners) {
+                try {
+                    listener(value)
+                } catch (err) {
+                    console.error(`[KVStoreService] Error in subscriber for ${key}:`, err)
+                }
+            }
+        }
+    }
+
     async getPluginConfig(): Promise<PluginSourceConfig> {
         await this.ensureLoaded()
         const plugins = this.data.plugins
@@ -834,6 +861,7 @@ export class KVStoreService {
         }
 
         this.dirtySettings = true
+        this.notifySubscribers(key, this.data[key])
         await this.save()
     }
 
@@ -928,6 +956,7 @@ export class KVStoreService {
         }
 
         this.dirtySettings = true
+        this.notifySubscribers(key, this.data[key])
         this.saveSync()
     }
 

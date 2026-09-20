@@ -238,5 +238,18 @@ describe('settingsStore', () => {
       maxWarmingTime: 7200,
     })
   })
+
+  it('updates and hydrates headlessCloseAction correctly', () => {
+    expect(useSettingsStore.getState().settings.headlessCloseAction).toBe('continue_headless')
+
+    useSettingsStore.getState().setHeadlessCloseAction('quit')
+    expect(useSettingsStore.getState().settings.headlessCloseAction).toBe('quit')
+
+    useSettingsStore.getState().hydrate({
+      headlessCloseAction: 'continue_headless',
+    })
+    expect(useSettingsStore.getState().settings.headlessCloseAction).toBe('continue_headless')
+  })
 })
+
 

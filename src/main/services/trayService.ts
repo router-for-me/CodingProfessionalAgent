@@ -193,10 +193,16 @@ export class TrayService {
   private enabled = false
   private getMainWindow: () => BrowserWindow | null
   private readonly isDev: boolean
+  private readonly isHeadless?: () => boolean
 
-  constructor(getMainWindow: () => BrowserWindow | null, isDev?: boolean) {
+  constructor(
+    getMainWindow: () => BrowserWindow | null,
+    isDev?: boolean,
+    isHeadless?: () => boolean,
+  ) {
     this.getMainWindow = getMainWindow
     this.isDev = isDev ?? isDevEnvironment()
+    this.isHeadless = isHeadless
   }
 
   /** Returns whether the tray icon / menu bar mode is currently active. */
@@ -206,6 +212,10 @@ export class TrayService {
 
   /** Enables/disables the tray icon; keeps current locale when omitted. */
   setEnabled(enabled: boolean, locale?: TrayLocale): void {
+    if (enabled && this.isHeadless?.()) {
+      this.enabled = false
+      return
+    }
     this.enabled = enabled
     if (locale) {
       this.locale = locale

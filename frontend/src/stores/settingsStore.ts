@@ -13,6 +13,7 @@ import {
   type CliProxyApiSettings,
   type EditorSettings,
   type GitSettings,
+  type HeadlessCloseAction,
   type Locale,
   type ModelSettingsConfig,
   type PersonalityTone,
@@ -38,6 +39,7 @@ interface SettingsState {
   setResumeUnfinishedConversations: (enabled: boolean) => void
   setPreventSleep: (enabled: boolean) => void
   setShowInMenuBar: (enabled: boolean) => void
+  setHeadlessCloseAction: (action: HeadlessCloseAction) => void
   setShowBottomPanel: (enabled: boolean) => void
   setTerminalPosition: (position: TerminalPosition) => void
   setCliProxyApi: (partial: Partial<CliProxyApiSettings>) => void
@@ -146,6 +148,14 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       settings: {
         ...state.settings,
         showInMenuBar,
+      },
+    })),
+
+  setHeadlessCloseAction: (headlessCloseAction) =>
+    set((state) => ({
+      settings: {
+        ...state.settings,
+        headlessCloseAction,
       },
     })),
 
@@ -448,6 +458,10 @@ export const useSettingsStore = create<SettingsState>((set) => ({
         typeof settings.showInMenuBar === 'boolean'
           ? settings.showInMenuBar
           : DEFAULT_SETTINGS.showInMenuBar
+      settings.headlessCloseAction =
+        settings.headlessCloseAction === 'quit' || settings.headlessCloseAction === 'continue_headless'
+          ? settings.headlessCloseAction
+          : DEFAULT_SETTINGS.headlessCloseAction
       settings.showBottomPanel =
         typeof settings.showBottomPanel === 'boolean'
           ? settings.showBottomPanel

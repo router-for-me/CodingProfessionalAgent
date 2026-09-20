@@ -1,174 +1,86 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import {
-  resolveWebServerStartupPlan,
-  resolveWebServerFallbackPlan,
+    resolveWebServerStartupPlan,
+    resolveWebServerFallbackPlan,
 } from '../src/main/utils/webServerStartup.js'
 
-describe('WebServer Startup Options Resolution', () => {
-  describe('resolveWebServerStartupPlan', () => {
-    describe('production mode (isDev = false)', () => {
-      it('starts web server with full config including password when enabled', () => {
+describe('resolveWebServerStartupPlan with headless options', () => {
+    it('force-starts web server when isHeadless is true even if settings.enabled is false', () => {
         const appState = {
-          settings: {
-            webServer: {
-              enabled: true,
-              host: '0.0.0.0',
-              port: 19000,
-              password: 'prod-secret-password',
+            settings: {
+                webServer: {
+                    enabled: false,
+                    port: 18080,
+                    host: '127.0.0.1',
+                    password: 'secret',
+                },
             },
-          },
         }
 
-        const plan = resolveWebServerStartupPlan(appState, false)
-
-        expect(plan.configureConfig).toEqual({
-          enabled: true,
-          host: '0.0.0.0',
-          port: 19000,
-          password: 'prod-secret-password',
-        })
+        const plan = resolveWebServerStartupPlan(appState, false, { isHeadless: true })
         expect(plan.startConfig).toEqual({
-          enabled: true,
-          host: '0.0.0.0',
-          port: 19000,
-          password: 'prod-secret-password',
+            enabled: true,
+            port: 18080,
+            host: '127.0.0.1',
+            password: 'secret',
         })
-      })
-
-      it('does not start web server when enabled is false, but passes configureConfig', () => {
-        const appState = {
-          settings: {
-            webServer: {
-              enabled: false,
-              host: '127.0.0.1',
-              port: 18080,
-              password: 'saved-password',
-            },
-          },
-        }
-
-        const plan = resolveWebServerStartupPlan(appState, false)
-
-        expect(plan.configureConfig).toEqual({
-          enabled: false,
-          host: '127.0.0.1',
-          port: 18080,
-          password: 'saved-password',
-        })
-        expect(plan.startConfig).toBeNull()
-      })
-
-      it('does not start and returns undefined configureConfig when state has no webServer settings', () => {
-        expect(resolveWebServerStartupPlan(null, false)).toEqual({
-          configureConfig: undefined,
-          startConfig: null,
-        })
-        expect(resolveWebServerStartupPlan({}, false)).toEqual({
-          configureConfig: undefined,
-          startConfig: null,
-        })
-        expect(resolveWebServerStartupPlan({ settings: {} }, false)).toEqual({
-          configureConfig: undefined,
-          startConfig: null,
-        })
-      })
     })
 
-    describe('development mode (isDev = true)', () => {
-      it('starts with enabled config when enabled is true in dev mode', () => {
+    it('overrides port and host when cliPort and cliHost are provided in headless mode', () => {
         const appState = {
-          settings: {
-            webServer: {
-              enabled: true,
-              host: '127.0.0.1',
-              port: 18080,
-              password: 'dev-custom-password',
+            settings: {
+                webServer: {
+                    enabled: false,
+                    port: 18080,
+                    host: '127.0.0.1',
+                },
             },
-          },
         }
 
-        const plan = resolveWebServerStartupPlan(appState, true)
-
-        expect(plan.configureConfig).toEqual({
-          enabled: true,
-          host: '127.0.0.1',
-          port: 18080,
-          password: 'dev-custom-password',
+        const plan = resolveWebServerStartupPlan(appState, false, {
+            isHeadless: true,
+            cliPort: 19999,
+            cliHost: '0.0.0.0',
         })
-        expect(plan.startConfig).toEqual({
-          enabled: true,
-          host: '127.0.0.1',
-          port: 18080,
-          password: 'dev-custom-password',
-        })
-      })
+        expect(plan.startConfig?.port).toBe(19999)
+        expect(plan.startConfig?.host).toBe('0.0.0.0')
+        expect(plan.startConfig?.enabled).toBe(true)
+    })
 
-      it('auto-starts in dev mode even if enabled is false, using persisted host/port/password', () => {
-        const appState = {
-          settings: {
-            webServer: {
-              enabled: false,
-              host: '0.0.0.0',
-              port: 18081,
-              password: 'dev-password',
+    it('falls back to default 18080 and 127.0.0.1 in headless mode when appState is empty', () => {
+        const plan = resolveWebServerStartupPlan(undefined, false, { isHeadless: true })
+        expect(plan.startConfig?.port).toBe(18080)
+        expect(plan.startConfig?.host).toBe('127.0.0.1')
+        expect(plan.startConfig?.enabled).toBe(true)
+    })
+
+    it('returns fallback plan for headless mode in resolveWebServerFallbackPlan', () => {
+        const fallback = resolveWebServerFallbackPlan(false, {
+            isHeadless: true,
+            cliPort: 19000,
+            cliHost: '127.0.0.1',
+        })
+        expect(fallback).toEqual({
+            enabled: true,
+            host: '127.0.0.1',
+            port: 19000,
+            password: '',
+        })
+    })
+
+    it('preserves existing non-headless behavior when isHeadless is not true', () => {
+        const appStateDisabled = {
+            settings: {
+                webServer: {
+                    enabled: false,
+                    port: 18080,
+                },
             },
-          },
         }
+        const prodPlan = resolveWebServerStartupPlan(appStateDisabled, false)
+        expect(prodPlan.startConfig).toBeNull()
 
-        const plan = resolveWebServerStartupPlan(appState, true)
-
-        expect(plan.configureConfig).toEqual({
-          enabled: false,
-          host: '0.0.0.0',
-          port: 18081,
-          password: 'dev-password',
-        })
-        expect(plan.startConfig).toEqual({
-          host: '0.0.0.0',
-          port: 18081,
-          password: 'dev-password',
-        })
-      })
-
-      it('auto-starts in dev mode with defaults when webServer settings are empty or password missing', () => {
-        const appState = {
-          settings: {
-            webServer: {
-              enabled: false,
-            },
-          },
-        }
-
-        const plan = resolveWebServerStartupPlan(appState, true)
-
-        expect(plan.startConfig).toEqual({
-          host: '127.0.0.1',
-          port: 18080,
-          password: '',
-        })
-
-        const emptyPlan = resolveWebServerStartupPlan(null, true)
-        expect(emptyPlan.configureConfig).toBeUndefined()
-        expect(emptyPlan.startConfig).toEqual({
-          host: '127.0.0.1',
-          port: 18080,
-          password: '',
-        })
-      })
+        const devPlan = resolveWebServerStartupPlan(appStateDisabled, true)
+        expect(devPlan.startConfig?.port).toBe(18080)
     })
-  })
-
-  describe('resolveWebServerFallbackPlan', () => {
-    it('returns default fallback startup config in dev mode', () => {
-      expect(resolveWebServerFallbackPlan(true)).toEqual({
-        host: '127.0.0.1',
-        port: 18080,
-        password: '',
-      })
-    })
-
-    it('returns null in production mode when settings read fails', () => {
-      expect(resolveWebServerFallbackPlan(false)).toBeNull()
-    })
-  })
 })

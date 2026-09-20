@@ -518,6 +518,9 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
         setShowInMenuBar(enabled) {
             useSettingsStore.getState().setShowInMenuBar(enabled)
         },
+        setHeadlessCloseAction(action) {
+            useSettingsStore.getState().setHeadlessCloseAction(action)
+        },
         setShowBottomPanel(enabled) {
             useSettingsStore.getState().setShowBottomPanel(enabled)
         },

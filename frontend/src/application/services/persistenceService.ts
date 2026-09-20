@@ -571,6 +571,10 @@ function normalizeSettings(
       typeof next.showInMenuBar === 'boolean'
         ? next.showInMenuBar
         : DEFAULT_SETTINGS.showInMenuBar,
+    headlessCloseAction:
+      next.headlessCloseAction === 'quit' || next.headlessCloseAction === 'continue_headless'
+        ? next.headlessCloseAction
+        : DEFAULT_SETTINGS.headlessCloseAction,
     showBottomPanel:
       typeof next.showBottomPanel === 'boolean'
         ? next.showBottomPanel

@@ -33,6 +33,7 @@ export type {
 
 export type ThemeMode = 'dark' | 'light' | 'system'
 export type Locale = 'zh-CN' | 'en'
+export type HeadlessCloseAction = 'continue_headless' | 'quit'
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool'
 export type MessageStatus = 'streaming' | 'done' | 'error' | 'aborted'
 export type ToolStatus =
@@ -302,6 +303,7 @@ export interface AppSettings {
   resumeUnfinishedConversations?: boolean
   preventSleep?: boolean
   showInMenuBar: boolean
+  headlessCloseAction?: HeadlessCloseAction
   showBottomPanel: boolean
   terminalPosition: TerminalPosition
   cliProxyApi: CliProxyApiSettings
@@ -617,6 +619,7 @@ export interface SettingsService {
     setResumeUnfinishedConversations?(enabled: boolean): void
     setPreventSleep?(enabled: boolean): void
     setShowInMenuBar?(enabled: boolean): void
+    setHeadlessCloseAction?(action: HeadlessCloseAction): void
     setShowBottomPanel?(enabled: boolean): void
     setTerminalPosition?(position: TerminalPosition): void
     setCliProxyApi?(partial: Partial<CliProxyApiSettings>): void
