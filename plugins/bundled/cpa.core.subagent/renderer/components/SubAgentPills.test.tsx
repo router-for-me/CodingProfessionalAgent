@@ -666,4 +666,210 @@ describe('SubAgentPills', () => {
     expect(screen.getByText('ActiveWorker')).toBeInTheDocument()
     expect(screen.queryByText('(Queued)')).toBeNull()
   })
+
+  it('applies shimmer when streaming is true for non-terminal subagents', () => {
+    const mockServices = {
+      subAgents: {
+        getAgents: () => EMPTY_AGENTS,
+      },
+    }
+
+    render(
+      <HostServicesProvider services={mockServices as any}>
+        <SubAgentPills
+          parentSessionId="sess-stream"
+          streaming={true}
+          parts={[
+            {
+              id: 'call-stream',
+              name: 'spawn_agent',
+              args: { name: 'StreamingAgent', prompt: 'inspect code' },
+              status: 'running',
+            },
+          ]}
+        />
+      </HostServicesProvider>,
+    )
+
+    const pill = screen.getByText('StreamingAgent')
+    expect(pill).toHaveClass('animate-text-shimmer')
+    const button = pill.closest('button')
+    expect(button).toHaveClass('text-[var(--text-muted)]')
+  })
+
+  it('applies shimmer when toolOverlays reports the spawn call is running', () => {
+    const mockServices = {
+      subAgents: {
+        getAgents: () => EMPTY_AGENTS,
+      },
+    }
+
+    render(
+      <HostServicesProvider services={mockServices as any}>
+        <SubAgentPills
+          parentSessionId="sess-overlay"
+          streaming={false}
+          toolOverlays={{
+            'call-ov': {
+              toolCallId: 'call-ov',
+              status: 'running',
+            },
+          }}
+          parts={[
+            {
+              id: 'call-ov',
+              name: 'spawn_agent',
+              args: { name: 'OverlayAgent', prompt: 'run task' },
+              status: 'queued',
+            },
+          ]}
+        />
+      </HostServicesProvider>,
+    )
+
+    const pill = screen.getByText('OverlayAgent')
+    expect(pill).toHaveClass('animate-text-shimmer')
+    const button = pill.closest('button')
+    expect(button).toHaveClass('text-[var(--text-muted)]')
+  })
+
+  it('does NOT apply shimmer when subagent is completed even if streaming is true', () => {
+    const mockAgents: readonly SubAgentRecord[] = [
+      {
+        id: 'ag-done',
+        name: 'DoneWorker',
+        color: '#3dd68c',
+        icon: 'atom',
+        parentSessionId: 'sess-done',
+        sessionId: 'ag-done',
+        modelId: 'm',
+        status: 'completed',
+        createdAt: 1,
+        updatedAt: 1,
+        parentToolCallId: 'call-done',
+      },
+    ]
+
+    const mockServices = {
+      subAgents: {
+        getAgents: () => mockAgents,
+      },
+    }
+
+    render(
+      <HostServicesProvider services={mockServices as any}>
+        <SubAgentPills
+          parentSessionId="sess-done"
+          streaming={true}
+          parts={[
+            {
+              id: 'call-done',
+              name: 'spawn_agent',
+              args: { name: 'DoneWorker', prompt: 'done task' },
+              status: 'done',
+            },
+          ]}
+        />
+      </HostServicesProvider>,
+    )
+
+    const pill = screen.getByText('DoneWorker')
+    expect(pill).not.toHaveClass('animate-text-shimmer')
+    const button = pill.closest('button')
+    expect(button).toHaveClass('text-[var(--text-primary)]')
+  })
+
+  it('matches subagent record by name fallback when parentToolCallId is unassigned', () => {
+    const mockAgents: readonly SubAgentRecord[] = [
+      {
+        id: 'ag-name-match',
+        name: 'reviewer-atlas',
+        color: '#9b7dff',
+        icon: 'sparkle',
+        parentSessionId: 'sess-name',
+        sessionId: 'ag-name-match',
+        modelId: 'm',
+        status: 'running',
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ]
+
+    const mockServices = {
+      subAgents: {
+        getAgents: () => mockAgents,
+      },
+    }
+
+    render(
+      <HostServicesProvider services={mockServices as any}>
+        <SubAgentPills
+          parentSessionId="sess-name"
+          parts={[
+            {
+              id: 'call-new-id',
+              name: 'spawn_agent',
+              args: { name: 'reviewer-atlas', prompt: 'review PR' },
+              status: 'running',
+            },
+          ]}
+        />
+      </HostServicesProvider>,
+    )
+
+    const pill = screen.getByText('reviewer-atlas')
+    expect(pill).toBeInTheDocument()
+    expect(pill).toHaveClass('animate-text-shimmer')
+    const button = pill.closest('button')
+    expect(button).toHaveClass('text-[var(--text-muted)]')
+  })
+
+  it('does NOT bind to a historical completed subagent with a different toolCallId having the same name', () => {
+    const mockAgents: readonly SubAgentRecord[] = [
+      {
+        id: 'ag-old-done',
+        name: 'reviewer-atlas',
+        color: '#3dd68c',
+        icon: 'atom',
+        parentSessionId: 'sess-collision',
+        sessionId: 'ag-old-done',
+        modelId: 'm',
+        status: 'completed',
+        createdAt: 1,
+        updatedAt: 1,
+        parentToolCallId: 'call-first-completed',
+      },
+    ]
+
+    const mockServices = {
+      subAgents: {
+        getAgents: () => mockAgents,
+      },
+    }
+
+    // A second spawn_agent with the same name is currently streaming / running in-flight
+    render(
+      <HostServicesProvider services={mockServices as any}>
+        <SubAgentPills
+          parentSessionId="sess-collision"
+          streaming={true}
+          parts={[
+            {
+              id: 'call-second-running',
+              name: 'spawn_agent',
+              args: { name: 'reviewer-atlas', prompt: 'second review task' },
+              status: 'running',
+            },
+          ]}
+        />
+      </HostServicesProvider>,
+    )
+
+    const pill = screen.getByText('reviewer-atlas')
+    expect(pill).toBeInTheDocument()
+    // It must NOT be marked as done from the old agent, and must retain shimmer animation
+    expect(pill).toHaveClass('animate-text-shimmer')
+    const button = pill.closest('button')
+    expect(button).toHaveClass('text-[var(--text-muted)]')
+  })
 })

@@ -1,6 +1,7 @@
 import {
   useHostServices,
   useSubAgents,
+  useToolOverlays,
   useTranslation,
   cn,
 } from '@cpa/plugin-ui'
@@ -35,13 +36,59 @@ function isInFlightSpawnStatus(status: unknown): boolean {
   return status === 'running' || status === 'queued' || status === 'awaiting_approval'
 }
 
+function isTerminalToolStatus(status: unknown): boolean {
+  return (
+    status === 'done' ||
+    status === 'rejected' ||
+    status === 'error' ||
+    status === 'aborted'
+  )
+}
+
+function isToolRunning(status: unknown): boolean {
+  return (
+    status === 'queued' ||
+    status === 'running' ||
+    status === 'awaiting_approval'
+  )
+}
+
+function resolveToolStatus(
+  canonicalStatus: any,
+  overlayStatus: any,
+): any {
+  if (!overlayStatus) return canonicalStatus
+  if (isTerminalToolStatus(canonicalStatus) && isToolRunning(overlayStatus)) {
+    return canonicalStatus
+  }
+  return overlayStatus
+}
+
+function findToolOverlay(
+  toolOverlays: Readonly<Record<string, any>> | undefined,
+  id: string,
+): any {
+  if (!toolOverlays || !id) return undefined
+  const normalized = normalizeToolCallId(id)
+  return (
+    toolOverlays[id] ??
+    toolOverlays[normalized] ??
+    toolOverlays[`call_${normalized}`] ??
+    Object.values(toolOverlays).find(
+      (o: any) => normalizeToolCallId(o?.toolCallId || '') === normalized,
+    )
+  )
+}
+
 /** Failed / incomplete spawn_agent calls never created a sub-agent and must not render badges. */
 function shouldShowSpawnPill(
   part: SpawnToolPart,
   record: { id: string } | undefined,
+  resolvedStatus?: unknown,
 ): boolean {
   if (record) return true
-  return isInFlightSpawnStatus(part.status) && hasNonEmptyPrompt(part.args)
+  const effectiveStatus = resolvedStatus ?? part.status
+  return isInFlightSpawnStatus(effectiveStatus) && hasNonEmptyPrompt(part.args)
 }
 
 export function SubAgentPills(props: {
@@ -53,11 +100,14 @@ export function SubAgentPills(props: {
   part?: SpawnToolPart
   value?: SpawnToolPart
   message?: { sessionId?: string }
+  streaming?: boolean
+  toolOverlays?: Readonly<Record<string, any>>
   className?: string
 }) {
   const {
     className,
     message,
+    streaming = false,
   } = props
   const singlePart = props.part ?? props.value
   const parts = props.parts ?? (singlePart ? [singlePart] : [])
@@ -70,21 +120,49 @@ export function SubAgentPills(props: {
   const services = useHostServices()
   const { t } = useTranslation()
   const agents = useSubAgents(parentSessionId)
+  const sessionOverlays = useToolOverlays(parentSessionId)
+  const effectiveOverlays = props.toolOverlays ?? sessionOverlays
 
   const pills = parts.flatMap((part) => {
     const normalized = normalizeToolCallId(part.id)
-    const record = agents.find(
-      (agent) =>
-        agent.parentSessionId === parentSessionId &&
-        agent.parentToolCallId &&
-        normalizeToolCallId(agent.parentToolCallId) === normalized,
-    )
-    if (!shouldShowSpawnPill(part, record)) return []
+    const overlay = findToolOverlay(effectiveOverlays, part.id)
+    const resolvedStatus = resolveToolStatus(part.status, overlay?.status)
+
+    const record =
+      agents.find(
+        (agent) =>
+          agent.parentSessionId === parentSessionId &&
+          agent.parentToolCallId &&
+          normalizeToolCallId(agent.parentToolCallId) === normalized,
+      ) ??
+      agents.find(
+        (agent) =>
+          agent.parentSessionId === parentSessionId &&
+          typeof part.args?.name === 'string' &&
+          agent.name === part.args.name.trim() &&
+          (!agent.parentToolCallId ||
+            normalizeToolCallId(agent.parentToolCallId) === normalized),
+      )
+
+    if (!shouldShowSpawnPill(part, record, resolvedStatus)) return []
+
+    const isRecordTerminal =
+      record?.status === 'completed' ||
+      record?.status === 'error' ||
+      record?.status === 'aborted'
+    const isToolTerminal = isTerminalToolStatus(resolvedStatus)
+    const isTerminal =
+      isRecordTerminal || (isToolTerminal && record?.status !== 'running')
+
     const isQueued = record?.status === 'queued'
+
     const isRunning =
-      record?.status === 'running' ||
-      isQueued ||
-      part.status === 'running'
+      !isTerminal &&
+      (record?.status === 'running' ||
+        isQueued ||
+        isToolRunning(resolvedStatus) ||
+        Boolean(streaming))
+
     return [{
       part,
       record,
@@ -107,8 +185,10 @@ export function SubAgentPills(props: {
           type="button"
           className={cn(
             'inline-flex items-center gap-1.5 rounded-full border border-[var(--border-subtle)]',
-            'bg-[var(--bg-elevated)] px-2.5 py-1 text-[12px] text-[var(--text-primary)]',
-            'hover:bg-[var(--bg-sidebar-hover)]',
+            'bg-[var(--bg-elevated)] px-2.5 py-1 text-[12px]',
+            pill.isRunning
+              ? 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
+              : 'text-[var(--text-primary)] hover:bg-[var(--bg-sidebar-hover)]',
           )}
           onClick={() => {
             if (!pill.record) return

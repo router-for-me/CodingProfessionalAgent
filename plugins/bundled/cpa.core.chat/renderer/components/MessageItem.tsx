@@ -1110,6 +1110,8 @@ function renderParts(
                         props={{
                             sessionId: opts.sessionId,
                             parts: segment.parts,
+                            streaming: opts.streaming && isLastSegment,
+                            toolOverlays: opts.toolOverlays,
                         }}
                     />
                 )
