@@ -1415,5 +1415,16 @@
   "webAuth.connectionError": "Unable to reach the Web Server",
   "webAuth.retry": "Retry",
   "webAuth.showPassword": "Show password",
-  "webAuth.hidePassword": "Hide password"
+  "webAuth.hidePassword": "Hide password",
+  "settings.appearance.wallpaper.title": "App wallpaper",
+  "settings.appearance.wallpaper.description": "A subtle background across the app. Cards and menus stay opaque for readability.",
+  "settings.appearance.wallpaper.off": "Off",
+  "settings.appearance.wallpaper.aurora": "Aurora",
+  "settings.appearance.wallpaper.dunes": "Dunes",
+  "settings.appearance.wallpaper.ocean": "Ocean",
+  "settings.appearance.wallpaper.custom": "Choose local image",
+  "settings.appearance.wallpaper.importing": "Importing…",
+  "settings.appearance.wallpaper.reset": "Reset wallpaper",
+  "settings.appearance.wallpaper.invalid": "Cannot use this image. Choose a valid image within the limits. Your previous wallpaper is unchanged.",
+  "settings.appearance.wallpaper.saveError": "Could not load or save the wallpaper. Please try again."
 }

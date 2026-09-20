@@ -120,13 +120,13 @@ export function SettingsPanel() {
 
     return (
         <div
-            className="fixed inset-0 z-50 flex bg-[var(--bg-app)] text-[var(--text-primary)] select-none"
+            className="app-background-surface fixed inset-0 z-50 flex bg-[var(--bg-app)] text-[var(--text-primary)] select-none"
             role="dialog"
             aria-modal="true"
             aria-label={t('settings.title')}
         >
             <aside
-                className="flex h-full shrink-0 flex-col border-r border-[var(--border-subtle)] bg-[var(--bg-sidebar)]"
+                className="flex h-full shrink-0 flex-col border-r border-[var(--border-subtle)] app-background-surface bg-[var(--bg-sidebar)]"
                 style={{ width: sidebarWidth }}
             >
                 <div
@@ -317,7 +317,7 @@ export function SettingsPanel() {
 
             <main
                 className={cn(
-                    'relative min-w-0 flex-1 bg-[var(--bg-app)]',
+                    'app-background-surface relative min-w-0 flex-1 bg-[var(--bg-app)]',
                     'flex h-full flex-col overflow-hidden'
                 )}
             >

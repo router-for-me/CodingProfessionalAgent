@@ -1,3 +1,4 @@
+import { WallpaperSection } from '../wallpaper/WallpaperSection.js'
 import { useMemo, useState } from 'react'
 import {
     CustomSelect,
@@ -884,6 +885,8 @@ export function AppearanceSection() {
                     </div>
                 </div>
             </section>
+
+            <WallpaperSection />
 
             {/* Preferences Section */}
             <section className="space-y-3 pt-4">

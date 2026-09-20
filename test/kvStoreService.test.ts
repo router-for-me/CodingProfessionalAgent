@@ -37,6 +37,21 @@ describe('KVStoreService', () => {
     expect(await reloaded.get('test-key')).toEqual({ foo: 'bar', count: 42 })
   })
 
+  it('persists wallpaper choices centrally and reset removes custom image data', async () => {
+    const central = new KVStoreService({ homeDir: tempDir })
+    const key = 'appearance.wallpaper'
+    const custom = { kind: 'custom', data: 'data:image/jpeg;base64,/9j/aaaa' }
+    await central.set(key, custom)
+    const reopened = new KVStoreService({ homeDir: tempDir })
+    expect(await reopened.get(key)).toEqual(custom)
+    await reopened.set(key, { kind: 'off' })
+    const saved = await fs.readFile(path.join(tempDir, '.coding-professional-agent', 'settings.json'), 'utf8')
+    expect(JSON.parse(saved)[key]).toEqual({ kind: 'off' })
+    expect(saved).not.toContain(custom.data)
+    central.dispose()
+    reopened.dispose()
+  })
+
   it('defaults to ~/.coding-professional-agent/settings.json', () => {
     const defaultService = new KVStoreService({ getHomeDir: () => '/mock-home' })
     const expectedPath = path.join('/mock-home', '.coding-professional-agent', 'settings.json')

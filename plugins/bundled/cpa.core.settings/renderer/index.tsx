@@ -1,3 +1,5 @@
+import { WallpaperEffect } from './wallpaper/WallpaperSection.js'
+import { wallpaperStore } from './wallpaper/wallpaper.js'
 import { definePluginEntry } from '@cpa/plugin-sdk'
 import type {
     ActionContribution,
@@ -44,6 +46,13 @@ export const settingsRendererEntry = definePluginEntry({
     runtime: 'renderer',
     activate(context: PluginContext) {
         setSettingsCapabilityClient(context.capabilityClient)
+        if (context.capabilityClient) void wallpaperStore.initialize(context.capabilityClient)
+        context.register({
+            kind: 'slot',
+            id: 'appearance-background',
+            target: 'workspace.overlay',
+            value: { id: 'appearance-background', component: WallpaperEffect },
+        })
 
         // 1. Register Settings Groups
         const groups: SettingsGroupContribution[] = [
@@ -179,13 +188,19 @@ export const settingsRendererEntry = definePluginEntry({
                 labelKey: 'settings.nav.appearance',
                 icon: Sun,
                 component: AppearanceSection,
-                keywords: ['appearance', 'theme', 'color', 'dark', 'light', 'font'],
+                keywords: ['wallpaper', 'background', 'appearance', 'theme', 'color', 'dark', 'light', 'font'],
                 items: [
                     {
                         id: 'theme',
                         labelKey: 'settings.appearance.theme',
                         descriptionKey: 'settings.appearance.theme.desc',
                         keywords: ['theme', 'system'],
+                    },
+                    {
+                        id: 'wallpaper',
+                        labelKey: 'settings.appearance.wallpaper.title',
+                        descriptionKey: 'settings.appearance.wallpaper.description',
+                        keywords: ['wallpaper', 'background', 'image', '壁纸', '背景'],
                     },
                     {
                         id: 'darkTheme',
@@ -558,6 +573,7 @@ export const settingsRendererEntry = definePluginEntry({
         }
     },
     deactivate() {
+        wallpaperStore.dispose()
         setSettingsCapabilityClient(null)
     },
 })

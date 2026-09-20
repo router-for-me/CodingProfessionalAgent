@@ -75,7 +75,7 @@ export function BottomPanel() {
                 aria-hidden={false}
                 data-state="open"
                 data-mobile="true"
-                className="fixed inset-0 z-50 flex h-full w-full flex-col overflow-hidden bg-[var(--bg-app)]"
+                className="fixed inset-0 z-50 flex h-full w-full flex-col overflow-hidden app-background-surface bg-[var(--bg-app)]"
             >
                 <div className="flex h-full min-h-0 w-full shrink-0 flex-col">
                     <div
@@ -112,7 +112,7 @@ export function BottomPanel() {
             inert={!visible}
             data-state={collapse.open ? 'open' : 'closed'}
             className={cn(
-                'relative flex shrink-0 flex-col overflow-hidden border-t border-[var(--border-subtle)] bg-[var(--bg-app)]',
+                'relative flex shrink-0 flex-col overflow-hidden border-t border-[var(--border-subtle)] app-background-surface bg-[var(--bg-app)]',
                 !isResizing && 'transition-[height] duration-200 ease-out',
             )}
             style={{ height: collapse.open ? height : 0 }}

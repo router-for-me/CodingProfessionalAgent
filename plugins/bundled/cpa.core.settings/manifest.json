@@ -52,6 +52,9 @@
             "settings",
             "user.logout",
             "keyboard-shortcuts"
+        ],
+        "slot": [
+            "appearance-background"
         ]
     }
 }

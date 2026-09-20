@@ -53,7 +53,7 @@ export function Sidebar() {
 
         return (
             <aside
-                className="fixed inset-0 z-50 flex h-full w-full flex-col overflow-hidden bg-[var(--bg-sidebar)] select-none"
+                className="fixed inset-0 z-50 flex h-full w-full flex-col overflow-hidden app-background-surface bg-[var(--bg-sidebar)] select-none"
                 aria-hidden={false}
                 data-state="open"
                 data-mobile="true"
@@ -74,7 +74,7 @@ export function Sidebar() {
     return (
         <aside
             className={cn(
-                'relative flex h-full shrink-0 flex-col border-r border-[var(--border-subtle)] bg-[var(--bg-sidebar)] select-none',
+                'relative flex h-full shrink-0 flex-col border-r border-[var(--border-subtle)] app-background-surface bg-[var(--bg-sidebar)] select-none',
                 !collapse.open || collapse.transition
                     ? 'overflow-hidden'
                     : 'overflow-visible',

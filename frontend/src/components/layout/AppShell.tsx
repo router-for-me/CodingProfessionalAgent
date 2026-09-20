@@ -87,7 +87,7 @@ export function AppShell() {
     const isRightMaximized = rightSidebarVisible && rightSidebarMaximized
 
     return (
-        <div className="relative flex h-full w-full bg-[var(--bg-app)] text-[var(--text-primary)]">
+        <div className="app-background-surface relative flex h-full w-full bg-[var(--bg-app)] text-[var(--text-primary)]">
             <Sidebar />
             <main
                 className={cn(

@@ -1413,5 +1413,16 @@
   "webAuth.connectionError": "无法连接 Web 服务器",
   "webAuth.retry": "重试",
   "webAuth.showPassword": "显示密码",
-  "webAuth.hidePassword": "隐藏密码"
+  "webAuth.hidePassword": "隐藏密码",
+  "settings.appearance.wallpaper.title": "应用壁纸",
+  "settings.appearance.wallpaper.description": "在应用中显示柔和背景。卡片和菜单保持不透明，确保内容清晰可读。",
+  "settings.appearance.wallpaper.off": "关闭",
+  "settings.appearance.wallpaper.aurora": "极光",
+  "settings.appearance.wallpaper.dunes": "沙丘",
+  "settings.appearance.wallpaper.ocean": "海洋",
+  "settings.appearance.wallpaper.custom": "选择本地图片",
+  "settings.appearance.wallpaper.importing": "正在导入…",
+  "settings.appearance.wallpaper.reset": "重置壁纸",
+  "settings.appearance.wallpaper.invalid": "无法使用此图片，请选择符合限制的有效图片。原壁纸保持不变。",
+  "settings.appearance.wallpaper.saveError": "无法加载或保存壁纸，请重试。"
 }

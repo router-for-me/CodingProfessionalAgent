@@ -252,6 +252,9 @@ export const bundledManifests: Readonly<Record<string, PluginManifest>> = Object
                         "settings",
                         "user.logout",
                         "keyboard-shortcuts"
+                ],
+                "slot": [
+                        "appearance-background"
                 ]
         }
 }),
