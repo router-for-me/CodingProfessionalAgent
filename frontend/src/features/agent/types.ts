@@ -4,7 +4,7 @@
  */
 
 import type { ModelCatalogEntry } from '@/features/models/types'
-import type { GitSettings, PersonalityTone, Speed, SubagentsSettings } from '@/types/models'
+import type { GitSettings, ModelSettingsConfig, PersonalityTone, Speed, SubagentsSettings } from '@/types/models'
 import type { CompactionSettings } from '@/features/agent-runtime/context/tokenEstimate'
 import type { AgentRunEvent, AgentTool } from '@/features/agent-runtime/agent/types'
 import type { WorktreeRunPolicy } from '@/features/agent-runtime/context/worktreeMode'
@@ -95,6 +95,8 @@ export interface AgentPrepareInput {
     subagentsSettings?: SubagentsSettings
     /** Optional Git settings. */
     gitSettings?: Partial<GitSettings>
+    /** Optional model and cache warming settings. */
+    modelSettings?: ModelSettingsConfig
 }
 
 /**
@@ -133,6 +135,7 @@ export interface PreparedAgentRun {
     readonly worktreePolicy?: WorktreeRunPolicy
     readonly subagentsSettings?: SubagentsSettings
     readonly gitSettings?: Partial<GitSettings>
+    readonly modelSettings?: ModelSettingsConfig
     /** Frozen snapshot of providers, tools, resources, hooks, middleware, and lease for this run. */
     readonly generationSnapshot?: AgentGenerationSnapshot
 }
@@ -150,6 +153,7 @@ export interface AgentStreamChatInput {
         reasoningEffort?: string
         reasoningLevel?: string
         speed?: string
+        modelSettings?: ModelSettingsConfig
     } | undefined
     /** Optional callback returning a pending steer user entry to inject after the current LLM request or tool execution */
     consumeSteerEntry?: () => UserEntry | undefined

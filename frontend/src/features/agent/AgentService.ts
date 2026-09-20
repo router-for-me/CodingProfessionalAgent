@@ -37,6 +37,9 @@ export interface AgentService {
     /** Reject a pending tool for the exact runId/toolCallId. */
     reject(runId: string, toolCallId: string): boolean
 
+    /** Cancel and clear any background cache warmers for a session (or all sessions if omitted). */
+    cancelSessionWarmers?(sessionId?: string): Promise<void> | void
+
     /**
      * Manual /compact — isolated Task14 compaction using the prepared snapshot/model.
      * Does not append a user entry. Rejects when a run is already active.

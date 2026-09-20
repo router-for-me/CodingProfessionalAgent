@@ -93,6 +93,7 @@ import {
     flushPendingPersistence,
     ensureSessionLoaded,
     schedulePersist,
+    setSessionDeletionHook,
 } from './persistenceService'
 import { createId } from '@/lib/id'
 
@@ -174,6 +175,13 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
     const { capabilityClient, router, notifier } = options
     const agentRunStateCache = new Map<string, AgentRunState>()
 
+    const dispatchCancelSessionWarmers = (sessionId?: string) => {
+        options.agentService?.cancelSessionWarmers?.(sessionId)
+        activeAgentController?.cancelSessionWarmers?.(sessionId)
+    }
+
+    setSessionDeletionHook((id) => dispatchCancelSessionWarmers(id))
+
     const sessions: SessionService = {
         getSnapshot(): readonly SessionItem[] {
             return useSessionStore.getState().sessions
@@ -198,6 +206,7 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
         },
 
         async delete(sessionId: string): Promise<void> {
+            dispatchCancelSessionWarmers(sessionId)
             useSessionStore.getState().removeSession(sessionId)
         },
 
@@ -456,8 +465,14 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
         },
 
         async update(patch: Partial<AppSettings>): Promise<void> {
+            if (patch.modelSettings?.cacheWarming?.mode === 'off') {
+                dispatchCancelSessionWarmers()
+            }
             if (capabilityClient) {
                 await capabilityClient.invoke('settings.update', [patch])
+                if (patch.modelSettings?.cacheWarming?.mode === 'off') {
+                    dispatchCancelSessionWarmers()
+                }
                 return
             }
             useSettingsStore.getState().hydrate(patch)
@@ -2338,6 +2353,7 @@ export interface HostAgentController {
     send(payload: ChatSendPayload, opts?: { onSessionAccepted?: (sessionId: string) => void }): Promise<string | null | undefined>
     stop?(sessionId?: string | null): void
     abort?(sessionId?: string | null): void
+    cancelSessionWarmers?(sessionId?: string | null): void
     compact?(focus: string, sessionId?: string | null): Promise<void>
     retrySession?(sessionId: string): Promise<void>
     resumeSession?(sessionId: string): Promise<string | null>

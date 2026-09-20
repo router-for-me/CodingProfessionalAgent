@@ -221,15 +221,25 @@ export interface UserProfileSettings {
   tier: string
 }
 
+export type CacheWarmingMode = 'off' | 'streaming' | 'idle'
+
+export interface CacheWarmingSettings {
+  mode: CacheWarmingMode
+  maxWarmingTime: number
+}
+
 export interface ModelCustomConfig {
   enabled: boolean
   enabledReasoningLevels?: string[]
+  ttl?: number
 }
 
 export interface ModelSettingsConfig {
   enableAll: boolean
+  defaultTtl?: number
   models: Record<string, ModelCustomConfig>
   modelOrder?: string[]
+  cacheWarming?: CacheWarmingSettings
 }
 
 export type GitMergeMethod = 'merge' | 'squash'

@@ -14,6 +14,8 @@ export type {
   ActiveRunInfo,
   AgentRunStatus,
   AppSettings,
+  CacheWarmingMode,
+  CacheWarmingSettings,
   CliProxyApiSettings,
   CommandHookHandlerConfig,
   EditorFollowUpMode,
@@ -123,8 +125,13 @@ export const DEFAULT_PROFILE: UserProfileSettings = {
 
 export const DEFAULT_MODEL_SETTINGS: ModelSettingsConfig = {
   enableAll: true,
+  defaultTtl: 300,
   models: {},
   modelOrder: [],
+  cacheWarming: {
+    mode: 'off',
+    maxWarmingTime: 3600,
+  },
 }
 
 export const DEFAULT_GIT_SETTINGS: GitSettings = {

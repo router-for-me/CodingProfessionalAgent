@@ -2,6 +2,7 @@ import React, { useMemo, useState, useEffect, useCallback } from 'react'
 import { GripVertical, Search } from 'lucide-react'
 import {
     cn,
+    CustomSelect,
     SettingsCard,
     SettingsRow,
     SettingsSection,
@@ -9,7 +10,7 @@ import {
     useHostServices,
     useTranslation,
 } from '@cpa/plugin-ui'
-import type { ModelCatalogEntry, ModelReasoningOption, ModelSettingsConfig } from '@cpa/plugin-api'
+import type { CacheWarmingMode, ModelCatalogEntry, ModelReasoningOption, ModelSettingsConfig } from '@cpa/plugin-api'
 
 export const FALLBACK_MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     {
@@ -43,8 +44,13 @@ export const FALLBACK_MODEL_CATALOG: readonly ModelCatalogEntry[] = [
 
 export const DEFAULT_MODEL_SETTINGS: ModelSettingsConfig = {
     enableAll: true,
+    defaultTtl: 300,
     models: {},
     modelOrder: [],
+    cacheWarming: {
+        mode: 'off',
+        maxWarmingTime: 3600,
+    },
 }
 
 export function orderModels(
@@ -240,6 +246,62 @@ export function ModelsSection() {
         [updateModelSettings],
     )
 
+    const defaultTtl = modelSettings.defaultTtl ?? 300
+    const warmingMode = modelSettings.cacheWarming?.mode ?? 'off'
+    const maxWarmingTime = modelSettings.cacheWarming?.maxWarmingTime ?? 3600
+
+    const updateDefaultTtl = useCallback(
+        (val: number) => {
+            updateModelSettings((prev) => ({
+                ...prev,
+                defaultTtl: val,
+            }))
+        },
+        [updateModelSettings],
+    )
+
+    const updateWarmingMode = useCallback(
+        (mode: CacheWarmingMode) => {
+            updateModelSettings((prev) => ({
+                ...prev,
+                cacheWarming: {
+                    mode,
+                    maxWarmingTime: prev.cacheWarming?.maxWarmingTime ?? 3600,
+                },
+            }))
+        },
+        [updateModelSettings],
+    )
+
+    const updateMaxWarmingTime = useCallback(
+        (timeVal: number) => {
+            updateModelSettings((prev) => ({
+                ...prev,
+                cacheWarming: {
+                    mode: prev.cacheWarming?.mode ?? 'off',
+                    maxWarmingTime: timeVal,
+                },
+            }))
+        },
+        [updateModelSettings],
+    )
+
+    const setModelTtl = useCallback(
+        (modelId: string, ttl: number | undefined) => {
+            updateModelSettings((prev) => ({
+                ...prev,
+                models: {
+                    ...prev.models,
+                    [modelId]: {
+                        ...prev.models?.[modelId],
+                        ttl,
+                    },
+                },
+            }))
+        },
+        [updateModelSettings],
+    )
+
     return (
         <div className="mx-auto w-full max-w-[760px] space-y-6 px-8 pt-8 pb-12">
             <h1 className="text-[22px] font-semibold tracking-tight text-[var(--text-primary)]">
@@ -251,7 +313,7 @@ export function ModelsSection() {
                     <SettingsRow
                         title={t('settings.models.enableAll', { defaultValue: 'Enable all models and reasoning levels' })}
                         description={t('settings.models.enableAll.desc', {
-                            defaultValue: 'Automatically enable all models from the catalog and all their supported reasoning efforts.',
+                            defaultValue: 'When enabled, all available models, reasoning effort levels, and default model cache warming TTL (300s) are active. Turn off to customize individual models, reasoning levels, and TTL.',
                         })}
                         control={
                             <ToggleSwitch
@@ -264,8 +326,82 @@ export function ModelsSection() {
                                 })}
                             />
                         }
+                    />
+                    <SettingsRow
+                        title={t('settings.models.defaultTtl', { defaultValue: 'Default Model Cache Warming TTL' })}
+                        description={t('settings.models.defaultTtl.desc', {
+                            defaultValue: 'Prompt cache retention window in seconds (default: 300s). Warming triggers before this expiration.',
+                        })}
+                        control={
+                            <div className="flex items-center gap-1.5 self-center">
+                                <input
+                                    type="number"
+                                    min={10}
+                                    step={10}
+                                    value={defaultTtl}
+                                    onChange={(e) => {
+                                        const num = parseInt(e.target.value, 10)
+                                        if (Number.isFinite(num) && num > 0) {
+                                            updateDefaultTtl(num)
+                                        }
+                                    }}
+                                    aria-label={t('settings.models.defaultTtl', {
+                                        defaultValue: 'Default Model Cache Warming TTL',
+                                    })}
+                                    className={cn(
+                                        'w-24 rounded-lg border border-[var(--border-subtle)]',
+                                        'bg-[var(--bg-card)] px-2.5 py-1 text-[13px] text-right',
+                                        'text-[var(--text-primary)] outline-none',
+                                        'focus-visible:ring-2 focus-visible:ring-[var(--accent-blue)]/30',
+                                        '[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none',
+                                    )}
+                                />
+                                <span className="text-[12px] text-[var(--text-muted)]">
+                                    {t('settings.models.defaultTtl.unit', { defaultValue: 's' })}
+                                </span>
+                            </div>
+                        }
                         last
                     />
+                </SettingsCard>
+            </SettingsSection>
+
+            <SettingsSection title={t('settings.models.warming.section', { defaultValue: 'Model Warming (Cache Warming)' })}>
+                <SettingsCard>
+                    <SettingsRow
+                        title={t('settings.models.warming.mode', { defaultValue: 'Warming Mode' })}
+                        description={t('settings.models.warming.mode.desc', {
+                            defaultValue: 'Off; Active streaming (warms while agent is running); Idle (warms during runs and idle continuation).',
+                        })}
+                        control={
+                            <CustomSelect<CacheWarmingMode>
+                                value={warmingMode}
+                                onChange={(val) => updateWarmingMode(val)}
+                                ariaLabel={t('settings.models.warming.mode', { defaultValue: 'Warming Mode' })}
+                                options={[
+                                    { value: 'off', label: t('settings.models.warming.mode.off', { defaultValue: 'Off' }) },
+                                    { value: 'streaming', label: t('settings.models.warming.mode.streaming', { defaultValue: 'Active Streaming' }) },
+                                    { value: 'idle', label: t('settings.models.warming.mode.idle', { defaultValue: 'Idle' }) },
+                                ]}
+                            />
+                        }
+                        last={warmingMode !== 'idle'}
+                    />
+                    {warmingMode === 'idle' ? (
+                        <SettingsRow
+                            title={t('settings.models.warming.maxTime', { defaultValue: 'Max Warming Duration' })}
+                            description={t('settings.models.warming.maxTime.desc', {
+                                defaultValue: 'Maximum duration to keep warming prompt cache while idle.',
+                            })}
+                            control={
+                                <MaxWarmingTimePicker
+                                    value={maxWarmingTime}
+                                    onChange={updateMaxWarmingTime}
+                                />
+                            }
+                            last
+                        />
+                    ) : null}
                 </SettingsCard>
             </SettingsSection>
 
@@ -315,6 +451,8 @@ export function ModelsSection() {
                                         model={{ ...model, reasoningLevels }}
                                         isModelEnabled={isModelEnabled}
                                         enabledLevels={enabledLevels}
+                                        modelTtl={modelConfig?.ttl}
+                                        defaultTtl={defaultTtl}
                                         allReasoningIds={allReasoningIds}
                                         last={isLast}
                                         draggable={!searchQuery.trim()}
@@ -333,6 +471,7 @@ export function ModelsSection() {
                                                 allReasoningIds,
                                             )
                                         }
+                                        onUpdateTtl={(ttl) => setModelTtl(model.id, ttl)}
                                     />
                                 )
                             })
@@ -348,10 +487,93 @@ export function ModelsSection() {
     )
 }
 
+const PRESET_WARMING_TIMES = [
+    { value: '900', labelKey: 'settings.models.warming.maxTime.preset15m', fallback: '900s (15 min)' },
+    { value: '1800', labelKey: 'settings.models.warming.maxTime.preset30m', fallback: '1800s (30 min)' },
+    { value: '3600', labelKey: 'settings.models.warming.maxTime.preset60m', fallback: '3600s (60 min - Default)' },
+    { value: '7200', labelKey: 'settings.models.warming.maxTime.preset120m', fallback: '7200s (2 hours)' },
+    { value: 'custom', labelKey: 'settings.models.warming.maxTime.custom', fallback: 'Custom Seconds' },
+]
+
+interface MaxWarmingTimePickerProps {
+    value: number
+    onChange: (val: number) => void
+}
+
+function MaxWarmingTimePicker({ value, onChange }: MaxWarmingTimePickerProps) {
+    const { t } = useTranslation()
+    const isPreset = ['900', '1800', '3600', '7200'].includes(String(value))
+    const [isCustomMode, setIsCustomMode] = useState(!isPreset)
+
+    const selectedValue = isCustomMode ? 'custom' : String(value)
+
+    const options = useMemo(() => {
+        return PRESET_WARMING_TIMES.map((item) => ({
+            value: item.value,
+            label: t(item.labelKey, { defaultValue: item.fallback }),
+        }))
+    }, [t])
+
+    return (
+        <div className="flex flex-wrap items-center gap-2">
+            <CustomSelect
+                value={selectedValue}
+                options={options}
+                ariaLabel={t('settings.models.warming.maxTime', { defaultValue: 'Max Warming Duration' })}
+                onChange={(val) => {
+                    if (val === 'custom') {
+                        setIsCustomMode(true)
+                    } else {
+                        setIsCustomMode(false)
+                        const parsed = parseInt(val, 10)
+                        if (Number.isFinite(parsed) && parsed > 0) {
+                            onChange(parsed)
+                        }
+                    }
+                }}
+            />
+            {isCustomMode ? (
+                <div className="flex items-center gap-1.5">
+                    <input
+                        type="number"
+                        min={10}
+                        step={10}
+                        value={value}
+                        onChange={(e) => {
+                            const num = parseInt(e.target.value, 10)
+                            if (Number.isFinite(num) && num > 0) {
+                                onChange(num)
+                            }
+                        }}
+                        aria-label={t('settings.models.warming.maxTime.custom', {
+                            defaultValue: 'Custom Seconds',
+                        })}
+                        placeholder={t('settings.models.warming.maxTime.customPlaceholder', {
+                            defaultValue: 'e.g. 3600',
+                        })}
+                        className={cn(
+                            'w-24 rounded-lg border border-[var(--border-subtle)]',
+                            'bg-[var(--bg-card)] px-2.5 py-1 text-[12px] text-right',
+                            'text-[var(--text-primary)] outline-none',
+                            'focus-visible:ring-2 focus-visible:ring-[var(--accent-blue)]/30',
+                            '[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none',
+                        )}
+                    />
+                    <span className="text-[12px] text-[var(--text-muted)]">
+                        {t('settings.models.warming.maxTime.secondsUnit', { defaultValue: 's' })}
+                    </span>
+                </div>
+            ) : null}
+        </div>
+    )
+}
+
 interface ModelSettingRowProps {
     model: ModelCatalogEntry
     isModelEnabled: boolean
     enabledLevels: string[] | undefined
+    modelTtl: number | undefined
+    defaultTtl: number
     allReasoningIds: readonly string[]
     last: boolean
     draggable?: boolean
@@ -363,12 +585,15 @@ interface ModelSettingRowProps {
     onDragEnd?: () => void
     onToggleModel: (enabled: boolean) => void
     onToggleReasoningLevel: (levelId: string, enabled: boolean) => void
+    onUpdateTtl: (ttl: number | undefined) => void
 }
 
 function ModelSettingRow({
     model,
     isModelEnabled,
     enabledLevels,
+    modelTtl,
+    defaultTtl,
     last,
     draggable = true,
     isDragging = false,
@@ -379,6 +604,7 @@ function ModelSettingRow({
     onDragEnd,
     onToggleModel,
     onToggleReasoningLevel,
+    onUpdateTtl,
 }: ModelSettingRowProps) {
     const { t } = useTranslation()
 
@@ -398,7 +624,7 @@ function ModelSettingRow({
             onDrop={(e) => onDrop?.(model.id, e)}
             onDragEnd={onDragEnd}
             className={cn(
-                'group/row relative flex items-start gap-3 px-3.5 py-3.5 transition-all',
+                'group/row relative flex items-center gap-3 px-3.5 py-3.5 transition-all',
                 !last && 'border-b border-[var(--border-subtle)]',
                 !isModelEnabled && 'opacity-60',
                 isDragging && 'opacity-30 bg-[var(--bg-sidebar-hover)]',
@@ -434,45 +660,84 @@ function ModelSettingRow({
                     </div>
                 ) : null}
 
-                <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-                    <span className="text-[11px] font-medium text-[var(--text-secondary)]">
-                        {t('settings.models.reasoningLevels', { defaultValue: 'Reasoning Effort' })}:
-                    </span>
-                    {model.reasoningLevels.length > 0 ? (
-                        model.reasoningLevels.map((option) => {
-                            const isChecked = isReasoningEnabled(option.id)
-                            return (
-                                <button
-                                    key={option.id}
-                                    type="button"
-                                    role="checkbox"
-                                    aria-checked={isChecked}
-                                    disabled={!isModelEnabled}
-                                    onClick={() => onToggleReasoningLevel(option.id, !isChecked)}
-                                    className={cn(
-                                        'inline-flex items-center rounded-md border px-2 py-1 text-[11px] font-medium transition-all select-none',
-                                        !isModelEnabled
-                                            ? 'cursor-not-allowed border-[var(--border-subtle)] bg-[var(--bg-sidebar-hover)] text-[var(--text-muted)] opacity-50'
-                                            : isChecked
-                                              ? 'border-[var(--accent-blue)]/40 bg-[var(--accent-blue)]/15 text-[var(--accent-blue)] hover:bg-[var(--accent-blue)]/20 cursor-pointer'
-                                              : 'border-[var(--border-subtle)] bg-[var(--bg-sidebar-hover)] text-[var(--text-muted)] hover:bg-[var(--bg-sidebar-hover)]/80 hover:text-[var(--text-secondary)] cursor-pointer',
-                                    )}
-                                >
-                                    <span>{getReasoningLabel(t, option)}</span>
-                                </button>
-                            )
-                        })
-                    ) : (
-                        <span className="text-[11px] text-[var(--text-muted)]">
-                            {t('settings.models.noReasoningLevels', {
-                                defaultValue: 'No reasoning levels',
-                            })}
+                <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-[11px] font-medium text-[var(--text-secondary)]">
+                            {t('settings.models.reasoningLevels', { defaultValue: 'Reasoning Effort' })}:
                         </span>
-                    )}
+                        {model.reasoningLevels.length > 0 ? (
+                            model.reasoningLevels.map((option) => {
+                                const isChecked = isReasoningEnabled(option.id)
+                                return (
+                                    <button
+                                        key={option.id}
+                                        type="button"
+                                        role="checkbox"
+                                        aria-checked={isChecked}
+                                        disabled={!isModelEnabled}
+                                        onClick={() => onToggleReasoningLevel(option.id, !isChecked)}
+                                        className={cn(
+                                            'inline-flex items-center rounded-md border px-2 py-1 text-[11px] font-medium transition-all select-none',
+                                            !isModelEnabled
+                                                ? 'cursor-not-allowed border-[var(--border-subtle)] bg-[var(--bg-sidebar-hover)] text-[var(--text-muted)] opacity-50'
+                                                : isChecked
+                                                  ? 'border-[var(--accent-blue)]/40 bg-[var(--accent-blue)]/15 text-[var(--accent-blue)] hover:bg-[var(--accent-blue)]/20 cursor-pointer'
+                                                  : 'border-[var(--border-subtle)] bg-[var(--bg-sidebar-hover)] text-[var(--text-muted)] hover:bg-[var(--bg-sidebar-hover)]/80 hover:text-[var(--text-secondary)] cursor-pointer',
+                                        )}
+                                    >
+                                        <span>{getReasoningLabel(t, option)}</span>
+                                    </button>
+                                )
+                            })
+                        ) : (
+                            <span className="text-[11px] text-[var(--text-muted)]">
+                                {t('settings.models.noReasoningLevels', {
+                                    defaultValue: 'No reasoning levels',
+                                })}
+                            </span>
+                        )}
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                        <span className="text-[11px] font-medium text-[var(--text-secondary)]">
+                            {t('settings.models.ttl', { defaultValue: 'Cache TTL (s)' })}:
+                        </span>
+                        <input
+                            type="number"
+                            min={10}
+                            step={10}
+                            disabled={!isModelEnabled}
+                            placeholder={String(defaultTtl)}
+                            value={modelTtl !== undefined ? modelTtl : ''}
+                            onChange={(e) => {
+                                const val = e.target.value.trim()
+                                if (!val) {
+                                    onUpdateTtl(undefined)
+                                } else {
+                                    const num = parseInt(val, 10)
+                                    if (Number.isFinite(num) && num > 0) {
+                                        onUpdateTtl(num)
+                                    }
+                                }
+                            }}
+                            aria-label={t('settings.models.modelTtl', {
+                                defaultValue: `${model.label} Cache TTL`,
+                                name: model.label,
+                            })}
+                            className={cn(
+                                'w-20 rounded border border-[var(--border-subtle)]',
+                                'bg-[var(--bg-card)] px-2 py-0.5 text-[11px] text-right',
+                                'text-[var(--text-primary)] placeholder:text-[var(--text-muted)] outline-none',
+                                'focus-visible:ring-1 focus-visible:ring-[var(--accent-blue)]/40',
+                                !isModelEnabled && 'opacity-50 cursor-not-allowed',
+                                '[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none',
+                            )}
+                        />
+                    </div>
                 </div>
             </div>
 
-            <div className="flex shrink-0 items-center pt-0.5">
+            <div className="flex shrink-0 items-center self-center">
                 <ToggleSwitch
                     checked={isModelEnabled}
                     onChange={onToggleModel}

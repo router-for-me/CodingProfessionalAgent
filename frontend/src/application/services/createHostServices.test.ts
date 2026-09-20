@@ -611,6 +611,36 @@ describe('createHostServices', () => {
         expect(await services.chatMessages!.send?.({ text: 'hello', sessionId: 's1' })).toBeUndefined()
     })
 
+    it('cancels cache warmers when warming mode is turned off and when session is deleted', async () => {
+        const mockCancelSessionWarmers = vi.fn()
+        const unregister = registerHostAgentController({
+            send: vi.fn(),
+            cancelSessionWarmers: mockCancelSessionWarmers,
+        })
+
+        const services = createHostServices()
+
+        // 1. Turning warming off immediately cancels all warmers
+        await services.settings.update({
+            modelSettings: {
+                enableAll: true,
+                models: {},
+                cacheWarming: {
+                    mode: 'off',
+                    maxWarmingTime: 1800,
+                },
+            },
+        })
+        expect(mockCancelSessionWarmers).toHaveBeenCalledWith(undefined)
+
+        // 2. Deleting a session cancels warmers for that session
+        mockCancelSessionWarmers.mockClear()
+        await services.sessions.delete?.('test-delete-session')
+        expect(mockCancelSessionWarmers).toHaveBeenCalledWith('test-delete-session')
+
+        unregister()
+    })
+
     it('delegates forkSession through both sessions and chatMessages service', async () => {
         const services = createHostServices()
         const sourceId = 'test-fork-source'

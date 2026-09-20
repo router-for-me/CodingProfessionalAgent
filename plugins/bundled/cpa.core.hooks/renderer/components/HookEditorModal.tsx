@@ -210,6 +210,7 @@ export function HookEditorModal() {
                                 className={cn(
                                     'w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-sidebar)] px-3.5 py-2 text-[13px]',
                                     'text-[var(--text-primary)] outline-none focus:border-[var(--accent-blue)]',
+                                    '[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none',
                                 )}
                             />
                         </div>
@@ -229,6 +230,7 @@ export function HookEditorModal() {
                                 className={cn(
                                     'w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-sidebar)] px-3.5 py-2 text-[13px]',
                                     'text-[var(--text-primary)] outline-none focus:border-[var(--accent-blue)]',
+                                    '[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none',
                                 )}
                             />
                         </div>

@@ -89,6 +89,10 @@ export interface AgentLoopDependencies {
     cloneStreamSnapshots?: boolean
     /** Run owner for credential-opaque isolated calls exposed only to tool executions. */
     modelInvoker?: ToolModelInvokerOwner
+    /** Optional callback invoked synchronously when a model stream request is initiated. */
+    onRequestSent?: (input: ProtocolStreamInput, isContextCurrent?: () => boolean) => void
+    /** Optional callback invoked synchronously whenever conversation context entries are mutated. */
+    onContextChanged?: () => void
 }
 
 export interface AgentRunInput {
@@ -517,6 +521,9 @@ export class AgentLoop {
     private readonly streamUpdateIntervalMs: number
     private readonly cloneStreamSnapshots: boolean
     private readonly modelInvoker?: ToolModelInvokerOwner
+    private readonly onRequestSent?: (input: ProtocolStreamInput, isContextCurrent?: () => boolean) => void
+    private readonly onContextChanged?: () => void
+    private contextRevision = 0
 
     private activeRunId: string | null = null
     private activeToken = 0
@@ -553,6 +560,13 @@ export class AgentLoop {
         )
         this.cloneStreamSnapshots = deps.cloneStreamSnapshots ?? true
         this.modelInvoker = deps.modelInvoker
+        this.onRequestSent = deps.onRequestSent
+        this.onContextChanged = deps.onContextChanged
+    }
+
+    private notifyContextChanged(): void {
+        this.contextRevision += 1
+        this.onContextChanged?.()
     }
 
     private getEffectiveHooks(): readonly HookContribution[] | undefined {
@@ -892,6 +906,7 @@ export class AgentLoop {
                     // Fail open on hook error
                 }
                 stableEntries.push(userEntryToAppend)
+                this.notifyContextChanged()
             }
         }
 
@@ -1034,6 +1049,7 @@ export class AgentLoop {
                 if (providerResult.kind === 'aborted') {
                     const entry = providerResult.entry
                     stableEntries.push(entry)
+                    this.notifyContextChanged()
                     yield {
                         type: 'assistant-end',
                         ...scope,
@@ -1049,6 +1065,7 @@ export class AgentLoop {
                 if (providerResult.kind === 'error') {
                     const entry = providerResult.entry
                     stableEntries.push(entry)
+                    this.notifyContextChanged()
                     yield {
                         type: 'assistant-end',
                         ...scope,
@@ -1095,6 +1112,7 @@ export class AgentLoop {
                                 createdAt: steer.createdAt ?? Date.now(),
                             }
                             stableEntries.push(consumed)
+                            this.notifyContextChanged()
                             yield {
                                 type: 'user-entry',
                                 ...scope,
@@ -1150,6 +1168,7 @@ export class AgentLoop {
                             createdAt: steer.createdAt ?? Date.now(),
                         }
                         stableEntries.push(consumed)
+                        this.notifyContextChanged()
                         yield {
                             type: 'user-entry',
                             ...scope,
@@ -1292,6 +1311,7 @@ export class AgentLoop {
             for (const entry of result.entries) {
                 stableEntries.push(snapshotClone(entry))
             }
+            this.notifyContextChanged()
             yield {
                 type: 'compaction-end',
                 ...args.scope,
@@ -1441,11 +1461,13 @@ export class AgentLoop {
             let finalEntry: AssistantEntry | undefined
             let generator: AsyncIterator<AssistantStreamEvent> | undefined
 
+            const currentRev = this.contextRevision
             try {
                 const rawStream = this.client.stream(
                     effectiveInput,
                     { signal },
                 )
+                this.onRequestSent?.(effectiveInput, () => this.contextRevision === currentRev)
                 const wrappedStream = pipeline.executeStream(rawStream, {
                     sessionId: scope.sessionId,
                     model: model.id,
@@ -2254,6 +2276,7 @@ export class AgentLoop {
                 this.toToolResultEntry(scope.sessionId, item.toolCall, item.result),
             )
         }
+        this.notifyContextChanged()
     }
 
     private toToolResultEntry(

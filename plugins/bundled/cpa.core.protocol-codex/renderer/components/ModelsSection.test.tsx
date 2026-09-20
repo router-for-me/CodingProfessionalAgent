@@ -241,4 +241,146 @@ describe('ModelsSection', () => {
             }),
         )
     })
+
+    it('renders default model cache warming TTL input and updates on change', () => {
+        renderWithServices(<ModelsSection />)
+
+        const defaultTtlInput = screen.getByLabelText(/Default Model Cache Warming TTL/i)
+        expect(defaultTtlInput).toBeInTheDocument()
+        expect(defaultTtlInput).toHaveValue(300)
+        expect(defaultTtlInput.parentElement).toHaveTextContent('s')
+        expect(defaultTtlInput.className).toContain('[appearance:textfield]')
+        expect(defaultTtlInput.className).toContain('[&::-webkit-inner-spin-button]:appearance-none')
+
+        fireEvent.change(defaultTtlInput, { target: { value: '450' } })
+
+        expect(mockSettingsService.update).toHaveBeenCalledWith(
+            expect.objectContaining({
+                modelSettings: expect.objectContaining({
+                    defaultTtl: 450,
+                }),
+            }),
+        )
+    })
+
+    it('renders model warming section with warming mode, and hides max warming duration when not idle', () => {
+        renderWithServices(<ModelsSection />)
+
+        expect(screen.getByText(/Model Warming \(Cache Warming\)/i)).toBeInTheDocument()
+        expect(screen.getByLabelText(/Warming Mode/i)).toBeInTheDocument()
+        expect(screen.queryByLabelText(/Max Warming Duration/i)).not.toBeInTheDocument()
+    })
+
+    it('shows max warming duration when warming mode is idle', () => {
+        mockSettings.modelSettings.cacheWarming = {
+            mode: 'idle',
+            maxWarmingTime: 3600,
+        }
+        renderWithServices(<ModelsSection />)
+
+        expect(screen.getByLabelText(/Max Warming Duration/i)).toBeInTheDocument()
+    })
+
+    it('shows custom max warming duration input with spin buttons hidden when custom value is set', () => {
+        mockSettings.modelSettings.cacheWarming = {
+            mode: 'idle',
+            maxWarmingTime: 5000,
+        }
+        renderWithServices(<ModelsSection />)
+
+        const customInput = screen.getByLabelText(/Custom Seconds/i)
+        expect(customInput).toBeInTheDocument()
+        expect(customInput).toHaveValue(5000)
+        expect(customInput.className).toContain('[appearance:textfield]')
+        expect(customInput.className).toContain('[&::-webkit-inner-spin-button]:appearance-none')
+    })
+
+    it('hides max warming duration when warming mode is streaming', () => {
+        mockSettings.modelSettings.cacheWarming = {
+            mode: 'streaming',
+            maxWarmingTime: 3600,
+        }
+        renderWithServices(<ModelsSection />)
+
+        expect(screen.queryByLabelText(/Max Warming Duration/i)).not.toBeInTheDocument()
+    })
+
+    it('shows max warming duration after switching mode to idle and preserves duration', () => {
+        const { rerender } = renderWithServices(<ModelsSection />)
+
+        expect(screen.queryByLabelText(/Max Warming Duration/i)).not.toBeInTheDocument()
+
+        // Switch to idle
+        mockSettings.modelSettings.cacheWarming = {
+            mode: 'idle',
+            maxWarmingTime: 1800,
+        }
+        rerender(
+            <HostServicesProvider services={{ settings: mockSettingsService, models: mockModelsService, modelCatalog: mockModelsService } as any}>
+                <ModelsSection />
+            </HostServicesProvider>,
+        )
+
+        expect(screen.getByLabelText(/Max Warming Duration/i)).toBeInTheDocument()
+
+        // Switch back to streaming
+        mockSettings.modelSettings.cacheWarming = {
+            mode: 'streaming',
+            maxWarmingTime: 1800,
+        }
+        rerender(
+            <HostServicesProvider services={{ settings: mockSettingsService, models: mockModelsService, modelCatalog: mockModelsService } as any}>
+                <ModelsSection />
+            </HostServicesProvider>,
+        )
+
+        expect(screen.queryByLabelText(/Max Warming Duration/i)).not.toBeInTheDocument()
+        expect(mockSettings.modelSettings.cacheWarming.maxWarmingTime).toBe(1800)
+    })
+
+    it('updates warming mode when selecting streaming or idle', () => {
+        renderWithServices(<ModelsSection />)
+
+        const warmingModeSelect = screen.getByLabelText(/Warming Mode/i)
+        fireEvent.click(warmingModeSelect)
+
+        const streamingOption = screen.getByRole('option', { name: /Active Streaming/i })
+        fireEvent.click(streamingOption)
+
+        expect(mockSettingsService.update).toHaveBeenCalledWith(
+            expect.objectContaining({
+                modelSettings: expect.objectContaining({
+                    cacheWarming: expect.objectContaining({
+                        mode: 'streaming',
+                    }),
+                }),
+            }),
+        )
+    })
+
+    it('renders per-model TTL input in model list and updates on change when master switch is disabled', () => {
+        mockSettings.modelSettings.enableAll = false
+
+        renderWithServices(<ModelsSection />)
+
+        const modelTtlInputs = screen.getAllByLabelText(/Cache TTL/i)
+        expect(modelTtlInputs.length).toBeGreaterThan(0)
+        expect(modelTtlInputs[0]).toBeInTheDocument()
+        expect(modelTtlInputs[0]!.className).toContain('[appearance:textfield]')
+        expect(modelTtlInputs[0]!.className).toContain('[&::-webkit-inner-spin-button]:appearance-none')
+
+        fireEvent.change(modelTtlInputs[0]!, { target: { value: '250' } })
+
+        expect(mockSettingsService.update).toHaveBeenCalledWith(
+            expect.objectContaining({
+                modelSettings: expect.objectContaining({
+                    models: expect.objectContaining({
+                        'test-model-pro': expect.objectContaining({
+                            ttl: 250,
+                        }),
+                    }),
+                }),
+            }),
+        )
+    })
 })

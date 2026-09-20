@@ -117,6 +117,23 @@ describe('SettingsPanel keyboard shortcuts', () => {
         ).toBeInTheDocument()
     })
 
+    it('renders default TTL unit as "秒" in Chinese and "s" in English', async () => {
+        await i18n.changeLanguage('zh-CN')
+        useUiStore.setState({ settingsOpen: true, settingsSection: 'models' })
+        const { unmount } = render(<SettingsPanel />)
+
+        const defaultTtlInputZh = screen.getByLabelText(/默认模型缓存预热TTL/i)
+        expect(defaultTtlInputZh.parentElement).toHaveTextContent('秒')
+
+        unmount()
+
+        await i18n.changeLanguage('en')
+        render(<SettingsPanel />)
+
+        const defaultTtlInputEn = screen.getByLabelText(/Default Model Cache Warming TTL/i)
+        expect(defaultTtlInputEn.parentElement).toHaveTextContent('s')
+    })
+
     it('renders subagents menu item directly after models and opens subagents settings page', () => {
         useUiStore.setState({ settingsOpen: true })
         render(<SettingsPanel />)

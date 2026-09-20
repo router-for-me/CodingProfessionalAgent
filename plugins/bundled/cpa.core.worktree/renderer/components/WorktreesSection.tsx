@@ -255,6 +255,7 @@ export function WorktreesSection({
                                     className={cn(
                                         'w-24 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-2.5 py-1.5 text-center',
                                         'text-[13px] font-mono text-[var(--text-primary)] focus:border-[var(--accent-blue)] focus:outline-none transition-colors',
+                                        '[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none',
                                     )}
                                 />
                             }

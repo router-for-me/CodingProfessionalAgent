@@ -4504,5 +4504,55 @@ describe('persist pure helpers', () => {
       expect(project?.workLocation).toBe('local')
       expect(project?.updatedAt).toBe(projectOriginalUpdatedAt)
     })
+
+    it('sanitizes and preserves modelSettings with defaultTtl, cacheWarming, and per-model ttl', async () => {
+      let writtenState: any = null
+      const KVStoreSet = vi.fn(async (key: string, value: unknown) => {
+        if (key === 'app-state') {
+          writtenState = value
+        }
+      })
+      setHostBridge({
+        KVStoreGet: vi.fn(async () => null),
+        KVStoreSet,
+      } as any)
+
+      useSettingsStore.getState().setModelSettings({
+        enableAll: false,
+        defaultTtl: 400,
+        cacheWarming: {
+          mode: 'idle',
+          maxWarmingTime: 1800,
+        },
+        models: {
+          'model-1': {
+            enabled: true,
+            enabledReasoningLevels: ['low', 'high'],
+            ttl: 250,
+          },
+        },
+      })
+
+      await flushPendingPersistence()
+      await flushWrites()
+
+      expect(writtenState?.settings?.modelSettings).toEqual({
+        enableAll: false,
+        defaultTtl: 400,
+        cacheWarming: {
+          mode: 'idle',
+          maxWarmingTime: 1800,
+        },
+        models: {
+          'model-1': {
+            enabled: true,
+            enabledReasoningLevels: ['low', 'high'],
+            ttl: 250,
+          },
+        },
+        modelOrder: [],
+      })
+    })
   })
 })
+

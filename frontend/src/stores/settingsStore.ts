@@ -484,6 +484,12 @@ export const useSettingsStore = create<SettingsState>((set) => ({
             typeof partial.modelSettings.enableAll === 'boolean'
               ? partial.modelSettings.enableAll
               : DEFAULT_MODEL_SETTINGS.enableAll,
+          defaultTtl:
+            typeof partial.modelSettings.defaultTtl === 'number' &&
+            Number.isFinite(partial.modelSettings.defaultTtl) &&
+            partial.modelSettings.defaultTtl > 0
+              ? Math.floor(partial.modelSettings.defaultTtl)
+              : (DEFAULT_MODEL_SETTINGS.defaultTtl ?? 300),
           models:
             typeof partial.modelSettings.models === 'object' &&
             partial.modelSettings.models !== null
@@ -494,6 +500,20 @@ export const useSettingsStore = create<SettingsState>((set) => ({
                 (id): id is string => typeof id === 'string',
               )
             : [],
+          cacheWarming: {
+            mode:
+              partial.modelSettings.cacheWarming?.mode === 'streaming' ||
+              partial.modelSettings.cacheWarming?.mode === 'idle' ||
+              partial.modelSettings.cacheWarming?.mode === 'off'
+                ? partial.modelSettings.cacheWarming.mode
+                : (DEFAULT_MODEL_SETTINGS.cacheWarming?.mode ?? 'off'),
+            maxWarmingTime:
+              typeof partial.modelSettings.cacheWarming?.maxWarmingTime === 'number' &&
+              Number.isFinite(partial.modelSettings.cacheWarming.maxWarmingTime) &&
+              partial.modelSettings.cacheWarming.maxWarmingTime > 0
+                ? Math.floor(partial.modelSettings.cacheWarming.maxWarmingTime)
+                : (DEFAULT_MODEL_SETTINGS.cacheWarming?.maxWarmingTime ?? 3600),
+          },
         }
       }
       if (partial.git) {

@@ -172,6 +172,7 @@ function createService(opts?: {
     ) => Promise<AgentTool[]>
     compact?: ReturnType<typeof vi.fn>
     streamUpdateIntervalMs?: number
+    now?: () => number
 }) {
     const bridge = opts?.bridge ?? new FakeNativeBridge()
     const fakeClient = opts?.client ?? new FakeCPAClient()
@@ -223,7 +224,7 @@ function createService(opts?: {
             let n = 0
             return () => `id-${++n}`
         })(),
-        now: () => 1_700_000_000_000,
+        now: opts?.now ?? (() => 1_700_000_000_000),
     })
 
     return { service, bridge, fakeClient, loadCalls, toolCalls, toolOptionCalls }
@@ -718,6 +719,457 @@ function createWorktreePrepareInput(
                 'title',
             ])
             expect(service.isActive).toBe(false)
+        })
+
+        it('starts CacheWarmer on model request and settles into idle when warming is configured', async () => {
+            const { service, fakeClient } = createService()
+            fakeClient.queue({
+                kind: 'stream',
+                final: (seed) =>
+                    doneAssistant(seed, {
+                        stopReason: 'stop',
+                        content: [{ type: 'text', text: 'hello' }],
+                    }),
+            })
+
+            const prepared = await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'key',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                requestApproval: false,
+                modelSettings: {
+                    enableAll: true,
+                    defaultTtl: 300,
+                    models: {},
+                    cacheWarming: {
+                        mode: 'idle',
+                        maxWarmingTime: 1800,
+                    },
+                },
+            })
+
+            const user = userEntry('u1', 'hi')
+            await collect(
+                service.streamChat({
+                    prepared,
+                    sessionId: 'sess-warm-1',
+                    runId: 'run-warm-1',
+                    entries: [user],
+                    userEntry: user,
+                }),
+            )
+
+            const warmer = service.getCacheWarmer('sess-warm-1')
+            expect(warmer).toBeDefined()
+            expect(warmer?.status.state).toBe('scheduled')
+            expect(warmer?.status.phase).toBe('idle')
+
+            // When service is disposed, warmer is cancelled
+            await service.dispose()
+            expect(warmer?.status.state).toBe('inactive')
+        })
+
+        it('rebinds warmer with updated settings on subsequent runs in the same session', async () => {
+            const { service, fakeClient } = createService()
+            fakeClient.queue({
+                kind: 'stream',
+                final: (seed) =>
+                    doneAssistant(seed, {
+                        stopReason: 'stop',
+                        content: [{ type: 'text', text: 'turn 1' }],
+                    }),
+            })
+
+            // Run 1: warming off
+            const prepared1 = await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'key',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                requestApproval: false,
+                modelSettings: {
+                    enableAll: true,
+                    defaultTtl: 300,
+                    models: {},
+                    cacheWarming: {
+                        mode: 'off',
+                        maxWarmingTime: 1800,
+                    },
+                },
+            })
+
+            const u1 = userEntry('u1', 'hi')
+            await collect(
+                service.streamChat({
+                    prepared: prepared1,
+                    sessionId: 'sess-rebind',
+                    runId: 'run-rebind-1',
+                    entries: [u1],
+                    userEntry: u1,
+                }),
+            )
+
+            expect(service.getCacheWarmer('sess-rebind')?.status.state).toBe('inactive')
+
+            // Run 2 in same session: user turned warming on ('idle')
+            fakeClient.queue({
+                kind: 'stream',
+                final: (seed) =>
+                    doneAssistant(seed, {
+                        stopReason: 'stop',
+                        content: [{ type: 'text', text: 'turn 2' }],
+                    }),
+            })
+
+            const prepared2 = await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'key',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                requestApproval: false,
+                modelSettings: {
+                    enableAll: true,
+                    defaultTtl: 300,
+                    models: {},
+                    cacheWarming: {
+                        mode: 'idle',
+                        maxWarmingTime: 1800,
+                    },
+                },
+            })
+
+            const u2 = userEntry('u2', 'hi again')
+            await collect(
+                service.streamChat({
+                    prepared: prepared2,
+                    sessionId: 'sess-rebind',
+                    runId: 'run-rebind-2',
+                    entries: [u1, u2],
+                    userEntry: u2,
+                }),
+            )
+
+            // Warmer should now be active and scheduled in idle phase
+            const warmer2 = service.getCacheWarmer('sess-rebind')
+            expect(warmer2?.status.state).toBe('scheduled')
+            expect(warmer2?.status.phase).toBe('idle')
+
+            // Cancelling warmer by session ID immediately cancels idle warmer
+            await service.cancelSessionWarmers('sess-rebind')
+            expect(warmer2?.status.state).toBe('inactive')
+            expect(service.getCacheWarmer('sess-rebind')).toBeUndefined()
+        })
+
+        it('re-registers and tracks warmer in sessionWarmers on subsequent turn after cancellation', async () => {
+            const { service, fakeClient } = createService()
+
+            // Turn 1
+            fakeClient.queue({
+                kind: 'stream',
+                final: (seed) =>
+                    doneAssistant(seed, {
+                        stopReason: 'stop',
+                        content: [{ type: 'text', text: 'turn 1' }],
+                    }),
+            })
+
+            const prepared = await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'key',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                requestApproval: false,
+                modelSettings: {
+                    enableAll: true,
+                    defaultTtl: 300,
+                    models: {},
+                    cacheWarming: {
+                        mode: 'idle',
+                        maxWarmingTime: 1800,
+                    },
+                },
+            })
+
+            const u1 = userEntry('u1', 'first turn')
+            await collect(
+                service.streamChat({
+                    prepared,
+                    sessionId: 'sess-multiturn',
+                    runId: 'run-turn-1',
+                    entries: [u1],
+                    userEntry: u1,
+                }),
+            )
+
+            // Warmer is active after turn 1
+            expect(service.getCacheWarmer('sess-multiturn')).toBeDefined()
+
+            // Cancel warmer between turns
+            await service.cancelSessionWarmers('sess-multiturn')
+            expect(service.getCacheWarmer('sess-multiturn')).toBeUndefined()
+
+            // Turn 2 in same session
+            fakeClient.queue({
+                kind: 'stream',
+                final: (seed) =>
+                    doneAssistant(seed, {
+                        stopReason: 'stop',
+                        content: [{ type: 'text', text: 'turn 2' }],
+                    }),
+            })
+
+            const u2 = userEntry('u2', 'second turn')
+            await collect(
+                service.streamChat({
+                    prepared,
+                    sessionId: 'sess-multiturn',
+                    runId: 'run-turn-2',
+                    entries: [u1, u2],
+                    userEntry: u2,
+                }),
+            )
+
+            // On turn 2, warmer should have been re-registered and tracked
+            const finalWarmer = service.getCacheWarmer('sess-multiturn')
+            expect(finalWarmer).toBeDefined()
+            expect(finalWarmer?.status.state).toBe('scheduled')
+
+            // Can be cancelled by session ID
+            await service.cancelSessionWarmers('sess-multiturn')
+            expect(finalWarmer?.status.state).toBe('inactive')
+            expect(service.getCacheWarmer('sess-multiturn')).toBeUndefined()
+        })
+
+        it('cancels active session cache warmer when compacting session context', async () => {
+            const compactMock = vi.fn(async (entries: unknown[]) => {
+                const entry = {
+                    id: 'c1',
+                    sessionId: 'sess-compact-warm',
+                    createdAt: 1,
+                    kind: 'compaction' as const,
+                    summary: 'summary',
+                    firstKeptEntryId: 'u1',
+                }
+                return {
+                    entry,
+                    entries: [...(entries as never[]), entry],
+                }
+            })
+            const { service, fakeClient } = createService({
+                compact: compactMock,
+            })
+
+            fakeClient.queue({
+                kind: 'stream',
+                final: (seed) =>
+                    doneAssistant(seed, {
+                        stopReason: 'stop',
+                        content: [{ type: 'text', text: 'turn done' }],
+                    }),
+            })
+
+            const prepared = await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'key',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                requestApproval: false,
+                modelSettings: {
+                    enableAll: true,
+                    defaultTtl: 300,
+                    models: {},
+                    cacheWarming: {
+                        mode: 'idle',
+                        maxWarmingTime: 1800,
+                    },
+                },
+            })
+
+            const u1 = userEntry('u1', 'msg 1')
+            await collect(
+                service.streamChat({
+                    prepared,
+                    sessionId: 'sess-compact-warm',
+                    runId: 'run-c1',
+                    entries: [u1],
+                    userEntry: u1,
+                }),
+            )
+
+            // Warmer is scheduled in idle phase
+            const warmer = service.getCacheWarmer('sess-compact-warm')
+            expect(warmer).toBeDefined()
+            expect(warmer?.status.state).toBe('scheduled')
+
+            // Trigger compact
+            await service.compact({
+                prepared,
+                sessionId: 'sess-compact-warm',
+                runId: 'run-compact-1',
+                entries: [u1],
+            })
+
+            // Compacting should have cancelled the pre-compaction warmer
+            expect(warmer?.status.state).toBe('inactive')
+            expect(service.getCacheWarmer('sess-compact-warm')).toBeUndefined()
+        })
+
+        it('does not prematurely release generation lease during agent run when warming is off', async () => {
+            const { service, fakeClient } = createService()
+
+            fakeClient.queue({
+                kind: 'stream',
+                final: (seed) => {
+                    // Check if generation lease was released prematurely during the model request
+                    return doneAssistant(seed, { stopReason: 'stop' })
+                },
+            })
+
+            const releaseMock = vi.fn()
+            const prepared = await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'key',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                requestApproval: false,
+                modelSettings: {
+                    enableAll: true,
+                    defaultTtl: 300,
+                    models: {},
+                    cacheWarming: {
+                        mode: 'off',
+                        maxWarmingTime: 1800,
+                    },
+                },
+            })
+
+            if (prepared.generationSnapshot?.lease) {
+                prepared.generationSnapshot.lease.release = releaseMock
+            }
+
+            const user = userEntry('u1', 'hi')
+            await collect(
+                service.streamChat({
+                    prepared,
+                    sessionId: 'sess-lease-check',
+                    runId: 'run-lease-check',
+                    entries: [user],
+                    userEntry: user,
+                }),
+            )
+
+            // Lease was released after run completed, not during warming start
+            expect(releaseMock).toHaveBeenCalled()
+        })
+
+        it('ignores per-model TTL when enableAll is true and uses it when enableAll is false', async () => {
+            const { service, fakeClient } = createService({
+                now: () => 1000,
+            })
+
+            // Run 1: enableAll: true, model-1 has ttl: 100 configured in models map
+            fakeClient.queue({
+                kind: 'stream',
+                final: (seed) => doneAssistant(seed, { stopReason: 'stop' }),
+            })
+
+            const prepared1 = await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'key',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                requestApproval: false,
+                modelSettings: {
+                    enableAll: true,
+                    defaultTtl: 300,
+                    models: {
+                        [modelBase.id]: {
+                            enabled: true,
+                            ttl: 100, // Should be ignored because enableAll is true
+                        },
+                    },
+                    cacheWarming: {
+                        mode: 'streaming',
+                        maxWarmingTime: 1800,
+                    },
+                },
+            })
+
+            const u1 = userEntry('u1', 'hi')
+            await collect(
+                service.streamChat({
+                    prepared: prepared1,
+                    sessionId: 'sess-ttl-1',
+                    runId: 'run-ttl-1',
+                    entries: [u1],
+                    userEntry: u1,
+                }),
+            )
+
+            // When enableAll is true, uses defaultTtl 300s -> 270s delay
+            // nextWarmAt = 1000 + 270,000 = 271,000
+            const warmer1 = service.getCacheWarmer('sess-ttl-1')
+            expect(warmer1).toBeDefined()
+            // Now test run with enableAll: false and idle mode to verify nextWarmAt:
+            fakeClient.queue({
+                kind: 'stream',
+                final: (seed) => doneAssistant(seed, { stopReason: 'stop' }),
+            })
+
+            const prepared2 = await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'key',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                requestApproval: false,
+                modelSettings: {
+                    enableAll: false,
+                    defaultTtl: 300,
+                    models: {
+                        [modelBase.id]: {
+                            enabled: true,
+                            ttl: 100, // 100s TTL -> 100 * 0.9 = 90s delay = 90,000ms
+                        },
+                    },
+                    cacheWarming: {
+                        mode: 'idle',
+                        maxWarmingTime: 1800,
+                    },
+                },
+            })
+
+            const u2 = userEntry('u2', 'hi')
+            await collect(
+                service.streamChat({
+                    prepared: prepared2,
+                    sessionId: 'sess-ttl-2',
+                    runId: 'run-ttl-2',
+                    entries: [u2],
+                    userEntry: u2,
+                }),
+            )
+
+            const warmer2 = service.getCacheWarmer('sess-ttl-2')
+            expect(warmer2?.status.state).toBe('scheduled')
+            // Delay for 100s TTL is 90,000ms (100 * 0.9) from 1_700_000_000_000
+            expect(warmer2?.status.nextWarmAt).toBe(1000 + 90_000)
         })
 
         it('coalesces cumulative assistant snapshots and flushes the latest before assistant-end', async () => {

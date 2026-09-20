@@ -1,6 +1,8 @@
 import type {
   AgentRunStatus,
   AppSettings,
+  CacheWarmingMode,
+  CacheWarmingSettings,
   CliProxyApiSettings,
   CommandHookHandlerConfig,
   GitMergeMethod,
@@ -62,6 +64,8 @@ import type { UpdateStatusSnapshot } from './updateTypes.js'
 export type {
   AgentRunStatus,
   AppSettings,
+  CacheWarmingMode,
+  CacheWarmingSettings,
   CliProxyApiSettings,
   CommandHookHandlerConfig,
   GitMergeMethod,

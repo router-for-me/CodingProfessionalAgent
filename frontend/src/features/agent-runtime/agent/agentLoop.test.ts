@@ -3578,4 +3578,76 @@ describe('AgentLoop', () => {
         expect(userEvents.map((e: any) => e.entry?.id)).toContain('u-steer-a')
         expect(userEvents.map((e: any) => e.entry?.id)).toContain('u-steer-b')
     })
+
+    it('invokes onRequestSent with isContextCurrent and notifies onContextChanged on mutation', async () => {
+        const client = new FakeCPAClient()
+        // Turn 1: tool use; Turn 2: final stop
+        client.queue(
+            {
+                kind: 'stream',
+                final: (seed) =>
+                    doneAssistant(seed, {
+                        stopReason: 'toolUse',
+                        content: [
+                            {
+                                type: 'toolCall',
+                                id: 'tc-ctx',
+                                name: 'demo-tool',
+                                arguments: { arg: 1 },
+                            },
+                        ],
+                    }),
+            },
+            {
+                kind: 'stream',
+                final: (seed) =>
+                    doneAssistant(seed, {
+                        stopReason: 'stop',
+                        content: [{ type: 'text', text: 'finished turn 2' }],
+                    }),
+            },
+        )
+
+        const demoTool = makeTool('demo-tool', async () => ({
+            content: [{ type: 'text', text: 'result 1' }],
+        }))
+
+        let isCurrentFn: (() => boolean) | undefined
+        const onRequestSent = vi.fn((_input: any, isCurrent?: () => boolean) => {
+            isCurrentFn = isCurrent
+        })
+        const onContextChanged = vi.fn()
+
+        const loop = new AgentLoop({
+            client,
+            onRequestSent,
+            onContextChanged,
+        })
+
+        const generator = loop.run({
+            runId: 'run-ctx',
+            sessionId: 'sess-ctx',
+            entries: [],
+            userEntry: userEntry('u1', 'first prompt'),
+            model,
+            systemPrompt: 'System',
+            tools: [demoTool],
+            requestApproval: false,
+        })
+
+        // Iterate turns
+        let firstTurnIsCurrent: (() => boolean) | undefined
+        for await (const event of generator) {
+            if (event.type === 'assistant-start' && !firstTurnIsCurrent) {
+                firstTurnIsCurrent = isCurrentFn
+                expect(onRequestSent).toHaveBeenCalledTimes(1)
+                expect(firstTurnIsCurrent?.()).toBe(true)
+            }
+        }
+
+        // Context changed when tool results and second turn completed
+        expect(onContextChanged).toHaveBeenCalled()
+        expect(firstTurnIsCurrent?.()).toBe(false)
+        expect(onRequestSent).toHaveBeenCalledTimes(2)
+    })
 })

@@ -14,11 +14,14 @@ import {
   DEFAULT_EDITOR_SETTINGS,
   normalizeCompactionThresholdPercent,
   type AppSettings,
+  type CacheWarmingMode,
   type EditorFollowUpMode,
   type EditorSendShortcut,
   type EditorSettings,
   type GitSettings,
   type Locale,
+  type ModelCustomConfig,
+  type ModelSettingsConfig,
   type Speed,
   type SubagentsSettings,
   type Project,
@@ -461,6 +464,64 @@ function sanitizeEditorSettings(value: unknown): EditorSettings {
   }
 }
 
+function sanitizeModelSettings(value: unknown): ModelSettingsConfig {
+  if (typeof value !== 'object' || value === null) {
+    return { ...DEFAULT_MODEL_SETTINGS }
+  }
+  const raw = value as Partial<ModelSettingsConfig>
+  const models: Record<string, ModelCustomConfig> = {}
+  if (typeof raw.models === 'object' && raw.models !== null) {
+    for (const [key, val] of Object.entries(raw.models)) {
+      if (typeof val === 'object' && val !== null) {
+        const item = val as Partial<ModelCustomConfig>
+        models[key] = {
+          enabled: typeof item.enabled === 'boolean' ? item.enabled : true,
+          enabledReasoningLevels: Array.isArray(item.enabledReasoningLevels)
+            ? item.enabledReasoningLevels.filter((lvl: unknown): lvl is string => typeof lvl === 'string')
+            : undefined,
+          ttl:
+            typeof item.ttl === 'number' && Number.isFinite(item.ttl) && item.ttl > 0
+              ? Math.floor(item.ttl)
+              : undefined,
+        }
+      }
+    }
+  }
+
+  const cacheWarmingRaw = raw.cacheWarming
+  const mode: CacheWarmingMode =
+    cacheWarmingRaw?.mode === 'streaming' ||
+    cacheWarmingRaw?.mode === 'idle' ||
+    cacheWarmingRaw?.mode === 'off'
+      ? cacheWarmingRaw.mode
+      : (DEFAULT_MODEL_SETTINGS.cacheWarming?.mode ?? 'off')
+  const maxWarmingTime =
+    typeof cacheWarmingRaw?.maxWarmingTime === 'number' &&
+    Number.isFinite(cacheWarmingRaw.maxWarmingTime) &&
+    cacheWarmingRaw.maxWarmingTime > 0
+      ? Math.floor(cacheWarmingRaw.maxWarmingTime)
+      : (DEFAULT_MODEL_SETTINGS.cacheWarming?.maxWarmingTime ?? 3600)
+
+  return {
+    enableAll:
+      typeof raw.enableAll === 'boolean'
+        ? raw.enableAll
+        : DEFAULT_MODEL_SETTINGS.enableAll,
+    defaultTtl:
+      typeof raw.defaultTtl === 'number' && Number.isFinite(raw.defaultTtl) && raw.defaultTtl > 0
+        ? Math.floor(raw.defaultTtl)
+        : (DEFAULT_MODEL_SETTINGS.defaultTtl ?? 300),
+    models,
+    modelOrder: Array.isArray(raw.modelOrder)
+      ? raw.modelOrder.filter((id: unknown): id is string => typeof id === 'string')
+      : [],
+    cacheWarming: {
+      mode,
+      maxWarmingTime,
+    },
+  }
+}
+
 function normalizeSettings(
   partial: Partial<AppSettings> | null | undefined,
 ): AppSettings {
@@ -587,17 +648,7 @@ function normalizeSettings(
       typeof next.shortcuts === 'object' && next.shortcuts !== null
         ? next.shortcuts
         : undefined,
-    modelSettings: {
-      enableAll:
-        typeof next.modelSettings?.enableAll === 'boolean'
-          ? next.modelSettings.enableAll
-          : DEFAULT_MODEL_SETTINGS.enableAll,
-      models:
-        typeof next.modelSettings?.models === 'object' &&
-        next.modelSettings?.models !== null
-          ? next.modelSettings.models
-          : {},
-    },
+    modelSettings: sanitizeModelSettings(next.modelSettings),
     git: sanitizeGitSettings(next.git),
     worktrees: sanitizeWorktreeSettings(next.worktrees),
     subagents: sanitizeSubagentsSettings(next.subagents),
@@ -1765,9 +1816,16 @@ export async function saveSessionEntries(
   return saveSessionData(sessionId, entries)
 }
 
+let sessionDeletionHook: ((sessionId: string) => void) | null = null
+
+export function setSessionDeletionHook(fn: ((sessionId: string) => void) | null): void {
+  sessionDeletionHook = fn
+}
+
 export async function deleteSessionLocalCache(sessionId: string): Promise<void> {
   if (!sessionId) return
   markRemoteSessionDeleted(sessionId)
+  sessionDeletionHook?.(sessionId)
   return withSuppressedPersistence(async () => {
     loadedSessionIds.delete(sessionId)
     staleSessionIds.delete(sessionId)
@@ -1780,6 +1838,7 @@ export async function deleteSessionLocalCache(sessionId: string): Promise<void> 
       const childSessionId = child.sessionId || child.id
       if (childSessionId && childSessionId !== sessionId) {
         markRemoteSessionDeleted(childSessionId)
+        sessionDeletionHook?.(childSessionId)
         loadedSessionIds.delete(childSessionId)
         staleSessionIds.delete(childSessionId)
         useMessageStore.getState().removeSessionMessages(childSessionId)
@@ -1809,6 +1868,7 @@ export async function deleteSessionLocalCache(sessionId: string): Promise<void> 
 export async function deleteSessionEntries(sessionId: string): Promise<void> {
   if (!sessionId) return
   markRemoteSessionDeleted(sessionId)
+  sessionDeletionHook?.(sessionId)
   const pendingWrite = sessionWrites.get(sessionId)
   if (pendingWrite) await pendingWrite.catch(() => {})
   loadedSessionIds.delete(sessionId)
@@ -1842,6 +1902,7 @@ export async function deleteSessionEntries(sessionId: string): Promise<void> {
   // 4. Cascade delete all child sessions
   for (const childSessionId of allChildSessionIds) {
     markRemoteSessionDeleted(childSessionId)
+    sessionDeletionHook?.(childSessionId)
     const pendingChildWrite = sessionWrites.get(childSessionId)
     if (pendingChildWrite) await pendingChildWrite.catch(() => {})
     loadedSessionIds.delete(childSessionId)

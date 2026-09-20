@@ -19,7 +19,7 @@ export function SettingsRow({
             id={id}
             data-setting-id={id}
             className={cn(
-                'flex items-start gap-4 px-3.5 py-3 transition-colors duration-300',
+                'flex items-center gap-4 px-3.5 py-3 transition-colors duration-300',
                 !last && 'border-b border-[var(--border-subtle)]',
             )}
         >
@@ -33,7 +33,7 @@ export function SettingsRow({
                     </div>
                 ) : null}
             </div>
-            <div className="flex shrink-0 items-center pt-0.5">{control}</div>
+            <div className="flex shrink-0 items-center self-center">{control}</div>
         </div>
     )
 }

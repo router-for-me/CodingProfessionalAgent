@@ -180,4 +180,63 @@ describe('settingsStore', () => {
     })
     expect(useSettingsStore.getState().settings.subagents?.roles).toEqual([])
   })
+
+  it('updates and hydrates modelSettings with defaultTtl, cacheWarming, and per-model ttl', () => {
+    const initial = useSettingsStore.getState().settings.modelSettings
+    expect(initial?.enableAll).toBe(true)
+    expect(initial?.defaultTtl).toBe(300)
+    expect(initial?.cacheWarming).toEqual({
+      mode: 'off',
+      maxWarmingTime: 3600,
+    })
+
+    useSettingsStore.getState().setModelSettings({
+      defaultTtl: 600,
+      cacheWarming: {
+        mode: 'streaming',
+        maxWarmingTime: 1800,
+      },
+      models: {
+        'model-a': {
+          enabled: true,
+          ttl: 120,
+        },
+      },
+    })
+
+    const updated = useSettingsStore.getState().settings.modelSettings
+    expect(updated?.defaultTtl).toBe(600)
+    expect(updated?.cacheWarming).toEqual({
+      mode: 'streaming',
+      maxWarmingTime: 1800,
+    })
+    expect(updated?.models?.['model-a']?.ttl).toBe(120)
+
+    useSettingsStore.getState().hydrate({
+      modelSettings: {
+        enableAll: false,
+        defaultTtl: 450,
+        models: {
+          'model-b': {
+            enabled: false,
+            ttl: 200,
+          },
+        },
+        cacheWarming: {
+          mode: 'idle',
+          maxWarmingTime: 7200,
+        },
+      },
+    })
+
+    const hydrated = useSettingsStore.getState().settings.modelSettings
+    expect(hydrated?.enableAll).toBe(false)
+    expect(hydrated?.defaultTtl).toBe(450)
+    expect(hydrated?.models?.['model-b']?.ttl).toBe(200)
+    expect(hydrated?.cacheWarming).toEqual({
+      mode: 'idle',
+      maxWarmingTime: 7200,
+    })
+  })
 })
+

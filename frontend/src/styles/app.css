@@ -41,6 +41,17 @@ textarea,
   -webkit-user-select: text;
 }
 
+/* Hide number input spinners while preserving keyboard arrow adjustments */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
 code,
 pre,
 .font-mono {

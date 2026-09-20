@@ -42,7 +42,7 @@ import {
 import {
     agentRegistry,
 } from '@/plugins/platform/AgentPluginRuntimeHost'
-import type { ProtocolClient, ProtocolSession, ConversationEntry } from '@cpa/plugin-api'
+import type { ProtocolClient, ProtocolSession, ConversationEntry, ModelSettingsConfig } from '@cpa/plugin-api'
 import {
     DEFAULT_SUBAGENT_SETTINGS,
     type SubagentsSettings,
@@ -81,6 +81,7 @@ import {
     disposeGenerationSnapshot,
     type AgentGenerationSnapshot,
 } from './providers/generationSnapshot'
+import { CacheWarmer } from './agent/cacheWarmer.js'
 
 export interface ProtocolConnectionManager {
     dispose(): Promise<void> | void
@@ -961,6 +962,8 @@ export class CLIProxyAPIAgentService implements AgentService {
             manager?: ProtocolConnectionManager | null
         }
     >()
+    private readonly sessionWarmers = new Map<string, CacheWarmer>()
+    private readonly drainingWarmers = new Set<Promise<void>>()
     /** Last observed redacted config-rotation dispose failure (tests / diagnostics). */
     private lastConfigDisposeError: AgentPreflightError | null = null
     /** Last successfully committed prepared snapshot (tests / diagnostics). */
@@ -1319,6 +1322,9 @@ export class CLIProxyAPIAgentService implements AgentService {
                 protocolProviderId: input.protocolProviderId,
                 subagentsSettings,
                 gitSettings,
+                modelSettings: input.modelSettings
+                    ? (deepFreezeData(deepCloneData(input.modelSettings)) as ModelSettingsConfig)
+                    : undefined,
                 ...(worktreePolicy ? { worktreePolicy } : {}),
                 generationSnapshot,
             }) as PreparedAgentRun
@@ -1487,6 +1493,19 @@ export class CLIProxyAPIAgentService implements AgentService {
     ): AsyncGenerator<AgentRunEvent> {
         const { prepared, sessionId, runId } = input
         let modelInvoker: RunScopedModelInvoker | undefined
+        let warmer: CacheWarmer | undefined
+        let agentRunSettled = false
+        let snapshotDisposed = false
+        const disposeSnapshotOnce = async () => {
+            if (snapshotDisposed) return
+            snapshotDisposed = true
+            await disposeGenerationSnapshot(prepared.generationSnapshot)
+        }
+        const maybeDisposeGenerationSnapshot = async () => {
+            if (!agentRunSettled) return
+            if (warmer && !warmer.isDrained) return
+            await disposeSnapshotOnce()
+        }
         this.subAgents.setParentContext({
             sessionId,
             runId,
@@ -1520,6 +1539,31 @@ export class CLIProxyAPIAgentService implements AgentService {
                 sessionId,
                 controller.signal,
             )
+            // Cancel previous warmer for this session so new run settings, client, and lease take effect
+            this.cancelSessionWarmers(sessionId)
+
+            const getDynamicModelSettings = (): ModelSettingsConfig | undefined => {
+                const dynamic = (input as AgentStreamChatInput).getRuntimeSettings?.()
+                return dynamic?.modelSettings ?? prepared.modelSettings
+            }
+
+            warmer = new CacheWarmer({
+                streamFn: (streamInput, opts) =>
+                    client.stream(streamInput, {
+                        ...opts,
+                        connectionMode: 'isolated',
+                        promptCacheKey: sessionId,
+                    }),
+                getMode: () => getDynamicModelSettings()?.cacheWarming?.mode ?? 'off',
+                getMaxWarmingTimeMs: () =>
+                    (getDynamicModelSettings()?.cacheWarming?.maxWarmingTime ?? 3600) * 1000,
+                now: this.now,
+                onStopped: () => {
+                    void maybeDisposeGenerationSnapshot()
+                },
+            })
+            this.sessionWarmers.set(sessionId, warmer)
+
             const loop = this.createLoop({
                 client,
                 approvals: this.approvals,
@@ -1533,6 +1577,31 @@ export class CLIProxyAPIAgentService implements AgentService {
                 streamUpdateIntervalMs: this.streamUpdateIntervalMs,
                 cloneStreamSnapshots: false,
                 modelInvoker,
+                onContextChanged: () => {
+                    void warmer?.cancel()
+                },
+                onRequestSent: (streamInput, isContextCurrent) => {
+                    if (warmer) {
+                        this.sessionWarmers.set(sessionId, warmer)
+                    }
+                    const isAllEnabled = prepared.modelSettings?.enableAll !== false
+                    const modelCfg = !isAllEnabled
+                        ? prepared.modelSettings?.models?.[streamInput.model.id]
+                        : undefined
+                    const ttlSec =
+                        modelCfg?.ttl ?? prepared.modelSettings?.defaultTtl ?? 300
+                    warmer?.start(
+                        {
+                            sessionId,
+                            streamInput,
+                            ttlMs: ttlSec * 1000,
+                        },
+                        () =>
+                            !controller.signal.aborted &&
+                            !this.disposed &&
+                            (isContextCurrent ? isContextCurrent() : true),
+                    )
+                },
             })
 
             // Attach loop/client for abort() while we still own active.
@@ -1652,22 +1721,33 @@ export class CLIProxyAPIAgentService implements AgentService {
             this.subAgents.setParentContext(null)
             this.releaseActive(token)
             await modelInvoker?.close()
-            await disposeGenerationSnapshot(prepared.generationSnapshot)
+            agentRunSettled = true
+            warmer?.onAgentSettled()
+            if (warmer?.status.state === 'inactive') {
+                await warmer.waitForDrained()
+            }
+            await maybeDisposeGenerationSnapshot()
         }
     }
 
     abort(runId?: string): void {
         if (this.disposed) return
         if (runId !== undefined) {
+            let matched = false
             for (const active of this.activeOps.values()) {
                 if (active.runId === runId) {
+                    matched = true
                     if (active.kind === 'stream' && active.loop) {
                         active.loop.abort(active.runId)
                     }
                     this.subAgents.abortAllForParent(active.sessionId)
                     active.controller.abort()
                     this.approvals.abortAll(active.runId)
+                    void this.cancelSessionWarmers(active.sessionId)
                 }
+            }
+            if (!matched) {
+                void this.cancelSessionWarmers(runId)
             }
             this.abortChildOps()
         } else {
@@ -1679,6 +1759,7 @@ export class CLIProxyAPIAgentService implements AgentService {
                 active.controller.abort()
                 this.approvals.abortAll(active.runId)
             }
+            void this.cancelSessionWarmers()
             this.abortChildOps()
         }
     }
@@ -1722,6 +1803,7 @@ export class CLIProxyAPIAgentService implements AgentService {
         })
 
         return this.withActiveOperation(token, unlink, async () => {
+            await this.cancelSessionWarmers(sessionId)
             // Scoped terminal order (Task15): agent-start → body → error|aborted → agent-end.
             const events: AgentRunEvent[] = [
                 { type: 'agent-start', runId, sessionId },
@@ -2120,6 +2202,10 @@ export class CLIProxyAPIAgentService implements AgentService {
         }
         this.activeOps.clear()
         this.approvals.abortAll()
+        await this.cancelSessionWarmers()
+        while (this.drainingWarmers.size > 0) {
+            await Promise.allSettled(Array.from(this.drainingWarmers))
+        }
         if (this.connectionManager) {
             const manager = this.connectionManager
             this.connectionManager = null
@@ -2139,6 +2225,40 @@ export class CLIProxyAPIAgentService implements AgentService {
 
     getApprovalController(): ApprovalController {
         return this.approvals
+    }
+
+    getCacheWarmer(sessionId: string): CacheWarmer | undefined {
+        return this.sessionWarmers.get(sessionId)
+    }
+
+    async cancelSessionWarmers(sessionId?: string): Promise<void> {
+        if (typeof sessionId === 'string' && sessionId.length > 0) {
+            const warmer = this.sessionWarmers.get(sessionId)
+            if (warmer) {
+                this.sessionWarmers.delete(sessionId)
+                const drainPromise = warmer.cancel()
+                this.drainingWarmers.add(drainPromise)
+                try {
+                    await drainPromise
+                } finally {
+                    this.drainingWarmers.delete(drainPromise)
+                }
+            }
+        } else {
+            const warmers = Array.from(this.sessionWarmers.values())
+            this.sessionWarmers.clear()
+            const drainPromises = warmers.map((w) => w.cancel())
+            for (const p of drainPromises) {
+                this.drainingWarmers.add(p)
+            }
+            try {
+                await Promise.allSettled(drainPromises)
+            } finally {
+                for (const p of drainPromises) {
+                    this.drainingWarmers.delete(p)
+                }
+            }
+        }
     }
 
     /** Test helper: whether a run is currently active. */

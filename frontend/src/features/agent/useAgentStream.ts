@@ -550,6 +550,7 @@ function pruneHistoricalSubAgents(
     for (const agent of removedById.values()) {
         useMessageStore.getState().removeSessionMessages(agent.sessionId)
         void deleteSessionEntries(agent.sessionId)
+        service.cancelSessionWarmers?.(agent.sessionId)
     }
 }
 
@@ -1043,6 +1044,7 @@ function createRuntimeSettingsResolver(targetSessionId: string) {
             reasoningLevel: session?.reasoningEffort ?? settings.reasoningLevel,
             reasoningEffort: session?.reasoningEffort ?? settings.reasoningLevel,
             speed: session?.speed ?? settings.speed,
+            modelSettings: settings.modelSettings,
         }
     }
 }
@@ -1273,6 +1275,7 @@ async function prepareExecutionRun(
                 sessionId: params.sessionId,
                 subagentsSettings: params.settings.subagents,
                 gitSettings: params.settings.git,
+                modelSettings: params.settings.modelSettings,
                 getEntries: async (sid: string) => {
                     await ensureSessionLoaded(sid)
                     return useMessageStore.getState().getEntries(sid)
@@ -1402,6 +1405,7 @@ async function prepareExecutionRun(
             sessionId: params.sessionId,
             subagentsSettings: params.settings.subagents,
             gitSettings: params.settings.git,
+            modelSettings: params.settings.modelSettings,
             getEntries: async (sid: string) => {
                 await ensureSessionLoaded(sid)
                 return useMessageStore.getState().getEntries(sid)
@@ -1493,6 +1497,7 @@ export function useAgentStream(
             if (service) {
                 const rt = getRuntime(service)
                 if (target) {
+                    service.cancelSessionWarmers?.(target)
                     const flight = rt.runs.get(target)
                     if (flight) {
                         abortFlightAndCleanup(rt, service, target, flight)
@@ -2173,6 +2178,7 @@ export function useAgentStream(
                         sessionId: targetSessionId ?? null,
                         subagentsSettings: settings.subagents,
                         gitSettings: settings.git,
+                        modelSettings: settings.modelSettings,
                         getEntries: async (sid: string) => {
                             await ensureSessionLoaded(sid)
                             return useMessageStore.getState().getEntries(sid)
@@ -3169,6 +3175,9 @@ function applyTurnPauseDelta(entries: readonly ConversationEntry[]): Conversatio
                 send: (payload, opts) => send(payload, opts),
                 stop,
                 abort: stop,
+                cancelSessionWarmers: (targetSessionId?: string | null) => {
+                    void service.cancelSessionWarmers?.(targetSessionId ?? undefined)
+                },
                 compact: (focus: string, targetSessionId?: string | null) =>
                     compact(focus, targetSessionId ?? undefined),
                 retrySession: async (targetSessionId: string) => {
