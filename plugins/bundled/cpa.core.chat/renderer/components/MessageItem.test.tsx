@@ -713,5 +713,52 @@ describe('MessageItem contribution rendering and custom override dispatching', (
     fireEvent.click(copyButton)
     expect(copiedText).toBe('# Final Triage Report\n\nAll tests passed.')
   })
+
+  it('suppresses empty code blocks caused by unclosed code fences or trailing backticks', () => {
+    const rawContent = `### Section Header
+Here is a valid command:
+\`\`\`bash
+export FOO=bar
+\`\`\`
+\`\`\``
+
+    const { container } = render(
+      <HostServicesProvider services={{} as any}>
+        <AssistantText text={rawContent} />
+      </HostServicesProvider>,
+    )
+
+    // Should render exactly one pre element for export FOO=bar, not two
+    const preElements = container.querySelectorAll('pre')
+    expect(preElements).toHaveLength(1)
+    expect(preElements[0]?.textContent).toContain('export FOO=bar')
+  })
+
+  it('balances nested markdown code blocks so inner code and closing backticks remain intact', () => {
+    const rawNested = [
+      '### Draft Notice',
+      '```markdown',
+      'Hi user!',
+      'Here is the workaround:',
+      '   ```bash',
+      '   export CLAUDE_CODE_AUTO_MODE_SERVER=0',
+      '   ```',
+      '```',
+    ].join('\n')
+
+    const { container } = render(
+      <HostServicesProvider services={{} as any}>
+        <AssistantText text={rawNested} />
+      </HostServicesProvider>,
+    )
+
+    // Outer code block should enclose the inner block completely
+    const preElements = container.querySelectorAll('pre')
+    expect(preElements).toHaveLength(1)
+    const codeText = preElements[0]?.textContent ?? ''
+    expect(codeText).toContain('export CLAUDE_CODE_AUTO_MODE_SERVER=0')
+    expect(codeText).toContain('```bash')
+    expect(codeText).toContain('```')
+  })
 })
 

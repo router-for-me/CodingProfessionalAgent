@@ -1,4 +1,4 @@
-import { memo, useState, type KeyboardEvent } from 'react'
+import { memo, useMemo, useState, type KeyboardEvent } from 'react'
 import {
   ChevronDown,
   ChevronRight,
@@ -8,6 +8,10 @@ import {
   remarkGfm,
   useTranslation,
 } from '@cpa/plugin-ui'
+import {
+  balanceMarkdownCodeFences,
+  isMarkdownPreEmpty,
+} from '../utils/markdownUtils.js'
 
 export interface ThinkingBlockProps {
   thinking?: string
@@ -70,14 +74,19 @@ const markdownComponents: Components = {
       </code>
     )
   },
-  pre: ({ children }) => (
-    <pre
-      className="my-2 overflow-x-auto rounded-md bg-[#0b0b0b] p-2 last:mb-0"
-      style={{ fontSize: 'var(--code-font-size, 12px)' }}
-    >
-      {children}
-    </pre>
-  ),
+  pre: ({ children, node }) => {
+    if (isMarkdownPreEmpty(node, children)) {
+      return null
+    }
+    return (
+      <pre
+        className="my-2 overflow-x-auto rounded-md bg-[#0b0b0b] p-2 last:mb-0"
+        style={{ fontSize: 'var(--code-font-size, 12px)' }}
+      >
+        {children}
+      </pre>
+    )
+  },
   strong: ({ children }) => (
     <strong className="font-semibold text-[var(--text-primary)]">{children}</strong>
   ),
@@ -116,6 +125,11 @@ export const ThinkingBlock = memo(function ThinkingBlock(props: ThinkingBlockPro
       toggle()
     }
   }
+
+  const formattedThinking = useMemo(
+    () => balanceMarkdownCodeFences(thinking ?? ''),
+    [thinking],
+  )
 
   return (
     <div
@@ -162,7 +176,7 @@ export const ThinkingBlock = memo(function ThinkingBlock(props: ThinkingBlockPro
             remarkPlugins={[remarkGfm]}
             components={markdownComponents}
           >
-            {thinking}
+            {formattedThinking}
           </ReactMarkdown>
         </div>
       ) : null}

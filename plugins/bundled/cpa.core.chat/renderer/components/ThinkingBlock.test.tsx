@@ -80,4 +80,20 @@ describe('ThinkingBlock', () => {
     expect(screen.getByText('ab')).toBeVisible()
     expect(screen.getByRole('button')).toHaveAttribute('aria-expanded', 'true')
   })
+
+  it('suppresses empty pre code blocks in markdown when expanded', () => {
+    const rawThinking = `Thought process:
+\`\`\`bash
+echo 123
+\`\`\`
+\`\`\``
+
+    const { container } = render(
+      <ThinkingBlock thinking={rawThinking} streaming={false} defaultOpen />,
+    )
+
+    const preElements = container.querySelectorAll('pre')
+    expect(preElements).toHaveLength(1)
+    expect(preElements[0]?.textContent).toContain('echo 123')
+  })
 })

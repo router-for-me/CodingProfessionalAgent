@@ -51,6 +51,10 @@ import {
     hasVisibleTurnContent,
     trailingAssistantText,
 } from '../utils/toolActivity.js'
+import {
+    balanceMarkdownCodeFences,
+    isMarkdownPreEmpty,
+} from '../utils/markdownUtils.js'
 import { ThinkingBlock } from './ThinkingBlock.js'
 import { ToolActivityStack } from './ToolActivityStack.js'
 import { ToolCard } from './ToolCard.js'
@@ -186,18 +190,23 @@ const markdownComponents: Components = {
             {children}
         </td>
     ),
-    pre: ({ children }) => (
-        <pre
-            className={cn(
-                'my-3 overflow-x-auto rounded-lg border border-[var(--border-subtle)]',
-                'bg-[#0b0b0b] p-3 leading-relaxed text-[var(--text-primary)]',
-                'last:mb-0',
-            )}
-            style={{ fontSize: 'var(--code-font-size, 12px)' }}
-        >
-            {children}
-        </pre>
-    ),
+    pre: ({ children, node }) => {
+        if (isMarkdownPreEmpty(node, children)) {
+            return null
+        }
+        return (
+            <pre
+                className={cn(
+                    'my-3 overflow-x-auto rounded-lg border border-[var(--border-subtle)]',
+                    'bg-[#0b0b0b] p-3 leading-relaxed text-[var(--text-primary)]',
+                    'last:mb-0',
+                )}
+                style={{ fontSize: 'var(--code-font-size, 12px)' }}
+            >
+                {children}
+            </pre>
+        )
+    },
     code: ({ className, children }) => {
         const isBlock = Boolean(className)
         if (isBlock) {
@@ -941,6 +950,7 @@ export function AssistantText(props: {
 
     const { cleanText, citations: inlineCitations } = extractMemoryCitations(rawText)
     const activeCitations = props.citations ?? inlineCitations
+    const formattedMarkdown = useMemo(() => balanceMarkdownCodeFences(cleanText), [cleanText])
 
     return (
         <div className="flex flex-col">
@@ -954,7 +964,7 @@ export function AssistantText(props: {
                     remarkPlugins={[remarkGfm]}
                     components={markdownComponents}
                 >
-                    {cleanText}
+                    {formattedMarkdown}
                 </ReactMarkdown>
             </div>
             {activeCitations && <MemoryCitationsView citations={activeCitations} />}
