@@ -1016,5 +1016,153 @@ describe('FloatingOverlayHost & computeFloatingCoords', () => {
             removeEventListenerSpy.mockRestore()
             cancelAnimationFrameSpy.mockRestore()
         })
+
+        it('tracks sibling sidebar collapse transitions and immediately updates floating overlay position', async () => {
+            const container = document.createElement('div')
+            container.id = 'app-root'
+            const sidebar = document.createElement('aside')
+            sidebar.id = 'right-sidebar'
+            sidebar.setAttribute('data-testid', 'subagent-panel')
+            sidebar.style.width = '380px'
+
+            const main = document.createElement('main')
+            const anchor = document.createElement('div')
+            anchor.setAttribute('data-element', 'composer-container')
+            main.appendChild(anchor)
+            container.appendChild(main)
+            container.appendChild(sidebar)
+            document.body.appendChild(container)
+
+            // Initial state: sidebar is open, anchor is shifted to left: 200
+            vi.spyOn(anchor, 'getBoundingClientRect').mockReturnValue({
+                ...sampleRect,
+                left: 200,
+            })
+
+            registry.registerFloating({
+                id: 'todo-progress-bar',
+                pluginId: 'cpa.core.manage-todo-list',
+                anchor: '[data-element="composer-container"]',
+                component: () => <div data-testid="todo-bar-content">Todo Bar</div>,
+            })
+
+            render(<FloatingOverlayHost registry={registry} />)
+            const overlay = screen
+                .getByTestId('todo-bar-content')
+                .closest('[data-floating-id="todo-progress-bar"]') as HTMLElement
+            expect(overlay.style.left).toBe('250px') // 200 + 100/2
+
+            // Simulate closing sidebar: anchor shifts rightward to left: 350
+            vi.spyOn(anchor, 'getBoundingClientRect').mockReturnValue({
+                ...sampleRect,
+                left: 350,
+            })
+
+            // Dispatch transitionstart on the sibling sidebar element
+            const transitionStartEvent = new Event('transitionstart', { bubbles: true })
+            sidebar.dispatchEvent(transitionStartEvent)
+
+            await waitFor(() => {
+                expect(overlay.style.left).toBe('400px') // 350 + 100/2
+            })
+
+            // Further simulate sidebar finishing transition
+            vi.spyOn(anchor, 'getBoundingClientRect').mockReturnValue({
+                ...sampleRect,
+                left: 400,
+            })
+            const transitionEndEvent = new Event('transitionend', { bubbles: true })
+            sidebar.dispatchEvent(transitionEndEvent)
+
+            await waitFor(() => {
+                expect(overlay.style.left).toBe('450px') // 400 + 100/2
+            })
+
+            container.remove()
+        })
+
+        it('discards non-layout transitions (e.g. background color change) and loader animations', async () => {
+            const rafSpy = vi.spyOn(window, 'requestAnimationFrame')
+
+            const anchor = document.createElement('div')
+            anchor.id = 'filter-anchor'
+            document.body.appendChild(anchor)
+            vi.spyOn(anchor, 'getBoundingClientRect').mockReturnValue(sampleRect)
+
+            registry.registerFloating({
+                id: 'filter-float',
+                pluginId: 'p1',
+                anchor: '#filter-anchor',
+                component: () => <div data-testid="filter-content">Content</div>,
+            })
+
+            render(<FloatingOverlayHost registry={registry} />)
+            rafSpy.mockClear()
+
+            // Non-layout transition property
+            const colorTransition = new Event('transitionstart', { bubbles: true })
+            Object.defineProperty(colorTransition, 'propertyName', { value: 'background-color' })
+            document.body.dispatchEvent(colorTransition)
+
+            expect(rafSpy).not.toHaveBeenCalled()
+
+            // Loader spinner animation
+            const spinner = document.createElement('div')
+            spinner.className = 'animate-spin'
+            document.body.appendChild(spinner)
+            spinner.dispatchEvent(new Event('animationstart', { bubbles: true }))
+
+            expect(rafSpy).not.toHaveBeenCalled()
+
+            spinner.remove()
+            anchor.remove()
+            rafSpy.mockRestore()
+        })
+
+        it('triggers tracking when sibling layout attributes change via MutationObserver', async () => {
+            const container = document.createElement('div')
+            const sidebar = document.createElement('aside')
+            sidebar.setAttribute('data-state', 'open')
+            sidebar.style.width = '380px'
+
+            const anchor = document.createElement('div')
+            anchor.id = 'layout-attr-anchor'
+            container.appendChild(anchor)
+            container.appendChild(sidebar)
+            document.body.appendChild(container)
+
+            vi.spyOn(anchor, 'getBoundingClientRect').mockReturnValue({
+                ...sampleRect,
+                left: 200,
+            })
+
+            registry.registerFloating({
+                id: 'attr-float',
+                pluginId: 'p1',
+                anchor: '#layout-attr-anchor',
+                component: () => <div data-testid="attr-content">Attr Content</div>,
+            })
+
+            render(<FloatingOverlayHost registry={registry} />)
+            const overlay = screen
+                .getByTestId('attr-content')
+                .closest('[data-floating-id="attr-float"]') as HTMLElement
+            expect(overlay.style.left).toBe('250px')
+
+            // Simulate closing sidebar: style and data-state change
+            vi.spyOn(anchor, 'getBoundingClientRect').mockReturnValue({
+                ...sampleRect,
+                left: 380,
+            })
+
+            sidebar.setAttribute('data-state', 'closed')
+            sidebar.style.width = '0px'
+
+            await waitFor(() => {
+                expect(overlay.style.left).toBe('430px') // 380 + 100/2
+            })
+
+            container.remove()
+        })
     })
 })

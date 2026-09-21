@@ -18,6 +18,31 @@ export interface FloatingOverlayHostProps {
 }
 
 /**
+ * CSS transition properties that are purely visual and cannot affect the geometric
+ * layout or positioning of surrounding elements.
+ */
+const NON_LAYOUT_TRANSITION_PROPERTIES = new Set([
+    'color',
+    'background-color',
+    'border-color',
+    'border-top-color',
+    'border-right-color',
+    'border-bottom-color',
+    'border-left-color',
+    'outline-color',
+    'fill',
+    'stroke',
+    'box-shadow',
+    'text-shadow',
+    'opacity',
+])
+
+/**
+ * Common standalone CSS animations (e.g. spinning loaders) that do not alter layout dimensions.
+ */
+const NON_LAYOUT_ANIMATION_CLASSES = ['animate-spin', 'animate-pulse']
+
+/**
  * Calculates top/left coordinates and CSS transform for a floating overlay given an anchor DOMRect.
  */
 export function computeFloatingCoords(
@@ -248,7 +273,8 @@ function FloatingOverlayItem<P = Record<string, unknown>>({
         let rafId: number | null = null
         let trackingRafId: number | null = null
         let trackingEndTime = 0
-        let observedElement: Element | null = null
+        let observedAnchor: Element | null = null
+        let observedParent: Element | null = null
         let resizeObserver: ResizeObserver | null = null
         let mutationObserver: MutationObserver | null = null
 
@@ -287,16 +313,26 @@ function FloatingOverlayItem<P = Record<string, unknown>>({
                 return
             }
             const currentAnchor = findAnchorElement(item.anchor)
-            if (observedElement !== currentAnchor) {
-                if (observedElement) {
-                    resizeObserver.unobserve(observedElement)
+            const currentParent = currentAnchor?.parentElement ?? null
+
+            if (observedAnchor !== currentAnchor) {
+                if (observedAnchor) {
+                    resizeObserver.unobserve(observedAnchor)
                 }
                 if (currentAnchor) {
                     resizeObserver.observe(currentAnchor)
-                    observedElement = currentAnchor
-                } else {
-                    observedElement = null
                 }
+                observedAnchor = currentAnchor
+            }
+
+            if (observedParent !== currentParent) {
+                if (observedParent) {
+                    resizeObserver.unobserve(observedParent)
+                }
+                if (currentParent) {
+                    resizeObserver.observe(currentParent)
+                }
+                observedParent = currentParent
             }
         }
 
@@ -307,7 +343,11 @@ function FloatingOverlayItem<P = Record<string, unknown>>({
             const initialAnchor = findAnchorElement(item.anchor)
             if (initialAnchor) {
                 resizeObserver.observe(initialAnchor)
-                observedElement = initialAnchor
+                observedAnchor = initialAnchor
+                if (initialAnchor.parentElement) {
+                    resizeObserver.observe(initialAnchor.parentElement)
+                    observedParent = initialAnchor.parentElement
+                }
             }
         }
 
@@ -318,11 +358,29 @@ function FloatingOverlayItem<P = Record<string, unknown>>({
         const isInternalOrIrrelevantEvent = (e?: Event): boolean => {
             if (e && e.target instanceof Element) {
                 // Ignore transitions/animations inside any floating overlay or custom mac scrollbar host
-                if (e.target.closest('[data-floating-id]') || e.target.closest('#cpa-mac-scrollbars-host')) {
+                if (
+                    e.target.closest('[data-floating-id]') ||
+                    e.target.closest('#cpa-mac-scrollbars-host') ||
+                    e.target.closest('[data-no-floating-track]')
+                ) {
                     return true
                 }
-                // If an anchor element is observed, only track animations on the anchor or its ancestors
-                if (observedElement && e.target !== observedElement && !e.target.contains(observedElement)) {
+
+                // Ignore pure visual CSS property transitions (e.g. button hover colors)
+                const propertyName = (e as unknown as { propertyName?: unknown })?.propertyName
+                if (
+                    typeof propertyName === 'string' &&
+                    NON_LAYOUT_TRANSITION_PROPERTIES.has(propertyName)
+                ) {
+                    return true
+                }
+
+                // Ignore continuous purely decorative animations like spinners
+                if (
+                    NON_LAYOUT_ANIMATION_CLASSES.some((cls) =>
+                        Boolean((e.target as Element).closest(`.${cls}`))
+                    )
+                ) {
                     return true
                 }
             }
@@ -359,14 +417,30 @@ function FloatingOverlayItem<P = Record<string, unknown>>({
         if (typeof MutationObserver !== 'undefined') {
             mutationObserver = new MutationObserver((mutations) => {
                 // Ignore mutations occurring inside any floating overlay or custom mac scrollbar host
+                let hasLayoutAttributeMutation = false
                 const hasRelevantMutation = mutations.some((mutation) => {
                     const target =
                         mutation.target instanceof Element
                             ? mutation.target
                             : mutation.target.parentElement
                     if (!target) return false
-                    if (target.closest('[data-floating-id]') || target.closest('#cpa-mac-scrollbars-host')) {
+                    if (
+                        target.closest('[data-floating-id]') ||
+                        target.closest('#cpa-mac-scrollbars-host') ||
+                        target.closest('[data-no-floating-track]')
+                    ) {
                         return false
+                    }
+                    if (
+                        mutation.type === 'attributes' &&
+                        (mutation.attributeName === 'style' ||
+                            mutation.attributeName === 'class' ||
+                            mutation.attributeName === 'hidden' ||
+                            mutation.attributeName === 'aria-hidden' ||
+                            mutation.attributeName === 'inert' ||
+                            mutation.attributeName === 'data-state')
+                    ) {
+                        hasLayoutAttributeMutation = true
                     }
                     return true
                 })
@@ -377,6 +451,9 @@ function FloatingOverlayItem<P = Record<string, unknown>>({
 
                 updateObservedAnchor()
                 scheduleUpdate()
+                if (hasLayoutAttributeMutation) {
+                    startTracking(400)
+                }
             })
 
             const root = document.body ?? document.documentElement
@@ -385,7 +462,7 @@ function FloatingOverlayItem<P = Record<string, unknown>>({
                     childList: true,
                     subtree: true,
                     attributes: true,
-                    attributeFilter: ['id', 'style', 'class', 'hidden', 'aria-hidden', 'inert'],
+                    attributeFilter: ['id', 'style', 'class', 'hidden', 'aria-hidden', 'inert', 'data-state'],
                 })
             }
         }
@@ -409,9 +486,13 @@ function FloatingOverlayItem<P = Record<string, unknown>>({
             window.removeEventListener('transitioncancel', handleTransitionEnd)
             window.removeEventListener('animationstart', handleTransitionEvent)
             window.removeEventListener('animationend', handleTransitionEnd)
-            if (observedElement && resizeObserver) {
-                resizeObserver.unobserve(observedElement)
-                observedElement = null
+            if (observedAnchor && resizeObserver) {
+                resizeObserver.unobserve(observedAnchor)
+                observedAnchor = null
+            }
+            if (observedParent && resizeObserver) {
+                resizeObserver.unobserve(observedParent)
+                observedParent = null
             }
             resizeObserver?.disconnect()
             mutationObserver?.disconnect()
