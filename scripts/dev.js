@@ -7,6 +7,25 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
 
 async function run() {
+  const cliArgs = process.argv.slice(2)
+  const isHelpOrVersion = cliArgs.some((arg) =>
+    ['--help', '-h', '-help', '--version', '-v', '-version'].includes(arg),
+  )
+  if (isHelpOrVersion) {
+    const electron = spawn(
+      'pnpm',
+      ['exec', 'electron', 'dist-electron/src/main/index.js', ...cliArgs],
+      {
+        cwd: rootDir,
+        stdio: 'inherit',
+      },
+    )
+    electron.on('close', (code) => {
+      process.exit(code ?? 0)
+    })
+    return
+  }
+
   // Sync dev icon on macOS to avoid showing the default Electron icon in dev mode (use rotated 45deg dev icon)
   if (process.platform === 'darwin') {
     const electronIcnsPath = path.resolve(

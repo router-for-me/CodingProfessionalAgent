@@ -24,8 +24,29 @@ import { rotateNativeImage45 } from './utils/imageRotate.js'
 import { registerWin32AppUserModelId } from './services/notificationBadgeService.js'
 import { getAppVersion } from './utils/version.js'
 import { syncUserShellEnvironment } from './services/shellEnvironment.js'
-import { parseCommandLineArgs } from './utils/cliArgs.js'
+import { parseCommandLineArgs, getHelpText } from './utils/cliArgs.js'
 import { HeadlessLifecycleService } from './services/headlessLifecycleService.js'
+
+// Parse CLI arguments early
+const cliArgs = parseCommandLineArgs(process.argv)
+
+// If invoked with --help or -h, print formatted usage text and exit immediately
+if (cliArgs.help) {
+  process.stdout.write(getHelpText(getAppVersion()) + '\n')
+  if (typeof app?.exit === 'function') {
+    app.exit(0)
+  }
+  process.exit(0)
+}
+
+// If invoked with --version or -v, print version and exit immediately
+if (cliArgs.version) {
+  process.stdout.write(getAppVersion() + '\n')
+  if (typeof app?.exit === 'function') {
+    app.exit(0)
+  }
+  process.exit(0)
+}
 
 // Synchronize user shell environment (PATH, toolchains, homebrew, go) on app startup
 syncUserShellEnvironment()
@@ -55,8 +76,6 @@ let pluginRuntimeHost: MainPluginRuntimeHost | null = null
 let lifecycleService: HeadlessLifecycleService | null = null
 let isQuitting = false
 let healthCheckTimer: NodeJS.Timeout | null = null
-
-const cliArgs = parseCommandLineArgs(process.argv)
 
 // In headless mode on macOS, hide Dock as early as possible
 if (cliArgs.isHeadless && process.platform === 'darwin') {
@@ -262,6 +281,9 @@ async function bootstrap(): Promise<void> {
   app.on('second-instance', (_event, commandLine) => {
     // Explicitly pass empty env so primary instance's CPA_HEADLESS does not taint second instance
     const secondArgs = parseCommandLineArgs(commandLine, {})
+    if (secondArgs.help || secondArgs.version) {
+      return
+    }
     if (secondArgs.isHeadless) {
       console.log('[CPA] Second instance invoked with --headless; primary instance remains running in background.')
       if (isAppReadyForWindows && lifecycleService) {
