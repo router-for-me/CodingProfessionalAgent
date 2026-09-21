@@ -78,6 +78,7 @@ export interface ProcessStartInput {
 }
 
 export interface SessionDelegateRunRequest {
+    requestId?: string
     sessionId?: string | null
     text: string
     images?: Array<{ data: string; mimeType: string; name?: string }>
@@ -86,6 +87,7 @@ export interface SessionDelegateRunRequest {
     editMessageId?: string
     userEntryId?: string
     userEntryCreatedAt?: number
+    followUpMode?: 'steer' | 'queue'
 }
 
 export interface ActiveRunInfo {

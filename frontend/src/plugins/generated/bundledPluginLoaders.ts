@@ -57,6 +57,8 @@ export const bundledManifests: Readonly<Record<string, PluginManifest>> = Object
                         "session:broadcastResumePromptState",
                         "session:resumePromptAction",
                         "session:delegateRun",
+                        "session:claimPendingDelegateRuns",
+                        "session:ackDelegateRun",
                         "session:queryMetrics",
                         "session:search"
                 ],

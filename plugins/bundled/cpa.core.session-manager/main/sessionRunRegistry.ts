@@ -1,7 +1,12 @@
-import type { ActiveRunInfo, NativeEvent, ResumePromptSyncState } from '../../../../src/shared/types.js'
+import type { ActiveRunInfo, NativeEvent, ResumePromptSyncState, SessionDelegateRunRequest } from '../../../../src/shared/types.js'
+
+let delegateSeq = 0
+const MAX_PENDING_DELEGATE_RUNS = 256
 
 export class SessionRunRegistry {
     private readonly runs = new Map<string, ActiveRunInfo>()
+    private readonly pendingDelegateRuns = new Map<string, SessionDelegateRunRequest>()
+    private readonly deletedSessionIds = new Set<string>()
     private readonly emitEvent: (event: NativeEvent) => void
     private resumePromptState: ResumePromptSyncState = {
         isOpen: false,
@@ -48,6 +53,75 @@ export class SessionRunRegistry {
             kind: 'session:resume-prompt-action',
             data: JSON.stringify({ action }),
         })
+    }
+
+    addPendingDelegateRun(req: SessionDelegateRunRequest): string {
+        if (req.sessionId && this.deletedSessionIds.has(req.sessionId)) {
+            throw new Error(`Cannot delegate run to deleted session: ${req.sessionId}`)
+        }
+        // If userEntryId is provided and we already have a pending request for the same userEntryId,
+        // reuse that request's id to guarantee idempotency even if caller didn't supply requestId
+        if (req.userEntryId && !req.editMessageId && req.sessionId) {
+            for (const [existingId, existingReq] of this.pendingDelegateRuns) {
+                if (
+                    existingReq.userEntryId === req.userEntryId &&
+                    existingReq.sessionId === req.sessionId
+                ) {
+                    req.requestId = existingId
+                    this.pendingDelegateRuns.set(existingId, req)
+                    return existingId
+                }
+            }
+        }
+        const requestId =
+            req.requestId ||
+            (req.userEntryId ? `req-${req.userEntryId}` : `delegate-${Date.now()}${++delegateSeq}`)
+        req.requestId = requestId
+        if (this.pendingDelegateRuns.has(requestId)) {
+            this.pendingDelegateRuns.set(requestId, req)
+            return requestId
+        }
+        if (this.pendingDelegateRuns.size >= MAX_PENDING_DELEGATE_RUNS) {
+            throw new Error(
+                `Delegate queue is full (${MAX_PENDING_DELEGATE_RUNS} pending runs). Please wait for the host to process existing tasks.`,
+            )
+        }
+        this.pendingDelegateRuns.set(requestId, req)
+        return requestId
+    }
+
+    claimPendingDelegateRuns(): SessionDelegateRunRequest[] {
+        return Array.from(this.pendingDelegateRuns.values())
+    }
+
+    removePendingDelegateRunsForSession(sessionId: string): number {
+        if (!sessionId) return 0
+        this.deletedSessionIds.add(sessionId)
+        if (this.deletedSessionIds.size > 1000) {
+            const oldest = this.deletedSessionIds.values().next().value
+            if (oldest) this.deletedSessionIds.delete(oldest)
+        }
+        let removed = 0
+        for (const [id, req] of this.pendingDelegateRuns) {
+            if (req.sessionId === sessionId) {
+                this.pendingDelegateRuns.delete(id)
+                removed++
+            }
+        }
+        return removed
+    }
+
+    ackDelegateRun(id: string): void {
+        if (!id) return
+        if (this.pendingDelegateRuns.delete(id)) {
+            return
+        }
+        for (const [key, req] of this.pendingDelegateRuns.entries()) {
+            if (req.requestId === id || (req.userEntryId && req.userEntryId === id)) {
+                this.pendingDelegateRuns.delete(key)
+                return
+            }
+        }
     }
 
     registerOrUpdate(info: Omit<ActiveRunInfo, 'updatedAt'>): void {

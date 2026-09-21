@@ -456,6 +456,7 @@ export interface SubAgentItem {
 }
 
 export interface SessionDelegateRunRequest {
+  requestId?: string
   sessionId?: string | null
   scheduleId?: string | null
   text: string
@@ -465,6 +466,7 @@ export interface SessionDelegateRunRequest {
   editMessageId?: string
   userEntryId?: string
   userEntryCreatedAt?: number
+  followUpMode?: 'steer' | 'queue'
 }
 
 export interface WebServerStatus {
@@ -673,6 +675,8 @@ export interface ElectronBridgeApi {
   SessionBroadcastResumePromptState(state: ResumePromptSyncState): Promise<void>
   SessionResumePromptAction(action: 'continue' | 'abort'): Promise<void>
   SessionDelegateRun(req: SessionDelegateRunRequest): Promise<string>
+  SessionClaimPendingDelegateRuns(): Promise<SessionDelegateRunRequest[]>
+  SessionAckDelegateRun(id: string): Promise<void>
   SessionSearch(query: string, limit?: number): Promise<SessionSearchResultItem[]>
 
   // Metrics Analytics

@@ -4,7 +4,7 @@ import { sessionManagerMainEntry } from './index.js'
 import manifest from '../manifest.json' with { type: 'json' }
 
 describe('cpa.core.session-manager main entry', () => {
-    it('registers services and all 19 session RPC methods on activation', async () => {
+    it('registers services and all 21 session RPC methods on activation', async () => {
         const harness = createPluginTestHarness(sessionManagerMainEntry, {
             manifest,
         })
@@ -15,14 +15,16 @@ describe('cpa.core.session-manager main entry', () => {
         expect(services.map((s) => s.id).sort()).toEqual(['sessionRunRegistry', 'sessionService'])
 
         const rpcs = harness.getRegistered('rpc')
-        expect(rpcs).toHaveLength(19)
+        expect(rpcs).toHaveLength(21)
         const rpcMethods = rpcs.map((r) => r.id).sort()
         expect(rpcMethods).toEqual([
             'session:abortRun',
+            'session:ackDelegateRun',
             'session:broadcastResumePromptState',
             'session:broadcastRunStatus',
             'session:broadcastStreamEvent',
             'session:broadcastSubAgentState',
+            'session:claimPendingDelegateRuns',
             'session:delegateRun',
             'session:delete',
             'session:get',

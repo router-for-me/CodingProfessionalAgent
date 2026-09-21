@@ -91,6 +91,7 @@ export const sessionManagerMainEntry = definePluginEntry({
                 capability: 'sessions.write',
                 invoke: async (rpcCtx, args) => {
                     const sessionId = args[0] as string
+                    sessionRunRegistry.removePendingDelegateRunsForSession(sessionId)
                     const result = await sessionService.delete(sessionId)
                     emitEvent(
                         {
@@ -276,9 +277,12 @@ export const sessionManagerMainEntry = definePluginEntry({
                 capability: 'sessions.manage',
                 invoke: async (rpcCtx, args) => {
                     const req = args[0] as SessionDelegateRunRequest
+                    if (req) {
+                        sessionRunRegistry.addPendingDelegateRun(req)
+                    }
                     emitEvent(
                         {
-                            operationId: `delegate-${Date.now()}`,
+                            operationId: req?.requestId || `delegate-${Date.now()}`,
                             sequence: Date.now(),
                             kind: 'session:delegate-run',
                             data: JSON.stringify(req),
@@ -286,6 +290,22 @@ export const sessionManagerMainEntry = definePluginEntry({
                         rpcCtx,
                     )
                     return (req?.sessionId as string) || ''
+                },
+            },
+            {
+                method: 'session:claimPendingDelegateRuns',
+                aliases: ['SessionClaimPendingDelegateRuns'],
+                ipcChannel: 'session:claimPendingDelegateRuns',
+                capability: 'sessions.manage',
+                invoke: async () => sessionRunRegistry.claimPendingDelegateRuns(),
+            },
+            {
+                method: 'session:ackDelegateRun',
+                aliases: ['SessionAckDelegateRun'],
+                ipcChannel: 'session:ackDelegateRun',
+                capability: 'sessions.manage',
+                invoke: async (_rpcCtx, args) => {
+                    sessionRunRegistry.ackDelegateRun(args[0] as string)
                 },
             },
             {

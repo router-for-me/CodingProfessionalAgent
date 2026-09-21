@@ -89,6 +89,8 @@ export const RENDERER_CAPABILITY_DESCRIPTORS: readonly RendererCapabilityDescrip
     { name: 'SessionBroadcastResumePromptState', method: 'session:broadcastResumePromptState', capability: 'sessions.manage' },
     { name: 'SessionResumePromptAction', method: 'session:resumePromptAction', capability: 'sessions.manage' },
     { name: 'SessionDelegateRun', method: 'session:delegateRun', capability: 'sessions.manage' },
+    { name: 'SessionClaimPendingDelegateRuns', method: 'session:claimPendingDelegateRuns', capability: 'sessions.manage' },
+    { name: 'SessionAckDelegateRun', method: 'session:ackDelegateRun', capability: 'sessions.manage' },
     { name: 'SessionQueryMetrics', method: 'session:queryMetrics', capability: 'sessions.read' },
     { name: 'SessionSearch', method: 'session:search', capability: 'sessions.read' },
 

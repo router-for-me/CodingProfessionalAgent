@@ -7,7 +7,7 @@
 
 import { isBrowserEnvironment } from '@/lib/platform'
 import { getHashRoutePathname } from '@cpa/plugin-ui'
-import { getHostBridge, subscribeHostNativeEvents } from '@/application/services/hostTransport'
+import { getHostBridge, subscribeHostNativeEvents, onHostReconnect } from '@/application/services/hostTransport'
 import { registerHostAgentController } from '@/application/services/createHostServices'
 import type { SessionDelegateRunRequest } from '@/features/agent-runtime/native/types'
 import {
@@ -105,12 +105,14 @@ export type AgentSendPayload = {
     /** Existing user entry to replace; all later context is discarded. */
     editMessageId?: string
     userEntryId?: string
+    requestId?: string
     queuedUserEntryIds?: string[]
     /** Original retry start time, preserved across worktree setup and delegation. */
     userEntryCreatedAt?: number
     followUpMode?: 'steer' | 'queue'
     isQueuedExecution?: boolean
     onSessionAccepted?: (sessionId: string) => void
+    onRunFinish?: (succeeded: boolean) => void
 }
 
 export type AgentSendOptions = {
@@ -148,18 +150,30 @@ type ServiceRuntime = {
     pendingPreflights: Map<number, PendingPreflight>
     pendingSteers: Map<string, UserEntry[]>
     sessionQueues: Map<string, Array<{ entry: UserEntry; payload: AgentSendPayload; options?: AgentSendOptions }>>
+    pendingDelegateRuns: SessionDelegateRunRequest[]
+    inFlightDelegateRuns: Set<string>
+    completedDelegateRuns: Set<string>
+    flightFinishCallbacks: Map<number, Array<(succeeded: boolean) => void>>
     flightToken: number
     listeners: Set<() => void>
     /** True after disposeAgentRuntime — blocks late prepare session submit. */
     disposed: boolean
     hostedRunIds: Set<string>
     pendingTakeoverAborts: Set<string>
+    inFlightTakeoverRunIds: Set<string>
+    deletedSessionIds: Set<string>
+    pendingSteerCallbacks: Map<string, Array<(succeeded: boolean) => void>>
+    pendingSteerItems: Map<string, { entry: UserEntry; payload: AgentSendPayload; options?: AgentSendOptions }>
     skills: readonly Skill[]
     prompts: readonly PromptTemplate[]
     lastDiagnostics: readonly string[]
     snapshotCache: Map<string, StreamSnapshot>
     sendHandler?: (
         input: string | AgentSendPayload,
+        opts?: AgentSendOptions,
+    ) => Promise<string | null>
+    sendInternalHandler?: (
+        payload: AgentSendPayload,
         opts?: AgentSendOptions,
     ) => Promise<string | null>
 }
@@ -424,16 +438,17 @@ function bindNativeSync(service: AgentService): void {
                     return
                 }
 
-                const flight = rt.runs.get(parsed.sessionId)
-                if (flight) {
-                    abortFlightAndCleanup(rt, service, parsed.sessionId, flight)
+                handleSessionAbort(rt, service, parsed.sessionId)
+            } catch {
+                // Ignore JSON parse error
+            }
+        } else if (nativeEvent.kind === 'session:deleted') {
+            try {
+                const parsed = JSON.parse(nativeEvent.data) as {
+                    sessionId?: string
                 }
-                for (const [t, p] of rt.pendingPreflights) {
-                    if (p.targetSessionId === parsed.sessionId) {
-                        p.abortController.abort()
-                        rt.pendingPreflights.delete(t)
-                        emit(rt)
-                    }
+                if (parsed.sessionId) {
+                    handleSessionDeleted(rt, service, parsed.sessionId)
                 }
             } catch {
                 // Ignore JSON parse error
@@ -446,66 +461,13 @@ function bindNativeSync(service: AgentService): void {
                     ) as SessionDelegateRunRequest
                     if (
                         req &&
-                        rt.sendHandler &&
                         (req.text?.trim() || (req.images && req.images.length > 0))
                     ) {
-                        void (async () => {
-                            try {
-                                if (req.sessionId) {
-                                    const exists = useSessionStore
-                                        .getState()
-                                        .sessions.some((s) => s.id === req.sessionId)
-                                    if (!exists) {
-                                        const titleSource =
-                                            req.text?.trim() ||
-                                            (req.images && req.images.length > 0
-                                                ? req.images[0]?.name || 'image'
-                                                : '')
-                                        const now = Date.now()
-                                        useSessionStore.getState().upsertRemoteSession({
-                                            id: req.sessionId,
-                                            title: deriveSessionTitle(
-                                                titleSource,
-                                                useSettingsStore.getState().settings.locale,
-                                            ),
-                                            projectId: req.projectId ?? undefined,
-                                            branch: req.branch ?? undefined,
-                                            pinned: false,
-                                            createdAt: now,
-                                            updatedAt: now,
-                                        })
-                                    }
-                                    await ensureSessionLoaded(req.sessionId)
-                                }
-                                await rt.sendHandler?.({
-                                    text: req.text ?? '',
-                                    images: req.images?.map((img) => ({
-                                        id: createId(),
-                                        data: img.data,
-                                        mimeType: img.mimeType,
-                                        name: img.name ?? 'image',
-                                        width: 0,
-                                        height: 0,
-                                    })),
-                                    projectId: req.projectId,
-                                    branch: req.branch,
-                                    sessionId: req.sessionId,
-                                    editMessageId: req.editMessageId,
-                                    userEntryId: req.userEntryId,
-                                    userEntryCreatedAt: req.userEntryCreatedAt,
-                                })
-                            } catch (error) {
-                                if (req.sessionId) {
-                                    void getHostBridge()?.SessionBroadcastRunStatus(
-                                        req.sessionId,
-                                        'idle',
-                                        '',
-                                        '',
-                                    )
-                                }
-                                toastPreflight(error)
-                            }
-                        })()
+                        if (!rt.sendHandler) {
+                            rt.pendingDelegateRuns.push(req)
+                        } else {
+                            void queueDelegateRun(rt, req)
+                        }
                     }
                 } catch {
                     // Ignore JSON parse error
@@ -669,11 +631,19 @@ function createRuntime(): ServiceRuntime {
         pendingPreflights: new Map(),
         pendingSteers: new Map(),
         sessionQueues: new Map(),
+        pendingDelegateRuns: [],
+        inFlightDelegateRuns: new Set(),
+        completedDelegateRuns: new Set(),
+        flightFinishCallbacks: new Map(),
         flightToken: 0,
         listeners: new Set(),
         disposed: false,
         hostedRunIds: new Set(),
         pendingTakeoverAborts: new Set(),
+        inFlightTakeoverRunIds: new Set(),
+        deletedSessionIds: new Set(),
+        pendingSteerCallbacks: new Map(),
+        pendingSteerItems: new Map(),
         skills: [],
         prompts: [],
         lastDiagnostics: [],
@@ -682,7 +652,458 @@ function createRuntime(): ServiceRuntime {
     }
 }
 
-function getRuntime(service: AgentService): ServiceRuntime {
+function registerFlightFinishCallback(
+    rt: ServiceRuntime,
+    token: number,
+    callback: ((succeeded: boolean) => void) | undefined,
+): void {
+    if (!callback) return
+    let list = rt.flightFinishCallbacks.get(token)
+    if (!list) {
+        list = []
+        rt.flightFinishCallbacks.set(token, list)
+    }
+    if (!list.includes(callback)) {
+        list.push(callback)
+    }
+}
+
+function flushFlightFinishCallbacks(
+    rt: ServiceRuntime,
+    token: number,
+    succeeded: boolean,
+): void {
+    const list = rt.flightFinishCallbacks.get(token)
+    if (!list || list.length === 0) {
+        rt.flightFinishCallbacks.delete(token)
+        return
+    }
+    rt.flightFinishCallbacks.delete(token)
+    for (const cb of list) {
+        try {
+            cb(succeeded)
+        } catch (err) {
+            console.error('[AgentStream] Error in flightFinishCallback:', err)
+        }
+    }
+}
+
+const pendingAcks = new Set<string>()
+let ackRetryTimer: NodeJS.Timeout | null = null
+
+const sessionActionQueues = new Map<string, Promise<any>>()
+
+export interface ActionEpoch {
+    global: number
+    session: number
+}
+
+let globalActionEpoch = 0
+const sessionActionEpochs = new Map<string, number>()
+
+export function getSessionActionEpoch(sessionId: string): ActionEpoch {
+    return {
+        global: globalActionEpoch,
+        session: sessionActionEpochs.get(sessionId) ?? 0,
+    }
+}
+
+export function isEpochValid(sessionId: string, queued: ActionEpoch): boolean {
+    if (queued.global !== globalActionEpoch) return false
+    const currentSession = sessionActionEpochs.get(sessionId) ?? 0
+    return currentSession === queued.session
+}
+
+export function bumpSessionActionEpoch(sessionId?: string): void {
+    if (sessionId) {
+        const cur = sessionActionEpochs.get(sessionId) ?? 0
+        sessionActionEpochs.set(sessionId, cur + 1)
+    } else {
+        globalActionEpoch++
+    }
+}
+
+export function __resetDelegateRunsForTests(): void {
+    pendingAcks.clear()
+    sessionActionQueues.clear()
+    sessionActionEpochs.clear()
+    globalActionEpoch = 0
+    if (ackRetryTimer) {
+        clearTimeout(ackRetryTimer)
+        ackRetryTimer = null
+    }
+}
+
+function queueSessionAction<T>(
+    sessionId: string | null | undefined,
+    action: () => Promise<T>,
+    onCancelled?: () => void,
+): Promise<T | undefined> {
+    if (!sessionId) {
+        return action()
+    }
+    const queueKey = sessionId
+    const queuedEpoch = getSessionActionEpoch(queueKey)
+    const prev = sessionActionQueues.get(queueKey)
+
+    const executeIfEpochMatches = async (): Promise<T | undefined> => {
+        if (!isEpochValid(queueKey, queuedEpoch)) {
+            onCancelled?.()
+            return undefined
+        }
+        return action()
+    }
+
+    if (!prev) {
+        let run: Promise<T | undefined>
+        try {
+            run = executeIfEpochMatches()
+        } catch (err) {
+            return Promise.reject(err)
+        }
+        const cleanup = run.catch(() => {}).finally(() => {
+            if (sessionActionQueues.get(queueKey) === cleanup) {
+                sessionActionQueues.delete(queueKey)
+            }
+        })
+        sessionActionQueues.set(queueKey, cleanup)
+        return run
+    }
+    const next = prev.catch(() => {}).then(executeIfEpochMatches)
+    const cleanup = next.catch(() => {}).finally(() => {
+        if (sessionActionQueues.get(queueKey) === cleanup) {
+            sessionActionQueues.delete(queueKey)
+        }
+    })
+    sessionActionQueues.set(queueKey, cleanup)
+    return next
+}
+
+function queueDelegateRun(
+    rt: ServiceRuntime,
+    req: SessionDelegateRunRequest,
+): Promise<void> {
+    const markDelegateRunFinished = (_succeeded: boolean) => {
+        const ackId = req.requestId || req.userEntryId
+        if (ackId) {
+            void ackDelegateRunSafely(ackId)
+        }
+    }
+    return queueSessionAction(
+        req.sessionId,
+        async () => {
+            if (rt.disposed) {
+                markDelegateRunFinished(false)
+                return
+            }
+            await executeDelegateRun(rt, req)
+        },
+        () => {
+            markDelegateRunFinished(false)
+        },
+    ).then(() => {})
+}
+
+function schedulePendingAcksRetry(): void {
+    if (ackRetryTimer || pendingAcks.size === 0) return
+    ackRetryTimer = setTimeout(async () => {
+        ackRetryTimer = null
+        if (pendingAcks.size === 0) return
+        const ids = Array.from(pendingAcks)
+        for (const ackId of ids) {
+            await ackDelegateRunSafely(ackId, 1)
+        }
+        if (pendingAcks.size > 0) {
+            schedulePendingAcksRetry()
+        }
+    }, 5000)
+    ackRetryTimer.unref?.()
+}
+
+async function ackDelegateRunSafely(ackId: string, maxAttempts = 3): Promise<void> {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            const fn = getHostBridge()?.SessionAckDelegateRun
+            if (typeof fn !== 'function') {
+                throw new Error('SessionAckDelegateRun is not available on host bridge')
+            }
+            await fn(ackId)
+            pendingAcks.delete(ackId)
+            return
+        } catch (err) {
+            if (attempt === maxAttempts) {
+                pendingAcks.add(ackId)
+                schedulePendingAcksRetry()
+                console.warn(`[AgentStream] Failed to ack delegate run ${ackId} after ${maxAttempts} attempts:`, err)
+            } else {
+                await new Promise((resolve) => setTimeout(resolve, 200 * attempt))
+            }
+        }
+    }
+}
+
+function handleSessionAbort(
+    rt: ServiceRuntime,
+    service: AgentService,
+    sessionId: string,
+): void {
+    if (!sessionId) return
+    bumpSessionActionEpoch(sessionId)
+    service.cancelSessionWarmers?.(sessionId)
+
+    const flight = rt.runs.get(sessionId)
+    if (flight) {
+        abortFlightAndCleanup(rt, service, sessionId, flight)
+    }
+
+    for (const [t, p] of rt.pendingPreflights) {
+        if (p.targetSessionId === sessionId) {
+            p.abortController.abort()
+            rt.pendingPreflights.delete(t)
+        }
+    }
+
+    const steers = rt.pendingSteers.get(sessionId)
+    if (steers) {
+        rt.pendingSteers.delete(sessionId)
+        for (const steer of steers) {
+            const cbs = rt.pendingSteerCallbacks.get(steer.id)
+            rt.pendingSteerCallbacks.delete(steer.id)
+            rt.pendingSteerItems.delete(steer.id)
+            if (cbs) {
+                for (const cb of cbs) {
+                    try {
+                        cb(false)
+                    } catch {
+                        // ignore
+                    }
+                }
+            }
+        }
+    }
+
+    const queue = rt.sessionQueues.get(sessionId)
+    if (queue) {
+        rt.sessionQueues.delete(sessionId)
+        for (const item of queue) {
+            try {
+                item.payload.onRunFinish?.(false)
+            } catch {
+                // ignore
+            }
+        }
+    }
+
+    emit(rt)
+}
+
+function handleSessionDeleted(
+    rt: ServiceRuntime,
+    service: AgentService,
+    sessionId: string,
+): void {
+    if (!sessionId) return
+    rt.deletedSessionIds.add(sessionId)
+    while (rt.deletedSessionIds.size > 1000) {
+        const oldest = rt.deletedSessionIds.values().next().value
+        if (oldest) rt.deletedSessionIds.delete(oldest)
+        else break
+    }
+    bumpSessionActionEpoch(sessionId)
+
+    useSessionStore.getState().removeRemoteSession(sessionId)
+
+    const flight = rt.runs.get(sessionId)
+    if (flight) {
+        abortFlightAndCleanup(rt, service, sessionId, flight)
+    }
+
+    for (const [t, p] of rt.pendingPreflights) {
+        if (p.targetSessionId === sessionId) {
+            p.abortController.abort()
+            rt.pendingPreflights.delete(t)
+        }
+    }
+
+    const steers = rt.pendingSteers.get(sessionId)
+    if (steers) {
+        rt.pendingSteers.delete(sessionId)
+        for (const steer of steers) {
+            const cbs = rt.pendingSteerCallbacks.get(steer.id)
+            rt.pendingSteerCallbacks.delete(steer.id)
+            rt.pendingSteerItems.delete(steer.id)
+            if (cbs) {
+                for (const cb of cbs) {
+                    try {
+                        cb(false)
+                    } catch {
+                        // ignore
+                    }
+                }
+            }
+        }
+    }
+
+    const queue = rt.sessionQueues.get(sessionId)
+    if (queue) {
+        rt.sessionQueues.delete(sessionId)
+        for (const item of queue) {
+            try {
+                item.payload.onRunFinish?.(false)
+            } catch {
+                // ignore
+            }
+        }
+    }
+
+    rt.pendingTakeoverAborts.delete(sessionId)
+    sessionActionQueues.delete(sessionId)
+    emit(rt)
+}
+
+async function executeDelegateRun(
+    rt: ServiceRuntime,
+    req: SessionDelegateRunRequest,
+): Promise<void> {
+    if (req.sessionId && rt.deletedSessionIds.has(req.sessionId)) {
+        const ackId = req.requestId || req.userEntryId
+        if (ackId) {
+            void ackDelegateRunSafely(ackId)
+        }
+        return
+    }
+    const startEpoch = req.sessionId ? getSessionActionEpoch(req.sessionId) : null
+    const dedupeKey =
+        req.requestId ||
+        (req.userEntryId ? `entry-${req.userEntryId}` : '') ||
+        (req.sessionId ? `${req.sessionId}:${req.userEntryCreatedAt ?? req.text ?? ''}` : '')
+    if (dedupeKey) {
+        if (rt.completedDelegateRuns.has(dedupeKey)) {
+            // Already completed successfully: re-send ACK to ensure cleanup on host/main process
+            const ackId = req.requestId || req.userEntryId
+            if (ackId) {
+                void ackDelegateRunSafely(ackId)
+            }
+            return
+        }
+        if (rt.inFlightDelegateRuns.has(dedupeKey)) {
+            // Currently executing: deduplicate without prematurely sending ACK
+            return
+        }
+        rt.inFlightDelegateRuns.add(dedupeKey)
+        if (rt.inFlightDelegateRuns.size > MAX_HOSTED_RUN_IDS) {
+            const oldest = rt.inFlightDelegateRuns.values().next().value
+            if (oldest) rt.inFlightDelegateRuns.delete(oldest)
+        }
+    }
+    if (rt.disposed || !rt.sendHandler) {
+        if (dedupeKey) {
+            rt.inFlightDelegateRuns.delete(dedupeKey)
+        }
+        return
+    }
+    let finishReported = false
+    const markDelegateRunFinished = (_outcome: boolean) => {
+        if (finishReported) return
+        finishReported = true
+        const ackId = req.requestId || req.userEntryId
+        if (!rt.disposed) {
+            if (dedupeKey) {
+                rt.inFlightDelegateRuns.delete(dedupeKey)
+                rt.completedDelegateRuns.add(dedupeKey)
+                while (rt.completedDelegateRuns.size > MAX_HOSTED_RUN_IDS) {
+                    const oldest = rt.completedDelegateRuns.values().next().value
+                    if (oldest) rt.completedDelegateRuns.delete(oldest)
+                    else break
+                }
+            }
+            if (ackId) {
+                void ackDelegateRunSafely(ackId)
+            }
+        } else {
+            if (dedupeKey) {
+                rt.inFlightDelegateRuns.delete(dedupeKey)
+            }
+        }
+    }
+
+    try {
+        if (req.sessionId) {
+            const exists = useSessionStore
+                .getState()
+                .sessions.some((s) => s.id === req.sessionId)
+            if (!exists) {
+                const titleSource =
+                    req.text?.trim() ||
+                    (req.images && req.images.length > 0
+                        ? req.images[0]?.name || 'image'
+                        : '')
+                const now = Date.now()
+                useSessionStore.getState().upsertRemoteSession({
+                    id: req.sessionId,
+                    title: deriveSessionTitle(
+                        titleSource,
+                        useSettingsStore.getState().settings.locale,
+                    ),
+                    projectId: req.projectId ?? undefined,
+                    branch: req.branch ?? undefined,
+                    pinned: false,
+                    createdAt: now,
+                    updatedAt: now,
+                })
+            }
+            await ensureSessionLoaded(req.sessionId)
+        }
+        if (
+            rt.disposed ||
+            (req.sessionId && rt.deletedSessionIds.has(req.sessionId)) ||
+            (req.sessionId && startEpoch && !isEpochValid(req.sessionId, startEpoch))
+        ) {
+            markDelegateRunFinished(false)
+            return
+        }
+        const handler = rt.sendInternalHandler ?? rt.sendHandler
+        if (rt.disposed || !handler) {
+            markDelegateRunFinished(false)
+            return
+        }
+        const sendResult = await handler({
+            text: req.text ?? '',
+            images: req.images?.map((img) => ({
+                id: createId(),
+                data: img.data,
+                mimeType: img.mimeType,
+                name: img.name ?? 'image',
+                width: 0,
+                height: 0,
+            })),
+            projectId: req.projectId,
+            branch: req.branch,
+            sessionId: req.sessionId,
+            editMessageId: req.editMessageId,
+            userEntryId: req.userEntryId,
+            userEntryCreatedAt: req.userEntryCreatedAt,
+            followUpMode: req.followUpMode,
+            onRunFinish: markDelegateRunFinished,
+        })
+        if (!sendResult) {
+            markDelegateRunFinished(false)
+        }
+    } catch (error) {
+        markDelegateRunFinished(false)
+        if (req.sessionId) {
+            void getHostBridge()?.SessionBroadcastRunStatus(
+                req.sessionId,
+                'idle',
+                '',
+                '',
+            )
+        }
+        toastPreflight(error)
+    }
+}
+
+export function getRuntime(service: AgentService): ServiceRuntime {
     let rt = runtimes.get(service)
     if (!rt) {
         rt = createRuntime()
@@ -725,45 +1146,80 @@ function removeEntryFromStore(sessionId: string, entryId: string): void {
 }
 
 function processNextQueuedMessage(rt: ServiceRuntime, sessionId: string): void {
-    const queue = rt.sessionQueues.get(sessionId)
-    if (!queue || queue.length === 0) return
-    const queuedItems = queue.splice(0, queue.length)
-    rt.sessionQueues.delete(sessionId)
+    void queueSessionAction(sessionId, async () => {
+        if (rt.disposed || !rt.sendHandler) return
+        if (rt.runs.has(sessionId)) {
+            // Already a flight active (e.g. newly arrived delegation started), leave queue intact
+            return
+        }
+        const queue = rt.sessionQueues.get(sessionId)
+        if (!queue || queue.length === 0) return
+        const queuedItems = queue.splice(0, queue.length)
+        rt.sessionQueues.delete(sessionId)
 
-    const executionStartTime = Date.now()
-    const entries = useMessageStore.getState().getEntries(sessionId)
-    const queuedUserEntryIds: string[] = []
+        const executionStartTime = Date.now()
+        const entries = useMessageStore.getState().getEntries(sessionId)
+        const queuedUserEntryIds: string[] = []
 
-    queuedItems.forEach((item, idx) => {
-        queuedUserEntryIds.push(item.entry.id)
-        const existing = entries.find((e) => e.id === item.entry.id)
-        if (existing && existing.kind === 'user') {
-            useMessageStore.getState().replaceEntry({
-                ...existing,
-                pendingStatus: undefined,
-                createdAt: executionStartTime + idx,
-            })
+        queuedItems.forEach((item, idx) => {
+            queuedUserEntryIds.push(item.entry.id)
+            const existing = entries.find((e) => e.id === item.entry.id)
+            if (existing && existing.kind === 'user') {
+                useMessageStore.getState().replaceEntry({
+                    ...existing,
+                    pendingStatus: undefined,
+                    createdAt: executionStartTime + idx,
+                })
+            }
+        })
+
+        const firstItem = queuedItems[0]
+        const lastItem = queuedItems[queuedItems.length - 1]
+
+        const callbacks = queuedItems
+            .map((item) => item.payload.onRunFinish)
+            .filter((cb): cb is (succeeded: boolean) => void => typeof cb === 'function')
+
+        const combinedOnRunFinish = callbacks.length > 0
+            ? (succeeded: boolean) => {
+                  for (const cb of callbacks) {
+                      try {
+                          cb(succeeded)
+                      } catch (err) {
+                          console.error('[AgentStream] Error in queued onRunFinish:', err)
+                      }
+                  }
+              }
+            : undefined
+
+        try {
+            const handler = rt.sendInternalHandler ?? rt.sendHandler
+            if (handler) {
+                await handler(
+                    {
+                        ...lastItem.payload,
+                        sessionId,
+                        userEntryId: firstItem.entry.id,
+                        queuedUserEntryIds,
+                        userEntryCreatedAt: executionStartTime,
+                        isQueuedExecution: true,
+                        onRunFinish: combinedOnRunFinish,
+                    },
+                    lastItem.options,
+                )
+            }
+        } catch (err) {
+            console.error('[AgentStream] Queued execution failed:', err)
+            try {
+                combinedOnRunFinish?.(false)
+            } catch {
+                // best-effort
+            }
         }
     })
-
-    const firstItem = queuedItems[0]
-    const lastItem = queuedItems[queuedItems.length - 1]
-
-    if (rt.sendHandler) {
-        void rt.sendHandler(
-            {
-                ...lastItem.payload,
-                userEntryId: firstItem.entry.id,
-                queuedUserEntryIds,
-                userEntryCreatedAt: executionStartTime,
-                isQueuedExecution: true,
-            },
-            lastItem.options,
-        )
-    }
 }
 
-function dequeueQueuedMessage(
+export function dequeueQueuedMessage(
     rt: ServiceRuntime,
     sessionId: string,
     messageId: string,
@@ -776,6 +1232,18 @@ function dequeueQueuedMessage(
             const [removed] = steers.splice(index, 1)
             if (steers.length === 0) {
                 rt.pendingSteers.delete(sessionId)
+            }
+            const cbs = rt.pendingSteerCallbacks.get(removed.id)
+            rt.pendingSteerCallbacks.delete(removed.id)
+            rt.pendingSteerItems.delete(removed.id)
+            if (cbs && cbs.length > 0) {
+                for (const c of cbs) {
+                    try {
+                        c(false)
+                    } catch (err) {
+                        console.error('[AgentStream] Error in dequeued steer onRunFinish:', err)
+                    }
+                }
             }
             const text = joinUserEntryText(removed)
             const images = extractUserEntryImages(removed)
@@ -793,6 +1261,11 @@ function dequeueQueuedMessage(
             const [removed] = queue.splice(index, 1)
             if (queue.length === 0) {
                 rt.sessionQueues.delete(sessionId)
+            }
+            try {
+                removed.payload.onRunFinish?.(false)
+            } catch (err) {
+                console.error('[AgentStream] Error in dequeued onRunFinish:', err)
             }
             const text = joinUserEntryText(removed.entry)
             const images = extractUserEntryImages(removed.entry)
@@ -1497,32 +1970,71 @@ export function useAgentStream(
             if (service) {
                 const rt = getRuntime(service)
                 if (target) {
-                    service.cancelSessionWarmers?.(target)
-                    const flight = rt.runs.get(target)
-                    if (flight) {
-                        abortFlightAndCleanup(rt, service, target, flight)
+                    const hadLocalFlight = rt.runs.has(target)
+                    const hadLocalPreflight = Array.from(rt.pendingPreflights.values()).some(
+                        (p) => p.targetSessionId === target,
+                    )
+                    const hadLocalSteer = (rt.pendingSteers.get(target)?.length ?? 0) > 0
+                    const hadLocalQueue = (rt.sessionQueues.get(target)?.length ?? 0) > 0
+                    const hadSessionActionQueue = sessionActionQueues.has(target)
+
+                    handleSessionAbort(rt, service, target)
+
+                    if (
+                        hadLocalFlight ||
+                        hadLocalPreflight ||
+                        hadLocalSteer ||
+                        hadLocalQueue ||
+                        hadSessionActionQueue
+                    ) {
                         return
                     }
-                    for (const [t, p] of rt.pendingPreflights) {
-                        if (p.targetSessionId === target) {
-                            p.abortController.abort()
-                            rt.pendingPreflights.delete(t)
-                            emit(rt)
-                            return
-                        }
-                    }
                 } else {
+                    bumpSessionActionEpoch()
+                    let handledLocally = false
                     if (rt.runs.size > 0) {
                         for (const [sId, flight] of [...rt.runs.entries()]) {
                             abortFlightAndCleanup(rt, service, sId, flight)
+                            handledLocally = true
                         }
-                        return
                     }
                     if (rt.pendingPreflights.size > 0) {
                         for (const p of rt.pendingPreflights.values()) {
                             p.abortController.abort()
                         }
                         rt.pendingPreflights.clear()
+                        handledLocally = true
+                    }
+                    for (const steers of rt.pendingSteers.values()) {
+                        handledLocally = true
+                        for (const steer of steers) {
+                            const cbs = rt.pendingSteerCallbacks.get(steer.id)
+                            rt.pendingSteerCallbacks.delete(steer.id)
+                            rt.pendingSteerItems.delete(steer.id)
+                            if (cbs) {
+                                for (const cb of cbs) {
+                                    try {
+                                        cb(false)
+                                    } catch {
+                                        // ignore
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    rt.pendingSteers.clear()
+                    for (const queue of rt.sessionQueues.values()) {
+                        handledLocally = true
+                        for (const item of queue) {
+                            try {
+                                item.payload.onRunFinish?.(false)
+                            } catch {
+                                // ignore
+                            }
+                        }
+                    }
+                    rt.sessionQueues.clear()
+                    if (handledLocally) {
                         emit(rt)
                         return
                     }
@@ -1716,7 +2228,7 @@ export function useAgentStream(
                     sessionId,
                     runId,
                     entries,
-                    customInstructions: focus.trim() || undefined,
+                    customInstructions: focus?.trim() || undefined,
                     signal: ac.signal,
                 })
 
@@ -1748,6 +2260,7 @@ export function useAgentStream(
                     throw new Error(message)
                 }
             } catch (error) {
+                flushFlightFinishCallbacks(rt, token, false)
                 if (!isAbortError(error)) {
                     toastPreflight(error)
                 }
@@ -1760,6 +2273,876 @@ export function useAgentStream(
                     '',
                 )
                 releaseFlight(rt, sessionId, token)
+                flushFlightFinishCallbacks(rt, token, true)
+            }
+        },
+        [service, scopedSessionId],
+    )
+
+    const sendInternal = useCallback(
+        async (
+            payload: AgentSendPayload,
+            opts?: AgentSendOptions,
+        ): Promise<string | null> => {
+            const trimmed = payload.text.trim()
+            const images = payload.images ? payload.images.slice() : []
+
+            if (!service) {
+                const err = new AgentPreflightError(
+                    'disposed',
+                    'Agent service is not ready',
+                    'agent.preflight.service_unavailable',
+                )
+                toastPreflight(err)
+                throw err
+            }
+
+            const rt = getRuntime(service)
+            if (rt.disposed) {
+                const err = new AgentPreflightError(
+                    'disposed',
+                    'Agent runtime has been disposed',
+                    'agent.preflight.disposed',
+                )
+                toastPreflight(err)
+                throw err
+            }
+
+            const sessionState = useSessionStore.getState()
+            const targetSessionId =
+                payload.sessionId !== undefined
+                    ? (payload.sessionId || null)
+                    : (scopedSessionId !== undefined
+                        ? (scopedSessionId || null)
+                        : (sessionState.currentSessionId || null))
+
+            const capturedSessionId = targetSessionId
+            const targetSession = capturedSessionId
+                ? sessionState.sessions.find((s) => s.id === capturedSessionId)
+                : undefined
+            const settings = targetSession
+                ? resolveSettingsForSession(targetSession)
+                : { ...useSettingsStore.getState().settings }
+
+            if (payload.editMessageId && targetSessionId) {
+                const oldSteers = rt.pendingSteers.get(targetSessionId)
+                if (oldSteers && oldSteers.length > 0) {
+                    rt.pendingSteers.delete(targetSessionId)
+                    for (const steer of oldSteers) {
+                        const cbs = rt.pendingSteerCallbacks.get(steer.id)
+                        rt.pendingSteerCallbacks.delete(steer.id)
+                        rt.pendingSteerItems.delete(steer.id)
+                        if (cbs) {
+                            for (const cb of cbs) {
+                                try {
+                                    cb(false)
+                                } catch {
+                                    // best-effort
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (targetSessionId && rt.runs.has(targetSessionId) && !payload.editMessageId && !payload.isQueuedExecution) {
+                const activeFlight = rt.runs.get(targetSessionId)!
+                const isCompacting = activeFlight.runStatus === 'compacting'
+                const effectiveFollowUpMode: 'steer' | 'queue' =
+                    isCompacting
+                        ? 'queue' // Compaction cannot accept steer messages mid-stream; force queue
+                        : (payload.followUpMode ??
+                            (settings.editor?.followUpMode === 'queue' ? 'queue' : 'steer'))
+
+                const trimmed = payload.text.trim()
+                const images = payload.images ? payload.images.slice() : []
+
+                if (effectiveFollowUpMode === 'steer') {
+                    const steerEntry: UserEntry = {
+                        ...buildUserEntry(targetSessionId, trimmed, images),
+                        pendingStatus: 'steer',
+                    }
+                    if (payload.userEntryId) {
+                        steerEntry.id = payload.userEntryId
+                    }
+                    const existing = useMessageStore.getState().getEntries(targetSessionId)
+                    const existingEntry = payload.userEntryId
+                        ? existing.find((e): e is UserEntry => e.id === payload.userEntryId && e.kind === 'user')
+                        : undefined
+                    if (existingEntry) {
+                        useMessageStore.getState().replaceEntry({
+                            ...existingEntry,
+                            pendingStatus: 'steer',
+                        })
+                    } else {
+                        useMessageStore.getState().appendEntry(steerEntry)
+                    }
+                    let steerList = rt.pendingSteers.get(targetSessionId)
+                    if (!steerList) {
+                        steerList = []
+                        rt.pendingSteers.set(targetSessionId, steerList)
+                    }
+                    if (!steerList.some((s) => s.id === steerEntry.id)) {
+                        steerList.push(steerEntry)
+                    }
+                    if (payload.onRunFinish) {
+                        let cbs = rt.pendingSteerCallbacks.get(steerEntry.id)
+                        if (!cbs) {
+                            cbs = []
+                            rt.pendingSteerCallbacks.set(steerEntry.id, cbs)
+                        }
+                        cbs.push(payload.onRunFinish)
+                    }
+                    rt.pendingSteerItems.set(steerEntry.id, {
+                        entry: steerEntry,
+                        payload: {
+                            ...payload,
+                            sessionId: targetSessionId,
+                        },
+                        options: opts,
+                    })
+                    schedulePersist(true)
+                    const onAccepted = payload.onSessionAccepted ?? opts?.onSessionAccepted
+                    onAccepted?.(targetSessionId)
+                    emit(rt)
+                    return targetSessionId
+                } else {
+                    const queueEntry: UserEntry = {
+                        ...buildUserEntry(targetSessionId, trimmed, images),
+                        pendingStatus: 'queue',
+                    }
+                    if (payload.userEntryId) {
+                        queueEntry.id = payload.userEntryId
+                    }
+                    const existing = useMessageStore.getState().getEntries(targetSessionId)
+                    const existingEntry = payload.userEntryId
+                        ? existing.find((e): e is UserEntry => e.id === payload.userEntryId && e.kind === 'user')
+                        : undefined
+                    if (existingEntry) {
+                        useMessageStore.getState().replaceEntry({
+                            ...existingEntry,
+                            pendingStatus: 'queue',
+                        })
+                    } else {
+                        useMessageStore.getState().appendEntry(queueEntry)
+                    }
+                    let queue = rt.sessionQueues.get(targetSessionId)
+                    if (!queue) {
+                        queue = []
+                        rt.sessionQueues.set(targetSessionId, queue)
+                    }
+                    queue.push({
+                        entry: queueEntry,
+                        payload: {
+                            ...payload,
+                            sessionId: targetSessionId,
+                            userEntryId: queueEntry.id,
+                            userEntryCreatedAt: queueEntry.createdAt,
+                            onRunFinish: payload.onRunFinish,
+                        },
+                        options: opts,
+                    })
+                    schedulePersist(true)
+                    const onAccepted = payload.onSessionAccepted ?? opts?.onSessionAccepted
+                    onAccepted?.(targetSessionId)
+                    emit(rt)
+                    return targetSessionId
+                }
+            } else if (targetSessionId && rt.runs.has(targetSessionId)) {
+                if (payload.isQueuedExecution) {
+                    // A queued execution must NEVER interrupt an active flight!
+                    // Re-queue it into sessionQueues
+                    let queue = rt.sessionQueues.get(targetSessionId)
+                    if (!queue) {
+                        queue = []
+                        rt.sessionQueues.set(targetSessionId, queue)
+                    }
+                    queue.push({
+                        entry: buildUserEntry(targetSessionId, payload.text, payload.images ?? []),
+                        payload,
+                        options: opts,
+                    })
+                    return targetSessionId
+                }
+                // Local flight interrupt for this specific session
+                const existing = rt.runs.get(targetSessionId)!
+                abortFlightAndCleanup(rt, service, targetSessionId, existing)
+            }
+            const catalog = useModelCatalogStore.getState().models.slice()
+            const capturedProjectId =
+                payload.projectId !== undefined
+                    ? payload.projectId
+                    : (resolveProjectIdForSession(capturedSessionId) ??
+                       useUiStore.getState().pendingSessionContext.projectId)
+            const capturedBranch =
+                payload.branch !== undefined
+                    ? payload.branch
+                    : capturedSessionId
+                      ? (sessionState.sessions.find(
+                            (s) => s.id === capturedSessionId,
+                        )?.branch ?? null)
+                      : useUiStore.getState().pendingSessionContext.branch
+            const capturedWorkLocation =
+                payload.workLocation !== undefined
+                    ? payload.workLocation
+                    : (capturedSessionId
+                        ? (sessionState.sessions.find(
+                              (s) => s.id === capturedSessionId,
+                          )?.workLocation ?? 'local')
+                        : (useUiStore.getState().pendingSessionContext.workLocation ?? 'local'))
+            const capturedEnvironmentId =
+                payload.environmentId !== undefined
+                    ? payload.environmentId
+                    : (capturedSessionId
+                        ? (sessionState.sessions.find(
+                              (s) => s.id === capturedSessionId,
+                          )?.environmentId ?? null)
+                        : (useUiStore.getState().pendingSessionContext.environmentId ?? null))
+            const capturedProjectPaths =
+                resolveProjectPathsById(capturedProjectId)
+
+            const token = ++rt.flightToken
+            if (payload.onRunFinish) {
+                registerFlightFinishCallback(rt, token, payload.onRunFinish)
+            }
+            const ac = new AbortController()
+            for (const [t, p] of rt.pendingPreflights) {
+                if (
+                    p.targetSessionId === capturedSessionId ||
+                    (capturedSessionId === null && p.targetSessionId === null) ||
+                    (!capturedSessionId && !p.targetSessionId)
+                ) {
+                    p.abortController.abort()
+                    rt.pendingPreflights.delete(t)
+                }
+            }
+            rt.pendingPreflights.set(token, {
+                token,
+                abortController: ac,
+                targetSessionId: capturedSessionId,
+            })
+            emit(rt)
+
+            let boundSessionId: string | null = null
+            let boundRunId: string | null = null
+            let streamStarted = false
+
+            try {
+                // Preflight first — no session/user side effects on failure.
+                // Pass signal into prepare (service aborts each await) and keep
+                // outer abortable race as a double-guard for never-resolving loads.
+                let prepared: PreparedAgentRun = await abortable(
+                    service.prepare({
+                        baseUrl: settings.cliProxyApi.baseUrl,
+                        apiKey: settings.cliProxyApi.apiKey,
+                        modelId: settings.modelId,
+                        models: catalog,
+                        reasoningLevel: settings.reasoningLevel,
+                        speed: settings.speed,
+                        compactionThresholdPercent:
+                            settings.compactionThresholdPercent,
+                        fastContextCompaction:
+                            settings.fastContextCompaction,
+                        projectPath: capturedProjectPaths[0] ?? null,
+                        projectPaths: capturedProjectPaths,
+                        signal: ac.signal,
+                        language: settings.locale,
+                        personality: settings.personality,
+                        localMemoryEnabled: settings.localMemoryEnabled,
+                        scheduleId: payload.scheduleId ?? targetSession?.scheduleId ?? null,
+                        sessionId: targetSessionId ?? null,
+                        subagentsSettings: settings.subagents,
+                        gitSettings: settings.git,
+                        modelSettings: settings.modelSettings,
+                        getEntries: async (sid: string) => {
+                            await ensureSessionLoaded(sid)
+                            return useMessageStore.getState().getEntries(sid)
+                        },
+                    }),
+                    ac.signal,
+                )
+
+                // Abort after prepare must throw (not bare return) so draft is kept.
+                // disposed/flight token guards block late session submit after runtime dispose.
+                if (
+                    !rt.pendingPreflights.has(token) ||
+                    ac.signal.aborted ||
+                    rt.disposed
+                ) {
+                    throw createAbortError()
+                }
+
+                const titleSource =
+                    trimmed ||
+                    (images.length > 0
+                        ? images[0]?.name || 'image'
+                        : '')
+                const title = deriveSessionTitle(titleSource, settings.locale)
+
+                // Only write the captured session target (or create with captured project).
+                let sessionId = capturedSessionId
+                if (sessionId) {
+                    await ensureSessionLoaded(sessionId)
+                    const still = useSessionStore
+                        .getState()
+                        .sessions.find((item) => item.id === sessionId)
+                    if (!still) {
+                        throw new AgentPreflightError(
+                            'session_gone',
+                            'Session was removed during preflight',
+                            'agent.preflight.session_gone',
+                        )
+                    }
+                    const existing = useMessageStore
+                        .getState()
+                        .getEntries(sessionId)
+                    if (
+                        payload.editMessageId &&
+                        !existing.some(
+                            (entry) =>
+                                entry.id === payload.editMessageId &&
+                                entry.kind === 'user',
+                        )
+                    ) {
+                        throw new AgentPreflightError(
+                            'message_gone',
+                            'Message to edit was not found',
+                            'agent.preflight.message_gone',
+                        )
+                    }
+                    if (existing.length === 0) {
+                        useSessionStore
+                            .getState()
+                            .renameSession(sessionId, title)
+                    }
+                    // Bind captured project/branch to the captured session only.
+                    if (capturedProjectId) {
+                        useSessionStore
+                            .getState()
+                            .setSessionProject(sessionId, capturedProjectId)
+                    }
+                    if (capturedBranch) {
+                        useSessionStore
+                            .getState()
+                            .setSessionBranch(sessionId, capturedBranch)
+                    }
+                    if (capturedWorkLocation) {
+                        useSessionStore
+                            .getState()
+                            .setSessionWorktree(
+                                sessionId,
+                                capturedWorkLocation,
+                                still.worktreePath,
+                                capturedEnvironmentId,
+                            )
+                    }
+                } else {
+                    if (payload.editMessageId) {
+                        throw new AgentPreflightError(
+                            'message_gone',
+                            'Message to edit was not found',
+                            'agent.preflight.message_gone',
+                        )
+                    }
+                    sessionId = useSessionStore.getState().createSession({
+                        title,
+                        projectId: capturedProjectId ?? undefined,
+                        branch: capturedBranch ?? undefined,
+                        workLocation: capturedWorkLocation,
+                        environmentId: capturedEnvironmentId,
+                        modelId: settings.modelId,
+                        reasoningEffort: settings.reasoningLevel,
+                        speed: settings.speed,
+                    })
+                }
+
+                useSessionStore.getState().setSessionRuntimeSettings(sessionId, {
+                    modelId: settings.modelId,
+                    reasoningEffort: settings.reasoningLevel,
+                    speed: settings.speed,
+                })
+
+                const pendingPreflight = rt.pendingPreflights.get(token)
+                if (pendingPreflight) {
+                    pendingPreflight.targetSessionId = sessionId
+                }
+                boundSessionId = sessionId
+
+                // Append user entry immediately so UI displays user message and setup card
+                const existingEntries = useMessageStore
+                    .getState()
+                    .getEntries(sessionId)
+                let priorEntries: ConversationEntry[]
+                let userEntry: UserEntry
+                let activatedUserEntries: UserEntry[] = []
+                if (payload.isQueuedExecution) {
+                    const queuedIds =
+                        payload.queuedUserEntryIds && payload.queuedUserEntryIds.length > 0
+                            ? payload.queuedUserEntryIds
+                            : payload.userEntryId
+                              ? [payload.userEntryId]
+                              : []
+                    const executionStartTime = payload.userEntryCreatedAt ?? Date.now()
+
+                    for (let idx = 0; idx < queuedIds.length; idx++) {
+                        const qId = queuedIds[idx]
+                        const target = existingEntries.find(
+                            (e) => e.id === qId && e.kind === 'user',
+                        ) as UserEntry | undefined
+                        if (target) {
+                            const updated: UserEntry = {
+                                ...target,
+                                pendingStatus: undefined,
+                                createdAt: executionStartTime + idx,
+                            }
+                            useMessageStore.getState().replaceEntry(updated)
+                            activatedUserEntries.push(updated)
+                        }
+                    }
+
+                    const firstQueuedId = queuedIds[0]
+                    const firstIndex = existingEntries.findIndex(
+                        (entry) => entry.id === firstQueuedId,
+                    )
+                    const rawPrior =
+                        firstIndex !== -1
+                            ? existingEntries.slice(0, firstIndex)
+                            : existingEntries
+                    priorEntries = rawPrior.filter(
+                        (e) => !(e.kind === 'user' && e.pendingStatus === 'queue'),
+                    )
+
+                    userEntry =
+                        activatedUserEntries[0] ?? {
+                            ...buildUserEntry(sessionId, trimmed, images),
+                            createdAt: executionStartTime,
+                        }
+                    if (activatedUserEntries.length === 0) {
+                        useMessageStore.getState().appendEntry(userEntry)
+                        activatedUserEntries.push(userEntry)
+                    }
+                } else if (payload.editMessageId) {
+                    const targetIndex = existingEntries.findIndex(
+                        (entry) => entry.id === payload.editMessageId,
+                    )
+                    const target = existingEntries[targetIndex]
+                    if (!target || target.kind !== 'user') {
+                        throw new AgentPreflightError(
+                            'message_gone',
+                            'Message to edit was not found',
+                            'agent.preflight.message_gone',
+                        )
+                    }
+                    userEntry = replaceUserEntryText(target, trimmed)
+                    priorEntries = existingEntries.slice(0, targetIndex)
+                    const keptEntries = [...priorEntries, userEntry]
+                    useMessageStore
+                        .getState()
+                        .replaceSessionEntries(sessionId, keptEntries, { historyMutation: 'truncate' })
+                    pruneHistoricalSubAgents(service, sessionId, keptEntries)
+                } else if (
+                    payload.userEntryId &&
+                    existingEntries.some(
+                        (entry) =>
+                            entry.id === payload.userEntryId &&
+                            entry.kind === 'user',
+                    )
+                ) {
+                    const targetIndex = existingEntries.findIndex(
+                        (entry) =>
+                            entry.id === payload.userEntryId &&
+                            entry.kind === 'user',
+                    )
+                    const target = existingEntries[targetIndex] as UserEntry
+                    userEntry = {
+                        ...target,
+                        createdAt: payload.userEntryCreatedAt ?? Date.now(),
+                    }
+                    priorEntries = existingEntries.slice(0, targetIndex)
+                    const keptEntries = [...priorEntries, userEntry]
+                    useMessageStore
+                        .getState()
+                        .replaceSessionEntries(sessionId, keptEntries, { historyMutation: 'truncate' })
+                    pruneHistoricalSubAgents(service, sessionId, keptEntries)
+                } else {
+                    priorEntries = existingEntries
+                    userEntry = buildUserEntry(sessionId, trimmed, images)
+                    if (payload.userEntryId) {
+                        userEntry.id = payload.userEntryId
+                    }
+                    useMessageStore.getState().appendEntry(userEntry)
+                }
+                const liveSessionObj = useSessionStore
+                    .getState()
+                    .sessions.find((s) => s.id === sessionId)
+                if (
+                    liveSessionObj &&
+                    (liveSessionObj.firstPromptAt === undefined ||
+                        liveSessionObj.firstPromptAt === 0)
+                ) {
+                    useSessionStore
+                        .getState()
+                        .setSessionFirstPromptAt(sessionId, userEntry.createdAt)
+                }
+                schedulePersist(true)
+                const onAccepted = payload.onSessionAccepted ?? opts?.onSessionAccepted
+                onAccepted?.(sessionId)
+
+                // Worktree and environment initialization if worktree mode selected
+                if (capturedWorkLocation === 'worktree') {
+                    const prepResult = await prepareExecutionRun({
+                        service,
+                        sessionId,
+                        session: liveSessionObj,
+                        settings,
+                        catalog,
+                        workLocation: capturedWorkLocation,
+                        projectPaths: capturedProjectPaths,
+                        branch: capturedBranch,
+                        environmentId: capturedEnvironmentId,
+                        scheduleId: payload.scheduleId ?? targetSession?.scheduleId ?? null,
+                        signal: ac.signal,
+                        allowSetup: true,
+                    })
+                    if (!prepResult.ok || !prepResult.prepared) {
+                        flushFlightFinishCallbacks(rt, token, false)
+                        if (sessionId) {
+                            void getHostBridge()?.SessionBroadcastRunStatus(
+                                sessionId,
+                                'idle',
+                                '',
+                                '',
+                            )
+                        }
+                        return null
+                    }
+                    prepared = prepResult.prepared
+                }
+
+                if (
+                    !rt.pendingPreflights.has(token) ||
+                    ac.signal.aborted ||
+                    rt.disposed
+                ) {
+                    throw createAbortError()
+                }
+
+                const diagMessages = prepared.diagnostics.map((d) => d.message)
+                rt.skills = prepared.skills
+                rt.prompts = prepared.prompts
+                rt.lastDiagnostics = diagMessages
+                emit(rt)
+
+                for (const message of diagMessages) {
+                    if (message) {
+                        useUiStore
+                            .getState()
+                            .pushToast(
+                                i18n.t('composer.resourceWarning', {
+                                    message,
+                                }),
+                            )
+                    }
+                }
+
+                const runId = createId()
+                rememberHostedRunId(rt, runId)
+
+                useUiStore.getState().setPinnedSummaryVisible(true)
+
+                const entries: ConversationEntry[] = [
+                    ...priorEntries,
+                    ...(activatedUserEntries.length > 0 ? activatedUserEntries : [userEntry]),
+                ]
+
+                boundSessionId = sessionId
+                boundRunId = runId
+
+                const flight: SessionRunFlight = {
+                    sessionId,
+                    runId,
+                    runStatus: 'connecting',
+                    abortController: ac,
+                    flightToken: token,
+                }
+                rt.runs.set(sessionId, flight)
+                rt.pendingPreflights.delete(token)
+                emit(rt)
+
+                const adapter = createAgentEventAdapter(useMessageStore)
+                streamStarted = true
+
+                void getHostBridge()?.SessionBroadcastRunStatus(
+                    boundSessionId,
+                    'running',
+                    boundRunId,
+                    '',
+                )
+                const entriesToBroadcast =
+                    activatedUserEntries.length > 0
+                        ? activatedUserEntries
+                        : [userEntry]
+                for (const entry of entriesToBroadcast) {
+                    void getHostBridge()?.SessionBroadcastStreamEvent(
+                        boundSessionId,
+                        boundRunId,
+                        {
+                            type: 'user-entry',
+                            sessionId: boundSessionId,
+                            runId: boundRunId,
+                            entry,
+                        },
+                    )
+                }
+
+                // Background lifecycle — callers may navigate immediately after accept.
+                void (async () => {
+                    let currentBroadcastStatus: 'running' | 'thinking' | 'tool' | 'idle' =
+                        'running'
+                    let runSucceeded = false
+                    let hasError = false
+                    try {
+                        for await (const event of service.streamChat({
+                            prepared,
+                            sessionId: boundSessionId!,
+                            runId: boundRunId!,
+                            entries,
+                            userEntry,
+                            signal: ac.signal,
+                            getRuntimeSettings: createRuntimeSettingsResolver(boundSessionId!),
+                            consumeSteerEntries: () => {
+                                const steers = rt.pendingSteers.get(boundSessionId!)
+                                if (steers && steers.length > 0) {
+                                    rt.pendingSteers.delete(boundSessionId!)
+                                    const now = Date.now()
+                                    const consumed = steers.map((steer, idx) => {
+                                        const cbs = rt.pendingSteerCallbacks.get(steer.id)
+                                        if (cbs) {
+                                            rt.pendingSteerCallbacks.delete(steer.id)
+                                            for (const cb of cbs) {
+                                                registerFlightFinishCallback(rt, token, cb)
+                                            }
+                                        }
+                                        rt.pendingSteerItems.delete(steer.id)
+                                        const entry: UserEntry = {
+                                            ...steer,
+                                            pendingStatus: undefined,
+                                            createdAt: now + idx,
+                                        }
+                                        useMessageStore.getState().replaceEntry(entry)
+                                        return entry
+                                    })
+                                    emit(rt)
+                                    return consumed
+                                }
+                                return undefined
+                            },
+                            consumeSteerEntry: () => {
+                                const steers = rt.pendingSteers.get(boundSessionId!)
+                                if (steers && steers.length > 0) {
+                                    const steer = steers.shift()!
+                                    if (steers.length === 0) {
+                                        rt.pendingSteers.delete(boundSessionId!)
+                                    }
+                                    const cbs = rt.pendingSteerCallbacks.get(steer.id)
+                                    if (cbs) {
+                                        rt.pendingSteerCallbacks.delete(steer.id)
+                                        for (const cb of cbs) {
+                                            registerFlightFinishCallback(rt, token, cb)
+                                        }
+                                    }
+                                    rt.pendingSteerItems.delete(steer.id)
+                                    const consumed: UserEntry = {
+                                        ...steer,
+                                        pendingStatus: undefined,
+                                        createdAt: Date.now(),
+                                    }
+                                    useMessageStore.getState().replaceEntry(consumed)
+                                    emit(rt)
+                                    return consumed
+                                }
+                                return undefined
+                            },
+                        })) {
+                            if (event.type === 'error') {
+                                hasError = true
+                            }
+                            if (rt.runs.get(boundSessionId!)?.flightToken !== token) break
+                            void getHostBridge()?.SessionBroadcastStreamEvent(
+                                boundSessionId!,
+                                boundRunId!,
+                                prepareStreamEventForBroadcast(event),
+                            )
+                            const nextBroadcastStatus =
+                                mapEventToBroadcastStatus(event)
+                            if (
+                                nextBroadcastStatus &&
+                                nextBroadcastStatus !== currentBroadcastStatus
+                            ) {
+                                currentBroadcastStatus = nextBroadcastStatus
+                                void getHostBridge()?.SessionBroadcastRunStatus(
+                                    boundSessionId!,
+                                    nextBroadcastStatus,
+                                    boundRunId!,
+                                    '',
+                                )
+                            }
+                            const applyResult = adapter.apply(event)
+                            scheduleFromUrgency(applyResult.urgency)
+                            const currentFlight = rt.runs.get(boundSessionId!)
+                            if (currentFlight && currentFlight.flightToken === token) {
+                                currentFlight.runStatus = mapRunStatus(
+                                    event,
+                                    currentFlight.runStatus,
+                                )
+                                emit(rt)
+                            }
+                        }
+                        if (!hasError && rt.runs.get(boundSessionId!)?.flightToken === token) {
+                            runSucceeded = true
+                        }
+                    } catch (error) {
+                        hasError = true
+                        runSucceeded = false
+                        if (ac.signal.aborted || isAbortError(error)) {
+                            // silent abort
+                        } else if (!(error instanceof AgentPreflightError)) {
+                            const message =
+                                error instanceof Error
+                                    ? error.message
+                                    : String(error ?? 'stream error')
+                            adapter.apply({
+                                type: 'error',
+                                runId: boundRunId!,
+                                sessionId: boundSessionId!,
+                                message,
+                            })
+                            schedulePersist(true)
+                            if (boundSessionId !== useSessionStore.getState().currentSessionId && typeof window !== 'undefined' && getHashRoutePathname() !== `/chat/${boundSessionId}`) {
+                                useSessionStore.getState().markUnread(boundSessionId!, 'error')
+                            }
+                            const errorToast = message
+                                ? `${i18n.t('composer.sendFailed', { defaultValue: 'Send failed' })}: ${message}`
+                                : i18n.t('composer.sendFailed', { defaultValue: 'Send failed' })
+                            useUiStore.getState().pushToast(errorToast)
+                        }
+                    } finally {
+                        if (boundSessionId && boundRunId && adapter.getActiveRunId(boundSessionId) === boundRunId) {
+                            if (ac.signal.aborted) {
+                                adapter.apply({
+                                    type: 'aborted',
+                                    sessionId: boundSessionId,
+                                    runId: boundRunId,
+                                })
+                            }
+                            adapter.apply({
+                                type: 'agent-end',
+                                sessionId: boundSessionId,
+                                runId: boundRunId,
+                            })
+                        }
+                        if (boundSessionId !== useSessionStore.getState().currentSessionId && typeof window !== 'undefined' && getHashRoutePathname() !== `/chat/${boundSessionId}`) {
+                            const session = useSessionStore.getState().sessions.find((s) => s.id === boundSessionId)
+                            if (session && session.unread !== 'error') {
+                                useSessionStore.getState().markUnread(boundSessionId!, true)
+                            }
+                        }
+                        void getHostBridge()?.SessionBroadcastRunStatus(
+                            boundSessionId!,
+                            'idle',
+                            boundRunId!,
+                            '',
+                        )
+                        if (!ac.signal.aborted && runSucceeded && boundSessionId) {
+                            const session = useSessionStore.getState().sessions.find((s) => s.id === boundSessionId)
+                            const title = session?.title || ''
+                            void getHostBridge()?.NotificationTaskCompleted?.({
+                                sessionId: boundSessionId,
+                                sessionTitle: title,
+                            })
+                        }
+                        const isOwnerFlight = rt.runs.get(boundSessionId!)?.flightToken === token
+                        if (isOwnerFlight) {
+                            const unconsumedSteers = rt.pendingSteers.get(boundSessionId!)
+                            if (unconsumedSteers && unconsumedSteers.length > 0) {
+                                rt.pendingSteers.delete(boundSessionId!)
+                                let queue = rt.sessionQueues.get(boundSessionId!)
+                                if (!queue) {
+                                    queue = []
+                                    rt.sessionQueues.set(boundSessionId!, queue)
+                                }
+                                for (const steer of unconsumedSteers) {
+                                    const item = rt.pendingSteerItems.get(steer.id)
+                                    const cbs = rt.pendingSteerCallbacks.get(steer.id)
+                                    rt.pendingSteerItems.delete(steer.id)
+                                    rt.pendingSteerCallbacks.delete(steer.id)
+                                    useMessageStore.getState().replaceEntry({
+                                        ...steer,
+                                        pendingStatus: 'queue',
+                                    })
+                                    const combinedCb = cbs && cbs.length > 0
+                                        ? (succeeded: boolean) => {
+                                              for (const cb of cbs) {
+                                                  try {
+                                                      cb(succeeded)
+                                                  } catch (err) {
+                                                      console.error('[AgentStream] Error in transferred steer callback:', err)
+                                                  }
+                                              }
+                                          }
+                                        : undefined
+
+                                    queue.push(item ? {
+                                        ...item,
+                                        payload: {
+                                            ...item.payload,
+                                            onRunFinish: combinedCb,
+                                        },
+                                    } : {
+                                        entry: steer,
+                                        payload: {
+                                            text: joinUserEntryText(steer),
+                                            images: extractUserEntryImages(steer),
+                                            sessionId: boundSessionId!,
+                                            onRunFinish: combinedCb,
+                                        },
+                                    })
+                                }
+                                schedulePersist(true)
+                            }
+                        }
+                        releaseFlight(rt, boundSessionId!, token, ac.signal.aborted)
+                        const succeeded = !ac.signal.aborted && !hasError && runSucceeded
+                        flushFlightFinishCallbacks(rt, token, succeeded)
+                    }
+                })()
+
+                return sessionId
+            } catch (error) {
+                rt.pendingPreflights.delete(token)
+                emit(rt)
+                flushFlightFinishCallbacks(rt, token, false)
+                const sid = boundSessionId || targetSessionId
+                if (sid) {
+                    void getHostBridge()?.SessionBroadcastRunStatus(
+                        sid,
+                        'idle',
+                        '',
+                        '',
+                    )
+                }
+                if (!isAbortError(error)) {
+                    toastPreflight(error)
+                }
+                // Reject so Composer retains draft on preflight/abort failure.
+                throw error
+            } finally {
+                rt.pendingPreflights.delete(token)
+                emit(rt)
+                // Owner-token finally: release when prepare failed before stream.
+                if (!streamStarted && boundSessionId) {
+                    releaseFlight(rt, boundSessionId, token, true)
+                }
             }
         },
         [service, scopedSessionId],
@@ -1791,6 +3174,7 @@ export function useAgentStream(
                           followUpMode: input.followUpMode,
                           isQueuedExecution: input.isQueuedExecution,
                           onSessionAccepted: input.onSessionAccepted ?? opts?.onSessionAccepted,
+                          onRunFinish: input.onRunFinish,
                       }
 
             const trimmed = payload.text.trim()
@@ -1971,21 +3355,59 @@ export function useAgentStream(
 
                 const bridge = getHostBridge()
                 if (bridge?.SessionDelegateRun) {
-                    await bridge.SessionDelegateRun({
-                        sessionId,
-                        text: trimmed,
-                        images: images.length > 0 ? [...images] : undefined,
-                        projectId: capturedProjectId ?? null,
-                        branch: capturedBranch ?? null,
-                        editMessageId: payload.editMessageId,
-                        userEntryId: userEntry.id,
-                        userEntryCreatedAt: userEntry.createdAt,
-                    })
+                    const previousRun = useSessionRunStore.getState().activeRuns[sessionId]
+                    const isAlreadyRunning = previousRun && previousRun.status !== 'idle'
+                    const optimisticRunId = isAlreadyRunning ? null : `delegated-${Date.now()}`
+                    if (!isAlreadyRunning) {
+                        useSessionRunStore.getState().setRun(sessionId, {
+                            sessionId,
+                            status: 'running',
+                            runId: optimisticRunId!,
+                            clientId: 'browser-local',
+                            updatedAt: Date.now(),
+                        })
+                    }
+                    try {
+                        const stableRequestId = payload.requestId || (userEntry.id ? `req-${userEntry.id}` : undefined)
+                        await bridge.SessionDelegateRun({
+                            requestId: stableRequestId,
+                            sessionId,
+                            text: trimmed,
+                            images: images.length > 0 ? [...images] : undefined,
+                            projectId: capturedProjectId ?? null,
+                            branch: capturedBranch ?? null,
+                            editMessageId: payload.editMessageId,
+                            userEntryId: userEntry.id,
+                            userEntryCreatedAt: userEntry.createdAt,
+                            followUpMode: payload.followUpMode,
+                        })
+                    } catch (error) {
+                        if (!isAlreadyRunning) {
+                            const current = useSessionRunStore.getState().activeRuns[sessionId]
+                            if (current?.runId === optimisticRunId) {
+                                useSessionRunStore.getState().clearRun(sessionId)
+                            }
+                        }
+                        throw error
+                    }
                 }
 
                 useUiStore.getState().setPinnedSummaryVisible(true)
 
                 return sessionId
+            }
+
+            const sessionState = useSessionStore.getState()
+            const targetSessionId =
+                payload.sessionId !== undefined
+                    ? (payload.sessionId || null)
+                    : (scopedSessionId !== undefined
+                        ? (scopedSessionId || null)
+                        : (sessionState.currentSessionId || null))
+
+            const fixedPayload: AgentSendPayload = {
+                ...payload,
+                sessionId: targetSessionId,
             }
 
             if (!service) {
@@ -1999,690 +3421,30 @@ export function useAgentStream(
             }
 
             const rt = getRuntime(service)
-            if (rt.disposed) {
-                const err = new AgentPreflightError(
-                    'disposed',
-                    'Agent runtime has been disposed',
-                    'agent.preflight.disposed',
-                )
-                toastPreflight(err)
-                throw err
+            if (targetSessionId && !payload.isQueuedExecution && !rt.runs.has(targetSessionId)) {
+                const remoteRun = useSessionRunStore.getState().activeRuns[targetSessionId]
+                if (remoteRun && remoteRun.status !== 'idle' && remoteRun.runId) {
+                    if (!rt.inFlightTakeoverRunIds.has(remoteRun.runId)) {
+                        rt.inFlightTakeoverRunIds.add(remoteRun.runId)
+                        rt.pendingTakeoverAborts.add(targetSessionId)
+                        const runIdToClear = remoteRun.runId
+                        setTimeout(() => {
+                            rt.inFlightTakeoverRunIds.delete(runIdToClear)
+                            rt.pendingTakeoverAborts.delete(targetSessionId)
+                        }, 3000)
+                        rememberHostedRunId(rt, remoteRun.runId)
+                        void getHostBridge()?.SessionAbortRun(targetSessionId)
+                    }
+                }
             }
 
-            const sessionState = useSessionStore.getState()
-            const targetSessionId =
-                payload.sessionId !== undefined
-                    ? (payload.sessionId || null)
-                    : (scopedSessionId !== undefined
-                        ? (scopedSessionId || null)
-                        : (sessionState.currentSessionId || null))
-
-            const capturedSessionId = targetSessionId
-            const targetSession = capturedSessionId
-                ? sessionState.sessions.find((s) => s.id === capturedSessionId)
-                : undefined
-            const settings = targetSession
-                ? resolveSettingsForSession(targetSession)
-                : { ...useSettingsStore.getState().settings }
-
-            if (targetSessionId && rt.runs.has(targetSessionId) && !payload.editMessageId && !payload.isQueuedExecution) {
-                const effectiveFollowUpMode: 'steer' | 'queue' =
-                    payload.followUpMode ??
-                    (settings.editor?.followUpMode === 'queue' ? 'queue' : 'steer')
-
-                const trimmed = payload.text.trim()
-                const images = payload.images ? payload.images.slice() : []
-
-                if (effectiveFollowUpMode === 'steer') {
-                    const steerEntry: UserEntry = {
-                        ...buildUserEntry(targetSessionId, trimmed, images),
-                        pendingStatus: 'steer',
-                    }
-                    useMessageStore.getState().appendEntry(steerEntry)
-                    let steerList = rt.pendingSteers.get(targetSessionId)
-                    if (!steerList) {
-                        steerList = []
-                        rt.pendingSteers.set(targetSessionId, steerList)
-                    }
-                    steerList.push(steerEntry)
-                    schedulePersist(true)
-                    const onAccepted = payload.onSessionAccepted ?? opts?.onSessionAccepted
-                    onAccepted?.(targetSessionId)
-                    emit(rt)
-                    return targetSessionId
-                } else {
-                    const queueEntry: UserEntry = {
-                        ...buildUserEntry(targetSessionId, trimmed, images),
-                        pendingStatus: 'queue',
-                    }
-                    useMessageStore.getState().appendEntry(queueEntry)
-                    let queue = rt.sessionQueues.get(targetSessionId)
-                    if (!queue) {
-                        queue = []
-                        rt.sessionQueues.set(targetSessionId, queue)
-                    }
-                    queue.push({
-                        entry: queueEntry,
-                        payload: {
-                            ...payload,
-                            sessionId: targetSessionId,
-                            userEntryId: queueEntry.id,
-                            userEntryCreatedAt: queueEntry.createdAt,
-                        },
-                        options: opts,
-                    })
-                    schedulePersist(true)
-                    const onAccepted = payload.onSessionAccepted ?? opts?.onSessionAccepted
-                    onAccepted?.(targetSessionId)
-                    emit(rt)
-                    return targetSessionId
-                }
-            } else if (targetSessionId && rt.runs.has(targetSessionId)) {
-                // Local flight interrupt for this specific session
-                const existing = rt.runs.get(targetSessionId)!
-                abortFlightAndCleanup(rt, service, targetSessionId, existing)
-            } else if (targetSessionId && !payload.isQueuedExecution) {
-                // Remote flight interrupt (Mirror mode interrupt & take over)
-                const remoteRun =
-                    useSessionRunStore.getState().activeRuns[targetSessionId]
-                if (remoteRun && remoteRun.status !== 'idle') {
-                    rt.pendingTakeoverAborts.add(targetSessionId)
-                    setTimeout(() => {
-                        rt.pendingTakeoverAborts.delete(targetSessionId)
-                    }, 3000)
-                    if (remoteRun.runId) {
-                        rememberHostedRunId(rt, remoteRun.runId) // Ignore trailing stream events from the aborted remote run
-                    }
-                    void getHostBridge()?.SessionAbortRun(targetSessionId)
-                }
-            }
-            const catalog = useModelCatalogStore.getState().models.slice()
-            const capturedProjectId =
-                payload.projectId !== undefined
-                    ? payload.projectId
-                    : (resolveProjectIdForSession(capturedSessionId) ??
-                       useUiStore.getState().pendingSessionContext.projectId)
-            const capturedBranch =
-                payload.branch !== undefined
-                    ? payload.branch
-                    : capturedSessionId
-                      ? (sessionState.sessions.find(
-                            (s) => s.id === capturedSessionId,
-                        )?.branch ?? null)
-                      : useUiStore.getState().pendingSessionContext.branch
-            const capturedWorkLocation =
-                payload.workLocation !== undefined
-                    ? payload.workLocation
-                    : (capturedSessionId
-                        ? (sessionState.sessions.find(
-                              (s) => s.id === capturedSessionId,
-                          )?.workLocation ?? 'local')
-                        : (useUiStore.getState().pendingSessionContext.workLocation ?? 'local'))
-            const capturedEnvironmentId =
-                payload.environmentId !== undefined
-                    ? payload.environmentId
-                    : (capturedSessionId
-                        ? (sessionState.sessions.find(
-                              (s) => s.id === capturedSessionId,
-                          )?.environmentId ?? null)
-                        : (useUiStore.getState().pendingSessionContext.environmentId ?? null))
-            const capturedProjectPaths =
-                resolveProjectPathsById(capturedProjectId)
-
-            const token = ++rt.flightToken
-            const ac = new AbortController()
-            for (const [t, p] of rt.pendingPreflights) {
-                if (
-                    p.targetSessionId === capturedSessionId ||
-                    (capturedSessionId === null && p.targetSessionId === null) ||
-                    (!capturedSessionId && !p.targetSessionId)
-                ) {
-                    p.abortController.abort()
-                    rt.pendingPreflights.delete(t)
-                }
-            }
-            rt.pendingPreflights.set(token, {
-                token,
-                abortController: ac,
-                targetSessionId: capturedSessionId,
-            })
-            emit(rt)
-
-            let boundSessionId: string | null = null
-            let boundRunId: string | null = null
-            let streamStarted = false
-
-            try {
-                // Preflight first — no session/user side effects on failure.
-                // Pass signal into prepare (service aborts each await) and keep
-                // outer abortable race as a double-guard for never-resolving loads.
-                let prepared: PreparedAgentRun = await abortable(
-                    service.prepare({
-                        baseUrl: settings.cliProxyApi.baseUrl,
-                        apiKey: settings.cliProxyApi.apiKey,
-                        modelId: settings.modelId,
-                        models: catalog,
-                        reasoningLevel: settings.reasoningLevel,
-                        speed: settings.speed,
-                        compactionThresholdPercent:
-                            settings.compactionThresholdPercent,
-                        fastContextCompaction:
-                            settings.fastContextCompaction,
-                        projectPath: capturedProjectPaths[0] ?? null,
-                        projectPaths: capturedProjectPaths,
-                        signal: ac.signal,
-                        language: settings.locale,
-                        personality: settings.personality,
-                        localMemoryEnabled: settings.localMemoryEnabled,
-                        scheduleId: payload.scheduleId ?? targetSession?.scheduleId ?? null,
-                        sessionId: targetSessionId ?? null,
-                        subagentsSettings: settings.subagents,
-                        gitSettings: settings.git,
-                        modelSettings: settings.modelSettings,
-                        getEntries: async (sid: string) => {
-                            await ensureSessionLoaded(sid)
-                            return useMessageStore.getState().getEntries(sid)
-                        },
-                    }),
-                    ac.signal,
-                )
-
-                // Abort after prepare must throw (not bare return) so draft is kept.
-                // disposed/flight token guards block late session submit after runtime dispose.
-                if (
-                    !rt.pendingPreflights.has(token) ||
-                    ac.signal.aborted ||
-                    rt.disposed
-                ) {
-                    throw createAbortError()
-                }
-
-                const titleSource =
-                    trimmed ||
-                    (images.length > 0
-                        ? images[0]?.name || 'image'
-                        : '')
-                const title = deriveSessionTitle(titleSource, settings.locale)
-
-                // Only write the captured session target (or create with captured project).
-                let sessionId = capturedSessionId
-                if (sessionId) {
-                    await ensureSessionLoaded(sessionId)
-                    const still = useSessionStore
-                        .getState()
-                        .sessions.find((item) => item.id === sessionId)
-                    if (!still) {
-                        throw new AgentPreflightError(
-                            'session_gone',
-                            'Session was removed during preflight',
-                            'agent.preflight.session_gone',
-                        )
-                    }
-                    const existing = useMessageStore
-                        .getState()
-                        .getEntries(sessionId)
-                    if (
-                        payload.editMessageId &&
-                        !existing.some(
-                            (entry) =>
-                                entry.id === payload.editMessageId &&
-                                entry.kind === 'user',
-                        )
-                    ) {
-                        throw new AgentPreflightError(
-                            'message_gone',
-                            'Message to edit was not found',
-                            'agent.preflight.message_gone',
-                        )
-                    }
-                    if (existing.length === 0) {
-                        useSessionStore
-                            .getState()
-                            .renameSession(sessionId, title)
-                    }
-                    // Bind captured project/branch to the captured session only.
-                    if (capturedProjectId) {
-                        useSessionStore
-                            .getState()
-                            .setSessionProject(sessionId, capturedProjectId)
-                    }
-                    if (capturedBranch) {
-                        useSessionStore
-                            .getState()
-                            .setSessionBranch(sessionId, capturedBranch)
-                    }
-                    if (capturedWorkLocation) {
-                        useSessionStore
-                            .getState()
-                            .setSessionWorktree(
-                                sessionId,
-                                capturedWorkLocation,
-                                still.worktreePath,
-                                capturedEnvironmentId,
-                            )
-                    }
-                } else {
-                    if (payload.editMessageId) {
-                        throw new AgentPreflightError(
-                            'message_gone',
-                            'Message to edit was not found',
-                            'agent.preflight.message_gone',
-                        )
-                    }
-                    sessionId = useSessionStore.getState().createSession({
-                        title,
-                        projectId: capturedProjectId ?? undefined,
-                        branch: capturedBranch ?? undefined,
-                        workLocation: capturedWorkLocation,
-                        environmentId: capturedEnvironmentId,
-                        modelId: settings.modelId,
-                        reasoningEffort: settings.reasoningLevel,
-                        speed: settings.speed,
-                    })
-                }
-
-                useSessionStore.getState().setSessionRuntimeSettings(sessionId, {
-                    modelId: settings.modelId,
-                    reasoningEffort: settings.reasoningLevel,
-                    speed: settings.speed,
-                })
-
-                const pendingPreflight = rt.pendingPreflights.get(token)
-                if (pendingPreflight) {
-                    pendingPreflight.targetSessionId = sessionId
-                }
-
-                // Append user entry immediately so UI displays user message and setup card
-                const existingEntries = useMessageStore
-                    .getState()
-                    .getEntries(sessionId)
-                let priorEntries: ConversationEntry[]
-                let userEntry: UserEntry
-                let activatedUserEntries: UserEntry[] = []
-                if (payload.isQueuedExecution) {
-                    const queuedIds =
-                        payload.queuedUserEntryIds && payload.queuedUserEntryIds.length > 0
-                            ? payload.queuedUserEntryIds
-                            : payload.userEntryId
-                              ? [payload.userEntryId]
-                              : []
-                    const executionStartTime = payload.userEntryCreatedAt ?? Date.now()
-
-                    for (let idx = 0; idx < queuedIds.length; idx++) {
-                        const qId = queuedIds[idx]
-                        const target = existingEntries.find(
-                            (e) => e.id === qId && e.kind === 'user',
-                        ) as UserEntry | undefined
-                        if (target) {
-                            const updated: UserEntry = {
-                                ...target,
-                                pendingStatus: undefined,
-                                createdAt: executionStartTime + idx,
-                            }
-                            useMessageStore.getState().replaceEntry(updated)
-                            activatedUserEntries.push(updated)
-                        }
-                    }
-
-                    const firstQueuedId = queuedIds[0]
-                    const firstIndex = existingEntries.findIndex(
-                        (entry) => entry.id === firstQueuedId,
-                    )
-                    const rawPrior =
-                        firstIndex !== -1
-                            ? existingEntries.slice(0, firstIndex)
-                            : existingEntries
-                    priorEntries = rawPrior.filter(
-                        (e) => !(e.kind === 'user' && e.pendingStatus === 'queue'),
-                    )
-
-                    userEntry =
-                        activatedUserEntries[0] ?? {
-                            ...buildUserEntry(sessionId, trimmed, images),
-                            createdAt: executionStartTime,
-                        }
-                    if (activatedUserEntries.length === 0) {
-                        useMessageStore.getState().appendEntry(userEntry)
-                        activatedUserEntries.push(userEntry)
-                    }
-                } else if (payload.editMessageId) {
-                    const targetIndex = existingEntries.findIndex(
-                        (entry) => entry.id === payload.editMessageId,
-                    )
-                    const target = existingEntries[targetIndex]
-                    if (!target || target.kind !== 'user') {
-                        throw new AgentPreflightError(
-                            'message_gone',
-                            'Message to edit was not found',
-                            'agent.preflight.message_gone',
-                        )
-                    }
-                    userEntry = replaceUserEntryText(target, trimmed)
-                    priorEntries = existingEntries.slice(0, targetIndex)
-                    const keptEntries = [...priorEntries, userEntry]
-                    useMessageStore
-                        .getState()
-                        .replaceSessionEntries(sessionId, keptEntries, { historyMutation: 'truncate' })
-                    pruneHistoricalSubAgents(service, sessionId, keptEntries)
-                } else if (
-                    payload.userEntryId &&
-                    existingEntries.some(
-                        (entry) =>
-                            entry.id === payload.userEntryId &&
-                            entry.kind === 'user',
-                    )
-                ) {
-                    const targetIndex = existingEntries.findIndex(
-                        (entry) =>
-                            entry.id === payload.userEntryId &&
-                            entry.kind === 'user',
-                    )
-                    const target = existingEntries[targetIndex] as UserEntry
-                    userEntry = {
-                        ...target,
-                        createdAt: payload.userEntryCreatedAt ?? Date.now(),
-                    }
-                    priorEntries = existingEntries.slice(0, targetIndex)
-                    const keptEntries = [...priorEntries, userEntry]
-                    useMessageStore
-                        .getState()
-                        .replaceSessionEntries(sessionId, keptEntries, { historyMutation: 'truncate' })
-                    pruneHistoricalSubAgents(service, sessionId, keptEntries)
-                } else {
-                    priorEntries = existingEntries
-                    userEntry = buildUserEntry(sessionId, trimmed, images)
-                    if (payload.userEntryId) {
-                        userEntry.id = payload.userEntryId
-                    }
-                    useMessageStore.getState().appendEntry(userEntry)
-                }
-                const liveSessionObj = useSessionStore
-                    .getState()
-                    .sessions.find((s) => s.id === sessionId)
-                if (
-                    liveSessionObj &&
-                    (liveSessionObj.firstPromptAt === undefined ||
-                        liveSessionObj.firstPromptAt === 0)
-                ) {
-                    useSessionStore
-                        .getState()
-                        .setSessionFirstPromptAt(sessionId, userEntry.createdAt)
-                }
-                schedulePersist(true)
-                const onAccepted = payload.onSessionAccepted ?? opts?.onSessionAccepted
-                onAccepted?.(sessionId)
-
-                // Worktree and environment initialization if worktree mode selected
-                if (capturedWorkLocation === 'worktree') {
-                    const prepResult = await prepareExecutionRun({
-                        service,
-                        sessionId,
-                        session: liveSessionObj,
-                        settings,
-                        catalog,
-                        workLocation: capturedWorkLocation,
-                        projectPaths: capturedProjectPaths,
-                        branch: capturedBranch,
-                        environmentId: capturedEnvironmentId,
-                        scheduleId: payload.scheduleId ?? targetSession?.scheduleId ?? null,
-                        signal: ac.signal,
-                        allowSetup: true,
-                    })
-                    if (!prepResult.ok || !prepResult.prepared) {
-                        return sessionId
-                    }
-                    prepared = prepResult.prepared
-                }
-
-                if (
-                    !rt.pendingPreflights.has(token) ||
-                    ac.signal.aborted ||
-                    rt.disposed
-                ) {
-                    throw createAbortError()
-                }
-
-                const diagMessages = prepared.diagnostics.map((d) => d.message)
-                rt.skills = prepared.skills
-                rt.prompts = prepared.prompts
-                rt.lastDiagnostics = diagMessages
-                emit(rt)
-
-                for (const message of diagMessages) {
-                    if (message) {
-                        useUiStore
-                            .getState()
-                            .pushToast(
-                                i18n.t('composer.resourceWarning', {
-                                    message,
-                                }),
-                            )
-                    }
-                }
-
-                const runId = createId()
-                rememberHostedRunId(rt, runId)
-
-                useUiStore.getState().setPinnedSummaryVisible(true)
-
-                const entries: ConversationEntry[] = [
-                    ...priorEntries,
-                    ...(activatedUserEntries.length > 0 ? activatedUserEntries : [userEntry]),
-                ]
-
-                boundSessionId = sessionId
-                boundRunId = runId
-
-                const flight: SessionRunFlight = {
-                    sessionId,
-                    runId,
-                    runStatus: 'connecting',
-                    abortController: ac,
-                    flightToken: token,
-                }
-                rt.runs.set(sessionId, flight)
-                rt.pendingPreflights.delete(token)
-                emit(rt)
-
-                const adapter = createAgentEventAdapter(useMessageStore)
-                streamStarted = true
-
-                void getHostBridge()?.SessionBroadcastRunStatus(
-                    boundSessionId,
-                    'running',
-                    boundRunId,
-                    '',
-                )
-                const entriesToBroadcast =
-                    activatedUserEntries.length > 0
-                        ? activatedUserEntries
-                        : [userEntry]
-                for (const entry of entriesToBroadcast) {
-                    void getHostBridge()?.SessionBroadcastStreamEvent(
-                        boundSessionId,
-                        boundRunId,
-                        {
-                            type: 'user-entry',
-                            sessionId: boundSessionId,
-                            runId: boundRunId,
-                            entry,
-                        },
-                    )
-                }
-
-                // Background lifecycle — callers may navigate immediately after accept.
-                void (async () => {
-                    let currentBroadcastStatus: 'running' | 'thinking' | 'tool' | 'idle' =
-                        'running'
-                    let runSucceeded = false
-                    let hasError = false
-                    try {
-                        for await (const event of service.streamChat({
-                            prepared,
-                            sessionId: boundSessionId!,
-                            runId: boundRunId!,
-                            entries,
-                            userEntry,
-                            signal: ac.signal,
-                            getRuntimeSettings: createRuntimeSettingsResolver(boundSessionId!),
-                            consumeSteerEntries: () => {
-                                const steers = rt.pendingSteers.get(boundSessionId!)
-                                if (steers && steers.length > 0) {
-                                    rt.pendingSteers.delete(boundSessionId!)
-                                    const now = Date.now()
-                                    const consumed = steers.map((steer, idx) => {
-                                        const entry: UserEntry = {
-                                            ...steer,
-                                            pendingStatus: undefined,
-                                            createdAt: now + idx,
-                                        }
-                                        useMessageStore.getState().replaceEntry(entry)
-                                        return entry
-                                    })
-                                    emit(rt)
-                                    return consumed
-                                }
-                                return undefined
-                            },
-                            consumeSteerEntry: () => {
-                                const steers = rt.pendingSteers.get(boundSessionId!)
-                                if (steers && steers.length > 0) {
-                                    const steer = steers.shift()!
-                                    if (steers.length === 0) {
-                                        rt.pendingSteers.delete(boundSessionId!)
-                                    }
-                                    const consumed: UserEntry = {
-                                        ...steer,
-                                        pendingStatus: undefined,
-                                        createdAt: Date.now(),
-                                    }
-                                    useMessageStore.getState().replaceEntry(consumed)
-                                    emit(rt)
-                                    return consumed
-                                }
-                                return undefined
-                            },
-                        })) {
-                            if (event.type === 'error') {
-                                hasError = true
-                            }
-                            if (rt.runs.get(boundSessionId!)?.flightToken !== token) break
-                            void getHostBridge()?.SessionBroadcastStreamEvent(
-                                boundSessionId!,
-                                boundRunId!,
-                                prepareStreamEventForBroadcast(event),
-                            )
-                            const nextBroadcastStatus =
-                                mapEventToBroadcastStatus(event)
-                            if (
-                                nextBroadcastStatus &&
-                                nextBroadcastStatus !== currentBroadcastStatus
-                            ) {
-                                currentBroadcastStatus = nextBroadcastStatus
-                                void getHostBridge()?.SessionBroadcastRunStatus(
-                                    boundSessionId!,
-                                    nextBroadcastStatus,
-                                    boundRunId!,
-                                    '',
-                                )
-                            }
-                            const applyResult = adapter.apply(event)
-                            scheduleFromUrgency(applyResult.urgency)
-                            const currentFlight = rt.runs.get(boundSessionId!)
-                            if (currentFlight && currentFlight.flightToken === token) {
-                                currentFlight.runStatus = mapRunStatus(
-                                    event,
-                                    currentFlight.runStatus,
-                                )
-                                emit(rt)
-                            }
-                        }
-                        if (!hasError && rt.runs.get(boundSessionId!)?.flightToken === token) {
-                            runSucceeded = true
-                        }
-                    } catch (error) {
-                        hasError = true
-                        runSucceeded = false
-                        if (ac.signal.aborted || isAbortError(error)) {
-                            // silent abort
-                        } else if (!(error instanceof AgentPreflightError)) {
-                            const message =
-                                error instanceof Error
-                                    ? error.message
-                                    : String(error ?? 'stream error')
-                            adapter.apply({
-                                type: 'error',
-                                runId: boundRunId!,
-                                sessionId: boundSessionId!,
-                                message,
-                            })
-                            schedulePersist(true)
-                            if (boundSessionId !== useSessionStore.getState().currentSessionId && typeof window !== 'undefined' && getHashRoutePathname() !== `/chat/${boundSessionId}`) {
-                                useSessionStore.getState().markUnread(boundSessionId!, 'error')
-                            }
-                            const errorToast = message
-                                ? `${i18n.t('composer.sendFailed', { defaultValue: 'Send failed' })}: ${message}`
-                                : i18n.t('composer.sendFailed', { defaultValue: 'Send failed' })
-                            useUiStore.getState().pushToast(errorToast)
-                        }
-                    } finally {
-                        if (boundSessionId && boundRunId && adapter.getActiveRunId(boundSessionId) === boundRunId) {
-                            if (ac.signal.aborted) {
-                                adapter.apply({
-                                    type: 'aborted',
-                                    sessionId: boundSessionId,
-                                    runId: boundRunId,
-                                })
-                            }
-                            adapter.apply({
-                                type: 'agent-end',
-                                sessionId: boundSessionId,
-                                runId: boundRunId,
-                            })
-                        }
-                        if (boundSessionId !== useSessionStore.getState().currentSessionId && typeof window !== 'undefined' && getHashRoutePathname() !== `/chat/${boundSessionId}`) {
-                            const session = useSessionStore.getState().sessions.find((s) => s.id === boundSessionId)
-                            if (session && session.unread !== 'error') {
-                                useSessionStore.getState().markUnread(boundSessionId!, true)
-                            }
-                        }
-                        void getHostBridge()?.SessionBroadcastRunStatus(
-                            boundSessionId!,
-                            'idle',
-                            boundRunId!,
-                            '',
-                        )
-                        if (!ac.signal.aborted && runSucceeded && boundSessionId) {
-                            const session = useSessionStore.getState().sessions.find((s) => s.id === boundSessionId)
-                            const title = session?.title || ''
-                            void getHostBridge()?.NotificationTaskCompleted?.({
-                                sessionId: boundSessionId,
-                                sessionTitle: title,
-                            })
-                        }
-                        releaseFlight(rt, boundSessionId!, token, ac.signal.aborted)
-                    }
-                })()
-
-                return sessionId
-            } catch (error) {
-                rt.pendingPreflights.delete(token)
-                emit(rt)
-                if (!isAbortError(error)) {
-                    toastPreflight(error)
-                }
-                // Reject so Composer retains draft on preflight/abort failure.
-                throw error
-            } finally {
-                rt.pendingPreflights.delete(token)
-                emit(rt)
-                // Owner-token finally: release when prepare failed before stream.
-                if (!streamStarted && boundSessionId) {
-                    releaseFlight(rt, boundSessionId, token, true)
-                }
-            }
+            const actionResult = await queueSessionAction(
+                targetSessionId,
+                () => sendInternal(fixedPayload, opts),
+            )
+            return actionResult ?? null
         },
-        [service, scopedSessionId],
+        [sendInternal, scopedSessionId],
     )
 
     const runPreparedChat = async (
@@ -2788,6 +3550,14 @@ export function useAgentStream(
                                 rt.pendingSteers.delete(boundSessionId)
                                 const now = Date.now()
                                 const consumed = steers.map((steer, idx) => {
+                                    const cbs = rt.pendingSteerCallbacks.get(steer.id)
+                                    if (cbs) {
+                                        rt.pendingSteerCallbacks.delete(steer.id)
+                                        for (const cb of cbs) {
+                                            registerFlightFinishCallback(rt, token, cb)
+                                        }
+                                    }
+                                    rt.pendingSteerItems.delete(steer.id)
                                     const entry: UserEntry = {
                                         ...steer,
                                         pendingStatus: undefined,
@@ -2808,6 +3578,14 @@ export function useAgentStream(
                                 if (steers.length === 0) {
                                     rt.pendingSteers.delete(boundSessionId)
                                 }
+                                const cbs = rt.pendingSteerCallbacks.get(steer.id)
+                                if (cbs) {
+                                    rt.pendingSteerCallbacks.delete(steer.id)
+                                    for (const cb of cbs) {
+                                        registerFlightFinishCallback(rt, token, cb)
+                                    }
+                                }
+                                rt.pendingSteerItems.delete(steer.id)
                                 const consumed: UserEntry = {
                                     ...steer,
                                     pendingStatus: undefined,
@@ -2910,12 +3688,65 @@ export function useAgentStream(
                             sessionTitle: title,
                         })
                     }
+                    const isOwnerFlight = rt.runs.get(boundSessionId)?.flightToken === token
+                    if (isOwnerFlight) {
+                        const unconsumedSteers = rt.pendingSteers.get(boundSessionId)
+                        if (unconsumedSteers && unconsumedSteers.length > 0) {
+                            rt.pendingSteers.delete(boundSessionId)
+                            let queue = rt.sessionQueues.get(boundSessionId)
+                            if (!queue) {
+                                queue = []
+                                rt.sessionQueues.set(boundSessionId, queue)
+                            }
+                            for (const steer of unconsumedSteers) {
+                                const item = rt.pendingSteerItems.get(steer.id)
+                                const cbs = rt.pendingSteerCallbacks.get(steer.id)
+                                rt.pendingSteerItems.delete(steer.id)
+                                rt.pendingSteerCallbacks.delete(steer.id)
+                                useMessageStore.getState().replaceEntry({
+                                    ...steer,
+                                    pendingStatus: 'queue',
+                                })
+                                const combinedCb = cbs && cbs.length > 0
+                                    ? (succeeded: boolean) => {
+                                          for (const cb of cbs) {
+                                              try {
+                                                  cb(succeeded)
+                                              } catch (err) {
+                                                  console.error('[AgentStream] Error in transferred steer callback:', err)
+                                              }
+                                          }
+                                      }
+                                    : undefined
+
+                                queue.push(item ? {
+                                    ...item,
+                                    payload: {
+                                        ...item.payload,
+                                        onRunFinish: combinedCb,
+                                    },
+                                } : {
+                                    entry: steer,
+                                    payload: {
+                                        text: joinUserEntryText(steer),
+                                        images: extractUserEntryImages(steer),
+                                        sessionId: boundSessionId,
+                                        onRunFinish: combinedCb,
+                                    },
+                                })
+                            }
+                            schedulePersist(true)
+                        }
+                    }
                     releaseFlight(rt, boundSessionId, token, ac.signal.aborted)
+                    const succeeded = !ac.signal.aborted && runSucceeded
+                    flushFlightFinishCallbacks(rt, token, succeeded)
                 }
             })()
 
             return sessionId
         } catch (error) {
+            flushFlightFinishCallbacks(rt, token, false)
             if (!isAbortError(error)) {
                 toastPreflight(error)
             }
@@ -3169,8 +4000,38 @@ function applyTurnPauseDelta(entries: readonly ConversationEntry[]): Conversatio
         if (service) {
             const rt = getRuntime(service)
             rt.sendHandler = send
+            rt.sendInternalHandler = sendInternal
+            if (rt.pendingDelegateRuns.length > 0) {
+                const pending = rt.pendingDelegateRuns.slice()
+                rt.pendingDelegateRuns.length = 0
+                for (const req of pending) {
+                    void queueDelegateRun(rt, req)
+                }
+            }
+            if (!isBrowserEnvironment()) {
+                void (async () => {
+                    try {
+                        const claimed = await getHostBridge()?.SessionClaimPendingDelegateRuns?.()
+                        if (claimed && Array.isArray(claimed) && claimed.length > 0 && !rt.disposed) {
+                            for (const req of claimed) {
+                                if (rt.disposed || !rt.sendHandler) break
+                                void queueDelegateRun(rt, req)
+                            }
+                        }
+                    } catch {
+                        // Ignore claim error
+                    }
+                })()
+            }
             bindSubAgentHost(service)
             bindNativeSync(service)
+            const unsubReconnect = onHostReconnect(() => {
+                if (pendingAcks.size > 0) {
+                    for (const ackId of Array.from(pendingAcks)) {
+                        void ackDelegateRunSafely(ackId)
+                    }
+                }
+            })
             const unregisterController = registerHostAgentController({
                 send: (payload, opts) => send(payload, opts),
                 stop,
@@ -3217,6 +4078,7 @@ function applyTurnPauseDelta(entries: readonly ConversationEntry[]): Conversatio
                 },
             })
             return () => {
+                unsubReconnect()
                 unregisterController()
             }
         }

@@ -26,6 +26,7 @@ export interface HeadlessLifecycleOptions {
     } | undefined
     ensureWebServerRunning?: () => Promise<void>
     dock?: DockAdapter | null
+    onForegroundWindowShow?: (win: BrowserWindow) => void
 }
 
 /**
@@ -53,6 +54,7 @@ export class HeadlessLifecycleService {
     } | undefined
     readonly ensureWebServerRunning?: () => Promise<void>
     private readonly dock: DockAdapter | null
+    private readonly onForegroundWindowShow?: (win: BrowserWindow) => void
 
     constructor(options: HeadlessLifecycleOptions) {
         this.mode = options.isHeadlessInitially ? 'HEADLESS' : 'FOREGROUND'
@@ -65,6 +67,7 @@ export class HeadlessLifecycleService {
         this.getSettings = options.getSettings
         this.getSettingsSync = options.getSettingsSync
         this.ensureWebServerRunning = options.ensureWebServerRunning
+        this.onForegroundWindowShow = options.onForegroundWindowShow
         this.dock = options.dock !== undefined ? options.dock : ((process.platform === 'darwin' && app.dock) ? app.dock : null)
 
         const syncSettings = options.getSettingsSync?.()
@@ -174,6 +177,7 @@ export class HeadlessLifecycleService {
             }
             if (!win.isVisible()) {
                 win.show()
+                this.onForegroundWindowShow?.(win)
             }
             win.focus()
         }

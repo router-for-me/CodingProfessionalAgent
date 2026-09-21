@@ -100,6 +100,18 @@ export function sendNativeEventToWindow(
     // WebContents can survive a renderer crash or a detached main frame.
     // Electron logs disposed-frame send errors internally instead of throwing.
     if (webContents.isCrashed?.() || webContents.mainFrame?.detached) return
+    if (event.kind === 'session:delegate-run' && webContents.isLoading?.()) {
+      webContents.once('did-finish-load', () => {
+        try {
+          if (!win.isDestroyed?.() && !webContents.isDestroyed?.()) {
+            webContents.send('cpa:native', event)
+          }
+        } catch {
+          // Ignore late send error
+        }
+      })
+      return
+    }
     webContents.send('cpa:native', event)
   } catch {
     // Renderer teardown can race with WebContents.send after lifecycle checks.

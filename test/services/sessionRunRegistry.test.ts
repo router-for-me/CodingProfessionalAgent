@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { SessionRunRegistry } from '../../plugins/bundled/cpa.core.session-manager/main/sessionRunRegistry.js'
 import type { NativeEvent } from '../../src/shared/types.js'
 
@@ -349,5 +349,195 @@ describe('SessionRunRegistry', () => {
         expect(events).toHaveLength(2)
         expect(events[1].kind).toBe('session:resume-prompt-action')
         expect(JSON.parse(events[1].data ?? '{}')).toEqual({ action: 'continue' })
+    })
+
+    it('buffers pending delegate runs and allows claiming and acknowledging them', () => {
+        const registry = new SessionRunRegistry(() => {})
+
+        registry.addPendingDelegateRun({
+            sessionId: 'sess-buffer-1',
+            text: 'Buffered prompt 1',
+            userEntryId: 'user-entry-1',
+        })
+        registry.addPendingDelegateRun({
+            sessionId: 'sess-buffer-2',
+            text: 'Buffered prompt 2',
+            userEntryId: 'user-entry-2',
+        })
+
+        const claimed = registry.claimPendingDelegateRuns()
+        expect(claimed).toHaveLength(2)
+        expect(claimed[0]?.sessionId).toBe('sess-buffer-1')
+        expect(claimed[1]?.sessionId).toBe('sess-buffer-2')
+
+        // Requests remain available until acknowledged
+        registry.ackDelegateRun('user-entry-1')
+        const remaining = registry.claimPendingDelegateRuns()
+        expect(remaining).toHaveLength(1)
+        expect(remaining[0]?.sessionId).toBe('sess-buffer-2')
+
+        registry.ackDelegateRun('user-entry-2')
+        expect(registry.claimPendingDelegateRuns()).toHaveLength(0)
+    })
+
+    it('preserves unacknowledged requests across long delays without 60s timeout loss', () => {
+        vi.useFakeTimers()
+        try {
+            const registry = new SessionRunRegistry(() => {})
+
+            registry.addPendingDelegateRun({
+                sessionId: 'sess-long-delay',
+                text: 'Prompt preserved past 60 seconds',
+                userEntryId: 'user-entry-delay',
+            })
+
+            // Advance timers by 120 seconds to prove no 60s expiration
+            vi.advanceTimersByTime(120_000)
+
+            const claimedAfterLongDelay = registry.claimPendingDelegateRuns()
+            expect(claimedAfterLongDelay).toHaveLength(1)
+            expect(claimedAfterLongDelay[0]?.sessionId).toBe('sess-long-delay')
+
+            registry.ackDelegateRun('user-entry-delay')
+            expect(registry.claimPendingDelegateRuns()).toHaveLength(0)
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
+    it('rejects new requests when delegate queue capacity is reached to prevent silent loss', () => {
+        const registry = new SessionRunRegistry(() => {})
+
+        for (let i = 0; i < 256; i++) {
+            registry.addPendingDelegateRun({
+                sessionId: `sess-${i}`,
+                text: `Prompt ${i}`,
+                requestId: `req-${i}`,
+            })
+        }
+
+        expect(registry.claimPendingDelegateRuns()).toHaveLength(256)
+
+        // Attempting to add the 257th request throws an error and preserves existing requests
+        expect(() => {
+            registry.addPendingDelegateRun({
+                sessionId: 'sess-overflow',
+                text: 'Overflow prompt',
+                requestId: 'req-overflow',
+            })
+        }).toThrow(/Delegate queue is full \(256 pending runs\)/)
+
+        const remaining = registry.claimPendingDelegateRuns()
+        expect(remaining).toHaveLength(256)
+        expect(remaining[0]?.requestId).toBe('req-0')
+        expect(remaining[remaining.length - 1]?.requestId).toBe('req-255')
+
+        // Idempotent retry of existing requestId must succeed even when queue is at max capacity!
+        expect(() => {
+            registry.addPendingDelegateRun({
+                sessionId: 'sess-0',
+                text: 'Retry prompt 0',
+                requestId: 'req-0',
+            })
+        }).not.toThrow()
+        expect(registry.claimPendingDelegateRuns()).toHaveLength(256)
+    })
+
+    it('accurately ACKs specific request by requestId without accidentally deleting other requests in the same session', () => {
+        const registry = new SessionRunRegistry(() => {})
+
+        registry.addPendingDelegateRun({
+            requestId: 'session-a',
+            sessionId: 'session-a',
+            text: 'First request for session-a',
+        })
+        registry.addPendingDelegateRun({
+            requestId: 'second-request',
+            sessionId: 'session-a',
+            text: 'Second request for session-a',
+        })
+
+        expect(registry.claimPendingDelegateRuns()).toHaveLength(2)
+
+        // ACK first request by its requestId ('session-a')
+        registry.ackDelegateRun('session-a')
+
+        // Second request must be preserved, NOT accidentally deleted!
+        let remaining = registry.claimPendingDelegateRuns()
+        expect(remaining).toHaveLength(1)
+        expect(remaining[0]?.requestId).toBe('second-request')
+        expect(remaining[0]?.sessionId).toBe('session-a')
+
+        // Duplicate ACK of first request must be strictly idempotent and NOT delete second request!
+        registry.ackDelegateRun('session-a')
+        remaining = registry.claimPendingDelegateRuns()
+        expect(remaining).toHaveLength(1)
+        expect(remaining[0]?.requestId).toBe('second-request')
+
+        // ACK second request
+        registry.ackDelegateRun('second-request')
+        expect(registry.claimPendingDelegateRuns()).toHaveLength(0)
+    })
+
+    it('removePendingDelegateRunsForSession cleans up pending runs for deleted session and blocks future delegations', () => {
+        const registry = new SessionRunRegistry(() => {})
+
+        registry.addPendingDelegateRun({
+            requestId: 'req-del-1',
+            sessionId: 'session-to-delete',
+            text: 'Prompt 1',
+        })
+        registry.addPendingDelegateRun({
+            requestId: 'req-del-2',
+            sessionId: 'session-to-delete',
+            text: 'Prompt 2',
+        })
+        registry.addPendingDelegateRun({
+            requestId: 'req-other',
+            sessionId: 'session-other',
+            text: 'Prompt other',
+        })
+
+        expect(registry.claimPendingDelegateRuns()).toHaveLength(3)
+
+        const removed = registry.removePendingDelegateRunsForSession('session-to-delete')
+        expect(removed).toBe(2)
+
+        const remaining = registry.claimPendingDelegateRuns()
+        expect(remaining).toHaveLength(1)
+        expect(remaining[0]?.requestId).toBe('req-other')
+
+        // Delegating to deleted session is rejected
+        expect(() => {
+            registry.addPendingDelegateRun({
+                requestId: 'req-new',
+                sessionId: 'session-to-delete',
+                text: 'Prompt new',
+            })
+        }).toThrow(/Cannot delegate run to deleted session/)
+    })
+
+    it('idempotently merges pending delegate run with matching userEntryId in same session even without explicit requestId', () => {
+        const registry = new SessionRunRegistry(() => {})
+
+        const id1 = registry.addPendingDelegateRun({
+            sessionId: 'session-idem',
+            userEntryId: 'user-msg-123',
+            text: 'Initial prompt text',
+        })
+
+        expect(registry.claimPendingDelegateRuns()).toHaveLength(1)
+
+        // Retry without specifying requestId, but with same userEntryId and sessionId
+        const id2 = registry.addPendingDelegateRun({
+            sessionId: 'session-idem',
+            userEntryId: 'user-msg-123',
+            text: 'Updated prompt text from retry',
+        })
+
+        expect(id2).toBe(id1)
+        const runs = registry.claimPendingDelegateRuns()
+        expect(runs).toHaveLength(1)
+        expect(runs[0]?.text).toBe('Updated prompt text from retry')
     })
 })

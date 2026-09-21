@@ -163,13 +163,19 @@ function getRendererHtmlPath(): string {
   return candidates[0]
 }
 
-function createWindow(services: AppServices): BrowserWindow {
+interface CreateWindowOptions {
+  show?: boolean
+}
+
+function createWindow(services: AppServices, options?: CreateWindowOptions): BrowserWindow {
   const displays = screen.getAllDisplays()
   const state = services.windowStateService.getState(displays)
   const appIcon = getAppIcon()
+  const shouldShow = options?.show ?? true
 
   const win = new BrowserWindow({
     title: 'Coding Professional Agent',
+    show: shouldShow,
     width: state.width,
     height: state.height,
     x: state.x,
@@ -185,13 +191,16 @@ function createWindow(services: AppServices): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      backgroundThrottling: false,
     },
   })
 
   attachMainWindowListeners(win, services)
 
-  services.windowStateService.manage(win)
-  services.windowStateService.restore(win)
+  if (shouldShow) {
+    services.windowStateService.manage(win)
+    services.windowStateService.restore(win)
+  }
 
   // Prevent external navigation in main window
   win.webContents.setWindowOpenHandler((details) => {
@@ -361,7 +370,11 @@ async function bootstrap(): Promise<void> {
         }
         if (mainWindow && !mainWindow.isDestroyed()) {
           if (mainWindow.isMinimized()) mainWindow.restore()
-          if (!mainWindow.isVisible()) mainWindow.show()
+          if (!mainWindow.isVisible()) {
+            services?.windowStateService?.manage?.(mainWindow)
+            services?.windowStateService?.restore?.(mainWindow)
+            mainWindow.show()
+          }
           mainWindow.focus()
         } else if (services) {
           mainWindow = createWindow(services)
@@ -383,6 +396,10 @@ async function bootstrap(): Promise<void> {
       },
       getAppIcon,
       getTrayService: () => services?.trayService,
+      onForegroundWindowShow: (win) => {
+        services?.windowStateService?.manage?.(win)
+        services?.windowStateService?.restore?.(win)
+      },
       getSettings: async () => {
         try {
           const appState = await services?.kvStoreService?.get('app-state')
@@ -490,7 +507,7 @@ async function bootstrap(): Promise<void> {
         })
       }
     } else {
-      // In headless mode, there is no renderer window to trigger the 3-runtime handshake.
+      // In headless mode, there is no interactive renderer window shown.
       // Directly commit the prepared main process plugin generation so services, RPCs, and WebServer start.
       const pending = coordinator.getPendingGeneration()
       if (pending) {
@@ -499,6 +516,11 @@ async function bootstrap(): Promise<void> {
         } catch (err) {
           console.error('[Headless] Failed to commit initial plugin generation:', err)
         }
+      }
+
+      // Instantiate a background headless host window (show: false) to host the Agent runtime
+      if (!mainWindow || mainWindow.isDestroyed()) {
+        mainWindow = createWindow(services, { show: false })
       }
     }
 

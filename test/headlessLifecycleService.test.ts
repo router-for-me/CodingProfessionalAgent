@@ -88,6 +88,24 @@ describe('HeadlessLifecycleService', () => {
         expect(mockTrayService.setEnabled).toHaveBeenCalledWith(true)
     })
 
+    it('calls onForegroundWindowShow callback when transitioning to foreground with an invisible window', async () => {
+        const onShowSpy = vi.fn()
+        const service = new HeadlessLifecycleService({
+            isHeadlessInitially: true,
+            getMainWindow: () => mockWindow,
+            createMainWindow: () => mockWindow,
+            getAppIcon: () => undefined,
+            getTrayService: () => mockTrayService,
+            getSettings: mockGetSettings,
+            dock: mockDock,
+            onForegroundWindowShow: onShowSpy,
+        })
+
+        await service.transitionToForeground()
+        expect(mockWindow.show).toHaveBeenCalled()
+        expect(onShowSpy).toHaveBeenCalledWith(mockWindow)
+    })
+
     it('creates main window lazily on transitionToForeground if window does not exist', async () => {
         let currentWindow: any = null
         const createSpy = vi.fn(() => {
