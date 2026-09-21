@@ -85,7 +85,17 @@ function ContextUsageRingInner({
     const targetModelId = agent?.modelId || modelId || targetSession?.modelId || activeModelId
 
     const matchedModel = catalogModels.find((m: any) => m.id === targetModelId) ?? catalogModels[0]
-    const contextWindow = matchedModel?.contextWindow || DEFAULT_CONTEXT_WINDOW
+    const isAllEnabled = currentSettings?.modelSettings?.enableAll !== false
+    const customConfig = !isAllEnabled && matchedModel?.id
+        ? currentSettings?.modelSettings?.models?.[matchedModel.id]
+        : undefined
+    const overrideContextWindow =
+        typeof customConfig?.contextWindow === 'number' &&
+        Number.isFinite(customConfig.contextWindow) &&
+        customConfig.contextWindow > 0
+            ? Math.floor(customConfig.contextWindow)
+            : undefined
+    const contextWindow = overrideContextWindow ?? matchedModel?.contextWindow ?? DEFAULT_CONTEXT_WINDOW
 
     const [entries, setEntries] = useState<readonly any[]>(() => {
         if (!targetSessionId || !services?.chatMessages) return EMPTY_ENTRIES

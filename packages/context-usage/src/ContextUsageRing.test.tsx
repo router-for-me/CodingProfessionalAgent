@@ -317,4 +317,32 @@ describe('ContextUsageRing Component', () => {
 
         mockServices.settings.getSnapshot = originalGetSnapshot
     })
+
+    it('respects manually overridden contextWindow from modelSettings in tooltip', async () => {
+        const originalGetSnapshot = mockServices.settings.getSnapshot
+        mockServices.settings.getSnapshot = () => ({
+            modelId: mockModelId,
+            compactionThresholdPercent: 95,
+            editor: { showContextUsage: true },
+            modelSettings: {
+                enableAll: false,
+                models: {
+                    [mockModelId]: {
+                        enabled: true,
+                        contextWindow: 500_000,
+                    },
+                },
+            },
+        })
+
+        render(<ContextUsageRing sessionId="s1" />)
+        const ring = screen.getByTestId('context-usage-ring')
+
+        fireEvent.mouseEnter(ring)
+        const tooltip = await screen.findByRole('tooltip')
+
+        expect(tooltip).toHaveTextContent('500,000')
+
+        mockServices.settings.getSnapshot = originalGetSnapshot
+    })
 })

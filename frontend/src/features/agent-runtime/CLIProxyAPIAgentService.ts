@@ -1130,8 +1130,22 @@ export class CLIProxyAPIAgentService implements AgentService {
             // (including while that op is still inside ensureConnectionManager).
             this.assertActiveAllowsConfig(baseUrl, apiKey)
 
-            const models = (input.models ?? (input.model ? [input.model] : [])).slice()
-            const model = input.model ?? models.find((entry) => entry.id === input.modelId)
+            const isAllEnabled = input.modelSettings?.enableAll !== false
+            const applyModelSettingsOverrides = (entry: ModelCatalogEntry): ModelCatalogEntry => {
+                const cfg = !isAllEnabled ? input.modelSettings?.models?.[entry.id] : undefined
+                if (typeof cfg?.contextWindow === 'number' && Number.isFinite(cfg.contextWindow) && cfg.contextWindow > 0) {
+                    return {
+                        ...entry,
+                        contextWindow: Math.floor(cfg.contextWindow),
+                    }
+                }
+                return entry
+            }
+
+            const models = (input.models ?? (input.model ? [input.model] : []))
+                .map(applyModelSettingsOverrides)
+            const rawFound = input.model ?? models.find((entry) => entry.id === input.modelId)
+            const model = rawFound ? applyModelSettingsOverrides(rawFound) : undefined
             if (!model) {
                 throw new AgentPreflightError(
                     'model_not_found',
@@ -1280,7 +1294,10 @@ export class CLIProxyAPIAgentService implements AgentService {
             ) as ResourceSnapshot
 
             const generationSnapshot = await this.agentProviderRegistry.createSnapshot(
-                input,
+                {
+                    ...input,
+                    models,
+                },
                 {
                     bridge: this.bridge,
                     model: modelSnapshot,

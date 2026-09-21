@@ -368,6 +368,9 @@ describe('ModelsSection', () => {
         expect(modelTtlInputs[0]).toBeInTheDocument()
         expect(modelTtlInputs[0]!.className).toContain('[appearance:textfield]')
         expect(modelTtlInputs[0]!.className).toContain('[&::-webkit-inner-spin-button]:appearance-none')
+        expect(modelTtlInputs[0]!.parentElement).toHaveTextContent('Cache TTL:')
+        expect(modelTtlInputs[0]!.parentElement).toHaveTextContent('s')
+        expect(modelTtlInputs[0]!.parentElement?.textContent).not.toContain('(s)')
 
         fireEvent.change(modelTtlInputs[0]!, { target: { value: '250' } })
 
@@ -382,5 +385,112 @@ describe('ModelsSection', () => {
                 }),
             }),
         )
+    })
+
+    it('ensures TTL input height matches reasoning level button height exactly', () => {
+        mockSettings.modelSettings.enableAll = false
+
+        renderWithServices(<ModelsSection />)
+
+        const ttlInput = screen.getAllByLabelText(/Cache TTL/i)[0]!
+        const reasoningButton = screen.getAllByRole('checkbox', { name: /Medium/i })[0]!
+
+        expect(ttlInput.className).toContain('h-[26px]')
+        expect(reasoningButton.className).toContain('h-[26px]')
+    })
+
+    it('renders reasoning levels, TTL, and context inputs on separate rows', () => {
+        mockSettings.modelSettings.enableAll = false
+
+        renderWithServices(<ModelsSection />)
+
+        const ttlInput = screen.getAllByLabelText(/Cache TTL/i)[0]!
+        const reasoningButton = screen.getAllByRole('checkbox', { name: /Medium/i })[0]!
+        const contextInput = screen.getAllByLabelText(/Max Context/i)[0]!
+
+        // Reasoning, TTL, and Context inputs must be in distinct row containers
+        const reasoningRowContainer = reasoningButton.parentElement!
+        const ttlRowContainer = ttlInput.parentElement!
+        const contextRowContainer = contextInput.parentElement!
+
+        expect(reasoningRowContainer).not.toBe(ttlRowContainer)
+        expect(ttlRowContainer).not.toBe(contextRowContainer)
+        expect(reasoningRowContainer).not.toBe(contextRowContainer)
+
+        expect(reasoningRowContainer.contains(ttlInput)).toBe(false)
+        expect(reasoningRowContainer.contains(contextInput)).toBe(false)
+        expect(ttlRowContainer.contains(reasoningButton)).toBe(false)
+        expect(ttlRowContainer.contains(contextInput)).toBe(false)
+        expect(contextRowContainer.contains(ttlInput)).toBe(false)
+        expect(contextRowContainer.contains(reasoningButton)).toBe(false)
+    })
+
+    it('renders per-model max context window input with default placeholder and allows manual override', () => {
+        mockSettings.modelSettings.enableAll = false
+
+        renderWithServices(<ModelsSection />)
+
+        const contextInputs = screen.getAllByLabelText(/Max Context/i)
+        expect(contextInputs.length).toBeGreaterThan(0)
+        const proContextInput = contextInputs[0]!
+        expect(proContextInput).toBeInTheDocument()
+        expect(proContextInput).toHaveAttribute('placeholder', '128000')
+        expect(proContextInput).toHaveValue(null)
+        expect(proContextInput.className).toContain('h-[26px]')
+        expect(proContextInput.className).toContain('[appearance:textfield]')
+        expect(proContextInput.className).toContain('[&::-webkit-inner-spin-button]:appearance-none')
+
+        // Manual override
+        fireEvent.change(proContextInput, { target: { value: '256000' } })
+
+        expect(mockSettingsService.update).toHaveBeenCalledWith(
+            expect.objectContaining({
+                modelSettings: expect.objectContaining({
+                    models: expect.objectContaining({
+                        'test-model-pro': expect.objectContaining({
+                            contextWindow: 256000,
+                        }),
+                    }),
+                }),
+            }),
+        )
+    })
+
+    it('clears manual override to restore default when context input is emptied', () => {
+        mockSettings.modelSettings.enableAll = false
+        mockSettings.modelSettings.models = {
+            'test-model-pro': { contextWindow: 256000 },
+        }
+
+        renderWithServices(<ModelsSection />)
+
+        const proContextInput = screen.getAllByLabelText(/Max Context/i)[0]!
+        expect(proContextInput).toHaveValue(256000)
+
+        fireEvent.change(proContextInput, { target: { value: '' } })
+
+        expect(mockSettingsService.update).toHaveBeenCalledWith(
+            expect.objectContaining({
+                modelSettings: expect.objectContaining({
+                    models: expect.objectContaining({
+                        'test-model-pro': expect.objectContaining({
+                            contextWindow: undefined,
+                        }),
+                    }),
+                }),
+            }),
+        )
+    })
+
+    it('disables max context input when model is toggled off', () => {
+        mockSettings.modelSettings.enableAll = false
+        mockSettings.modelSettings.models = {
+            'test-model-pro': { enabled: false },
+        }
+
+        renderWithServices(<ModelsSection />)
+
+        const contextInputs = screen.getAllByLabelText(/Max Context/i)
+        expect(contextInputs[0]).toBeDisabled()
     })
 })

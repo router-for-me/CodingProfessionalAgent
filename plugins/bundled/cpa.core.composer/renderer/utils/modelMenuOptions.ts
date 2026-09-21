@@ -126,9 +126,25 @@ export function filterCatalogModels(
     modelSettings?: any,
 ): readonly ModelCatalogEntry[] {
     if (!modelSettings?.models) return models
-    const configured = models.filter((m) => {
-        const config = modelSettings.models[m.id]
-        return config ? config.enabled !== false : true
-    })
+    const isAllEnabled = modelSettings.enableAll !== false
+    const configured = models
+        .filter((m) => {
+            if (isAllEnabled) return true
+            const config = modelSettings.models[m.id]
+            return config ? config.enabled !== false : true
+        })
+        .map((m) => {
+            if (isAllEnabled) return m
+            const config = modelSettings.models[m.id]
+            if (
+                config &&
+                typeof config.contextWindow === 'number' &&
+                Number.isFinite(config.contextWindow) &&
+                config.contextWindow > 0
+            ) {
+                return { ...m, contextWindow: Math.floor(config.contextWindow) }
+            }
+            return m
+        })
     return configured.length > 0 ? configured : models
 }

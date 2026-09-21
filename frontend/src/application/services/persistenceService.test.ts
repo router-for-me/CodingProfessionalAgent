@@ -4529,6 +4529,7 @@ describe('persist pure helpers', () => {
             enabled: true,
             enabledReasoningLevels: ['low', 'high'],
             ttl: 250,
+            contextWindow: 300000,
           },
         },
       })
@@ -4548,6 +4549,7 @@ describe('persist pure helpers', () => {
             enabled: true,
             enabledReasoningLevels: ['low', 'high'],
             ttl: 250,
+            contextWindow: 300000,
           },
         },
         modelOrder: [],

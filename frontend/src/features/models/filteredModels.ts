@@ -140,6 +140,13 @@ export function getFilteredModels(
             return []
         }
 
+        const effectiveContextWindow =
+            typeof config?.contextWindow === 'number' &&
+            Number.isFinite(config.contextWindow) &&
+            config.contextWindow > 0
+                ? Math.floor(config.contextWindow)
+                : model.contextWindow
+
         if (config && Array.isArray(config.enabledReasoningLevels)) {
             const enabledSet = new Set(config.enabledReasoningLevels)
             const filteredReasoning = model.reasoningLevels.filter((level) =>
@@ -147,7 +154,15 @@ export function getFilteredModels(
             )
             return [{
                 ...model,
+                contextWindow: effectiveContextWindow,
                 reasoningLevels: filteredReasoning,
+            }]
+        }
+
+        if (effectiveContextWindow !== model.contextWindow) {
+            return [{
+                ...model,
+                contextWindow: effectiveContextWindow,
             }]
         }
 

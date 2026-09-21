@@ -302,6 +302,22 @@ export function ModelsSection() {
         [updateModelSettings],
     )
 
+    const setModelContextWindow = useCallback(
+        (modelId: string, contextWindow: number | undefined) => {
+            updateModelSettings((prev) => ({
+                ...prev,
+                models: {
+                    ...prev.models,
+                    [modelId]: {
+                        ...prev.models?.[modelId],
+                        contextWindow,
+                    },
+                },
+            }))
+        },
+        [updateModelSettings],
+    )
+
     return (
         <div className="mx-auto w-full max-w-[760px] space-y-6 px-8 pt-8 pb-12">
             <h1 className="text-[22px] font-semibold tracking-tight text-[var(--text-primary)]">
@@ -453,6 +469,7 @@ export function ModelsSection() {
                                         enabledLevels={enabledLevels}
                                         modelTtl={modelConfig?.ttl}
                                         defaultTtl={defaultTtl}
+                                        modelContextWindow={modelConfig?.contextWindow}
                                         allReasoningIds={allReasoningIds}
                                         last={isLast}
                                         draggable={!searchQuery.trim()}
@@ -472,6 +489,9 @@ export function ModelsSection() {
                                             )
                                         }
                                         onUpdateTtl={(ttl) => setModelTtl(model.id, ttl)}
+                                        onUpdateContextWindow={(contextWindow) =>
+                                            setModelContextWindow(model.id, contextWindow)
+                                        }
                                     />
                                 )
                             })
@@ -574,6 +594,7 @@ interface ModelSettingRowProps {
     enabledLevels: string[] | undefined
     modelTtl: number | undefined
     defaultTtl: number
+    modelContextWindow: number | undefined
     allReasoningIds: readonly string[]
     last: boolean
     draggable?: boolean
@@ -586,6 +607,7 @@ interface ModelSettingRowProps {
     onToggleModel: (enabled: boolean) => void
     onToggleReasoningLevel: (levelId: string, enabled: boolean) => void
     onUpdateTtl: (ttl: number | undefined) => void
+    onUpdateContextWindow: (contextWindow: number | undefined) => void
 }
 
 function ModelSettingRow({
@@ -594,6 +616,7 @@ function ModelSettingRow({
     enabledLevels,
     modelTtl,
     defaultTtl,
+    modelContextWindow,
     last,
     draggable = true,
     isDragging = false,
@@ -605,6 +628,7 @@ function ModelSettingRow({
     onToggleModel,
     onToggleReasoningLevel,
     onUpdateTtl,
+    onUpdateContextWindow,
 }: ModelSettingRowProps) {
     const { t } = useTranslation()
 
@@ -660,7 +684,7 @@ function ModelSettingRow({
                     </div>
                 ) : null}
 
-                <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                <div className="mt-2.5 space-y-2">
                     <div className="flex flex-wrap items-center gap-1.5">
                         <span className="text-[11px] font-medium text-[var(--text-secondary)]">
                             {t('settings.models.reasoningLevels', { defaultValue: 'Reasoning Effort' })}:
@@ -677,7 +701,7 @@ function ModelSettingRow({
                                         disabled={!isModelEnabled}
                                         onClick={() => onToggleReasoningLevel(option.id, !isChecked)}
                                         className={cn(
-                                            'inline-flex items-center rounded-md border px-2 py-1 text-[11px] font-medium transition-all select-none',
+                                            'inline-flex h-[26px] items-center rounded-md border px-2 py-1 text-[11px] font-medium transition-all select-none',
                                             !isModelEnabled
                                                 ? 'cursor-not-allowed border-[var(--border-subtle)] bg-[var(--bg-sidebar-hover)] text-[var(--text-muted)] opacity-50'
                                                 : isChecked
@@ -700,7 +724,7 @@ function ModelSettingRow({
 
                     <div className="flex items-center gap-1.5">
                         <span className="text-[11px] font-medium text-[var(--text-secondary)]">
-                            {t('settings.models.ttl', { defaultValue: 'Cache TTL (s)' })}:
+                            {t('settings.models.ttl', { defaultValue: 'Cache TTL' })}:
                         </span>
                         <input
                             type="number"
@@ -725,8 +749,48 @@ function ModelSettingRow({
                                 name: model.label,
                             })}
                             className={cn(
-                                'w-20 rounded border border-[var(--border-subtle)]',
-                                'bg-[var(--bg-card)] px-2 py-0.5 text-[11px] text-right',
+                                'h-[26px] w-20 rounded-md border border-[var(--border-subtle)]',
+                                'bg-[var(--bg-card)] px-2 py-1 text-[11px] text-right',
+                                'text-[var(--text-primary)] placeholder:text-[var(--text-muted)] outline-none',
+                                'focus-visible:ring-1 focus-visible:ring-[var(--accent-blue)]/40',
+                                !isModelEnabled && 'opacity-50 cursor-not-allowed',
+                                '[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none',
+                            )}
+                        />
+                        <span className="text-[11px] text-[var(--text-muted)]">
+                            {t('settings.models.defaultTtl.unit', { defaultValue: 's' })}
+                        </span>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                        <span className="text-[11px] font-medium text-[var(--text-secondary)]">
+                            {t('settings.models.contextWindow', { defaultValue: 'Max Context' })}:
+                        </span>
+                        <input
+                            type="number"
+                            min={1000}
+                            step={1000}
+                            disabled={!isModelEnabled}
+                            placeholder={String(model.contextWindow ?? 128_000)}
+                            value={modelContextWindow !== undefined ? modelContextWindow : ''}
+                            onChange={(e) => {
+                                const val = e.target.value.trim()
+                                if (!val) {
+                                    onUpdateContextWindow(undefined)
+                                } else {
+                                    const num = parseInt(val, 10)
+                                    if (Number.isFinite(num) && num > 0) {
+                                        onUpdateContextWindow(num)
+                                    }
+                                }
+                            }}
+                            aria-label={t('settings.models.modelContextWindow', {
+                                defaultValue: `${model.label} Max Context`,
+                                name: model.label,
+                            })}
+                            className={cn(
+                                'h-[26px] w-24 rounded-md border border-[var(--border-subtle)]',
+                                'bg-[var(--bg-card)] px-2 py-1 text-[11px] text-right',
                                 'text-[var(--text-primary)] placeholder:text-[var(--text-muted)] outline-none',
                                 'focus-visible:ring-1 focus-visible:ring-[var(--accent-blue)]/40',
                                 !isModelEnabled && 'opacity-50 cursor-not-allowed',

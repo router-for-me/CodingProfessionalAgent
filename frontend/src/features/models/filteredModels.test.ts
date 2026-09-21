@@ -140,4 +140,29 @@ describe('filteredModels', () => {
             'high',
         ])
     })
+
+    it('overrides contextWindow when enableAll is false and model has custom contextWindow', () => {
+        const result = getFilteredModels(mockModels, {
+            enableAll: false,
+            models: {
+                'model-a': { enabled: true, contextWindow: 256000 },
+                'model-b': { enabled: true },
+            },
+        })
+        const modelA = result.find((m) => m.id === 'model-a')
+        const modelB = result.find((m) => m.id === 'model-b')
+        expect(modelA?.contextWindow).toBe(256000)
+        expect(modelB?.contextWindow).toBe(128000)
+    })
+
+    it('does not override contextWindow when enableAll is true', () => {
+        const result = getFilteredModels(mockModels, {
+            enableAll: true,
+            models: {
+                'model-a': { enabled: true, contextWindow: 256000 },
+            },
+        })
+        const modelA = result.find((m) => m.id === 'model-a')
+        expect(modelA?.contextWindow).toBe(128000)
+    })
 })

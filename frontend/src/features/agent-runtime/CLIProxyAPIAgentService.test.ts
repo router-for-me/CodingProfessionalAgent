@@ -518,6 +518,56 @@ function createWorktreePrepareInput(
             ).rejects.toMatchObject({ code: 'invalid_reasoning' })
         })
 
+        it('applies modelSettings custom contextWindow override to prepared model and generation snapshot when enableAll is false', async () => {
+            const { service } = createService()
+            const prepared = await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'key',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'high',
+                speed: 'standard',
+                requestApproval: false,
+                modelSettings: {
+                    enableAll: false,
+                    models: {
+                        [modelBase.id]: {
+                            enabled: true,
+                            contextWindow: 500_000,
+                        },
+                    },
+                },
+            })
+            expect(prepared.model.contextWindow).toBe(500_000)
+            expect(prepared.models?.[0]?.contextWindow).toBe(500_000)
+            expect(prepared.generationSnapshot?.models[0]?.contextWindow).toBe(500_000)
+        })
+
+        it('does not override contextWindow when enableAll is true', async () => {
+            const { service } = createService()
+            const prepared = await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'key',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'high',
+                speed: 'standard',
+                requestApproval: false,
+                modelSettings: {
+                    enableAll: true,
+                    models: {
+                        [modelBase.id]: {
+                            enabled: true,
+                            contextWindow: 500_000,
+                        },
+                    },
+                },
+            })
+            expect(prepared.model.contextWindow).toBe(modelBase.contextWindow)
+            expect(prepared.models?.[0]?.contextWindow).toBe(modelBase.contextWindow)
+            expect(prepared.generationSnapshot?.models[0]?.contextWindow).toBe(modelBase.contextWindow)
+        })
+
         it('downgrades fast when model.supportsFast is false silently without diagnostic warning', async () => {
             const { service } = createService()
             const prepared = await service.prepare({

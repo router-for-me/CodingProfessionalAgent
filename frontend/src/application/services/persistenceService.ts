@@ -483,6 +483,10 @@ function sanitizeModelSettings(value: unknown): ModelSettingsConfig {
             typeof item.ttl === 'number' && Number.isFinite(item.ttl) && item.ttl > 0
               ? Math.floor(item.ttl)
               : undefined,
+          contextWindow:
+            typeof item.contextWindow === 'number' && Number.isFinite(item.contextWindow) && item.contextWindow > 0
+              ? Math.floor(item.contextWindow)
+              : undefined,
         }
       }
     }

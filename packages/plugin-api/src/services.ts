@@ -233,6 +233,7 @@ export interface ModelCustomConfig {
   enabled: boolean
   enabledReasoningLevels?: string[]
   ttl?: number
+  contextWindow?: number
 }
 
 export interface ModelSettingsConfig {
