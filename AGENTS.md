@@ -76,6 +76,7 @@ Electron Preload & Main (src/main, src/preload)
     - **Fixed Transport Protocol**: Preload only exposes `HostCapabilityTransport` (`invoke`, `subscribe`). No arbitrary IPC channels, no global platform tokens, and no direct Electron bridge.
     - **Zero Direct Native / Window Access**: Plugins MUST NOT access `window.electronBridge`, `window.cpa`, `ipcRenderer`, or Node.js built-ins in renderer. All system interactions go through `context.getCapability<T>(capabilityId)` or scoped `CapabilityClient`.
     - **Browser Transport Parity**: Capabilities seamlessly route over WebSocket/Web transport in browser mode, maintaining identical security contracts.
+    - **Web/Desktop Feature Parity**: Except for Web-specific settings functionality, every feature MUST be designed and implemented so that the Web version remains functionally and behaviorally aligned with the desktop version, including UX, state synchronization, and feature availability.
   - **Multi-Source Discovery & Catalog Generation**:
     - Four plugin sources in strict priority order: Global Config > Global Directory (`~/.coding-professional-agent/plugins/`) > Managed NPM (verified lockfile) > Bundled (`plugins/bundled/`).
     - **Catalog Generation**: When adding or updating bundled plugin manifests, run `node scripts/generate-bundled-plugin-catalog.mjs` (or `pnpm build`) to update `bundledPluginLoaders.ts` in both `src/main/plugins/generated/` and `frontend/src/plugins/generated/`. Host code must never manually maintain bundled plugin lists.

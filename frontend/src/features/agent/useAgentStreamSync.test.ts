@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { UserEntry } from '@cpa/plugin-api'
+import type { SubAgentRecord, UserEntry } from '@cpa/plugin-api'
 import type { ModelCatalogEntry } from '@/features/models/types'
 import type { AgentRunEvent } from '@/features/agent-runtime/agent/types'
 import type { AgentService } from './AgentService'
@@ -242,6 +242,7 @@ describe('useAgentStreamSync', () => {
     let nativeEventListeners: Array<(event: any) => void>
     let broadcastRunStatusMock: any
     let broadcastStreamEventMock: any
+    let broadcastSubAgentStateMock: any
     let abortRunMock: any
     let delegateRunMock: any
 
@@ -259,12 +260,14 @@ describe('useAgentStreamSync', () => {
         nativeEventListeners = []
         broadcastRunStatusMock = vi.fn().mockResolvedValue(undefined)
         broadcastStreamEventMock = vi.fn().mockResolvedValue(undefined)
+        broadcastSubAgentStateMock = vi.fn().mockResolvedValue(undefined)
         abortRunMock = vi.fn().mockResolvedValue(undefined)
         delegateRunMock = vi.fn().mockResolvedValue('ok')
 
         setHostBridge({
             SessionBroadcastRunStatus: broadcastRunStatusMock,
             SessionBroadcastStreamEvent: broadcastStreamEventMock,
+            SessionBroadcastSubAgentState: broadcastSubAgentStateMock,
             SessionAbortRun: abortRunMock,
             SessionDelegateRun: delegateRunMock,
             SessionClaimPendingDelegateRuns: vi.fn().mockResolvedValue([]),
@@ -744,6 +747,61 @@ describe('useAgentStreamSync', () => {
         const afterEntries = useMessageStore.getState().getEntries(createdSessionId!)
         expect(afterEntries.length).toBe(initialCount)
         expect(afterEntries.some((e) => e.id === 'duplicate-entry')).toBe(false)
+    })
+
+    it('broadcasts hosted subagents by their parent session without a desktop selection', () => {
+        let subAgentListener: {
+            onStateChange: (agents: readonly SubAgentRecord[]) => void
+        } | undefined
+        ;(service as FakeSyncService & { subAgents: any }).subAgents = {
+            hydrate: vi.fn(),
+            subscribe: vi.fn((listener) => {
+                subAgentListener = listener
+                listener.onStateChange([])
+                return () => {}
+            }),
+        }
+
+        renderHook(() => useAgentStream(), {
+            wrapper: createWrapper(service),
+        })
+
+        const firstAgent: SubAgentRecord = {
+            id: 'web-child-a',
+            sessionId: 'web-child-a',
+            parentSessionId: 'web-parent-a',
+            name: 'Web child A',
+            status: 'running',
+            icon: 'sparkle',
+            color: '#7c3aed',
+            modelId: 'test-model',
+            createdAt: 1,
+            updatedAt: 1,
+        }
+        const secondAgent: SubAgentRecord = {
+            ...firstAgent,
+            id: 'web-child-b',
+            sessionId: 'web-child-b',
+            parentSessionId: 'web-parent-b',
+            name: 'Web child B',
+        }
+
+        act(() => {
+            subAgentListener?.onStateChange([firstAgent, secondAgent])
+        })
+
+        expect(useSessionStore.getState().currentSessionId).toBeNull()
+        expect(broadcastSubAgentStateMock).toHaveBeenCalledTimes(2)
+        expect(broadcastSubAgentStateMock).toHaveBeenNthCalledWith(
+            1,
+            'web-parent-a',
+            [firstAgent],
+        )
+        expect(broadcastSubAgentStateMock).toHaveBeenNthCalledWith(
+            2,
+            'web-parent-b',
+            [secondAgent],
+        )
     })
 
     it('prevents self-echo for locally hosted subagent runs', () => {

@@ -580,13 +580,24 @@ function bindSubAgentHost(service: AgentService): void {
                     }
                 }
             }
-            const parentSessionId = useSessionStore.getState().currentSessionId
             const bridge = getHostBridge()
-            if (parentSessionId && bridge?.SessionBroadcastSubAgentState) {
-                void bridge.SessionBroadcastSubAgentState(
+            if (bridge?.SessionBroadcastSubAgentState) {
+                const agentsByParentSession = new Map<string, SubAgentRecord[]>()
+                for (const agent of agents) {
+                    const parentAgents =
+                        agentsByParentSession.get(agent.parentSessionId) ?? []
+                    parentAgents.push(agent)
+                    agentsByParentSession.set(agent.parentSessionId, parentAgents)
+                }
+                for (const [
                     parentSessionId,
-                    agents as unknown[],
-                )
+                    parentAgents,
+                ] of agentsByParentSession) {
+                    void bridge.SessionBroadcastSubAgentState(
+                        parentSessionId,
+                        parentAgents as unknown[],
+                    )
+                }
             }
             if (bridge?.SessionUpdateSubAgent) {
                 for (const agent of agents) {
