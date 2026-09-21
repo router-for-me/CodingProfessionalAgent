@@ -6,6 +6,25 @@
     <link rel="apple-touch-icon" href="./icon-128.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>Coding Professional Agent</title>
+    <script>
+      // Defend against Chromium 152 DevTools Live Metrics injected script bug (Chromium Issue 543499029, web-vitals Issue #792)
+      window.addEventListener('error', function (event) {
+        if (
+          event &&
+          event.message &&
+          event.message.indexOf('startTime') !== -1 &&
+          ((event.error && event.error.stack && event.error.stack.indexOf('reportAllChanges') !== -1) ||
+            !event.filename ||
+            event.filename.indexOf('VM') !== -1 ||
+            event.filename === '<anonymous>')
+        ) {
+          event.preventDefault();
+          if (typeof event.stopImmediatePropagation === 'function') {
+            event.stopImmediatePropagation();
+          }
+        }
+      }, true);
+    </script>
     <style>
       /* Startup splash screen styles for immediate first paint without blank screen */
       html,

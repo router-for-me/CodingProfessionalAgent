@@ -9,9 +9,12 @@ import { initReactGrab } from './lib/reactGrab'
 import { observeReactPerformanceMeasures } from './lib/reactPerformanceMeasures'
 import { initMacScrollbars } from './lib/macScrollbar'
 import { initWindowAnimationState } from './lib/windowAnimationState'
+import { initInjectedErrorGuard } from './lib/injectedErrorGuard'
 import { waitForWebAuthentication } from './features/web-auth/WebAuthGate'
 import './styles/app.css'
 import type { Root } from 'react-dom/client'
+
+initInjectedErrorGuard()
 
 if (import.meta.env.DEV) {
     const stopObservingReactMeasures = observeReactPerformanceMeasures()
