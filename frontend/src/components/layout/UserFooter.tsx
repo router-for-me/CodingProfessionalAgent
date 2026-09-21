@@ -265,7 +265,6 @@ function DevControls({ isWeb }: { isWeb?: boolean }) {
 
   return (
     <>
-      {profilingButton}
       <button
         type="button"
         aria-label={
@@ -299,6 +298,7 @@ function DevControls({ isWeb }: { isWeb?: boolean }) {
           )}
         />
       </button>
+      {profilingButton}
     </>
   )
 }
@@ -328,7 +328,8 @@ export function UserFooter() {
   return (
     <>
       <ResumePromptBanner />
-      <div className="relative flex shrink-0 items-center justify-start gap-1 border-t border-[var(--border-subtle)] px-2.5 py-2">
+      <div className="relative flex shrink-0 items-center justify-end gap-1 border-t border-[var(--border-subtle)] px-2.5 py-2">
+        {isDev && <DevControls isWeb={isWeb} />}
         <button
           type="button"
           aria-label={t('settings.title')}
@@ -338,7 +339,6 @@ export function UserFooter() {
         >
           <Settings className="size-4" />
         </button>
-        {isDev && <DevControls isWeb={isWeb} />}
       </div>
     </>
   )
