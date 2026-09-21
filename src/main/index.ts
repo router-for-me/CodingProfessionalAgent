@@ -256,6 +256,7 @@ async function bootstrap(): Promise<void> {
   }
 
   let pendingForegroundActivation = false
+  let pendingHeadlessActivation = false
   let isAppReadyForWindows = false
 
   app.on('second-instance', (_event, commandLine) => {
@@ -263,6 +264,11 @@ async function bootstrap(): Promise<void> {
     const secondArgs = parseCommandLineArgs(commandLine, {})
     if (secondArgs.isHeadless) {
       console.log('[CPA] Second instance invoked with --headless; primary instance remains running in background.')
+      if (isAppReadyForWindows && lifecycleService) {
+        void lifecycleService.ensureWebServerRunning?.()
+      } else {
+        pendingHeadlessActivation = true
+      }
       return
     }
     if (isAppReadyForWindows && lifecycleService) {
@@ -362,7 +368,15 @@ async function bootstrap(): Promise<void> {
         try {
           const currentStatus = services.webServerService.getStatus()
           if (!currentStatus.running) {
-            const appState = services.kvStoreService?.getSync?.('app-state')
+            await coordinator.whenCommitted()
+            const appState =
+              services.kvStoreService?.getSync?.('app-state') ??
+              (await services.kvStoreService?.get?.('app-state'))
+            const loadError = (services.kvStoreService as any)?.getLoadError?.()
+            if (loadError) {
+              console.error('[Headless] Refusing to start Web Server because settings failed to load:', loadError)
+              return
+            }
             const plan = resolveWebServerStartupPlan(appState, isDev, {
               isHeadless: true,
               cliPort: cliArgs.port,
@@ -419,10 +433,7 @@ async function bootstrap(): Promise<void> {
 
     isAppReadyForWindows = true
 
-    if (pendingForegroundActivation) {
-      pendingForegroundActivation = false
-      void lifecycleService.transitionToForeground()
-    } else if (!lifecycleService.isHeadless()) {
+    if (!lifecycleService.isHeadless()) {
       if (!mainWindow || mainWindow.isDestroyed()) {
         mainWindow = createWindow(services)
 
@@ -433,6 +444,27 @@ async function bootstrap(): Promise<void> {
           } catch {}
         })
       }
+    } else {
+      // In headless mode, there is no renderer window to trigger the 3-runtime handshake.
+      // Directly commit the prepared main process plugin generation so services, RPCs, and WebServer start.
+      const pending = coordinator.getPendingGeneration()
+      if (pending) {
+        try {
+          await coordinator.commitPrepared(pending.revision, pending.generation)
+        } catch (err) {
+          console.error('[Headless] Failed to commit initial plugin generation:', err)
+        }
+      }
+    }
+
+    // Process any second-instance activations queued during early startup
+    if (pendingForegroundActivation) {
+      pendingForegroundActivation = false
+      void lifecycleService.transitionToForeground()
+    }
+    if (pendingHeadlessActivation) {
+      pendingHeadlessActivation = false
+      void lifecycleService.ensureWebServerRunning?.()
     }
 
     // Schedule 5-second health confirmation heartbeat fallback
@@ -453,6 +485,11 @@ async function bootstrap(): Promise<void> {
       try {
         const kv = services.kvStoreService
         const appState = kv ? await kv.get('app-state') : undefined
+        const loadError = (services.kvStoreService as any)?.getLoadError?.()
+        if (loadError) {
+          console.error('[WebServer] Refusing to start Web Server because settings failed to load:', loadError)
+          return
+        }
         if (appState?.settings && typeof appState.settings.preventSleep === 'boolean') {
           services.powerSaveService.setPreventSleepEnabled(appState.settings.preventSleep, true)
         }
@@ -477,25 +514,20 @@ async function bootstrap(): Promise<void> {
             console.error('[Headless] Web server start error:', err)
           })
         }
-      } catch {
+      } catch (err) {
+        console.error('[WebServer] Failed to initialize Web Server configuration:', err)
         if (!services) return
-        const fallbackConfig = resolveWebServerFallbackPlan(isDev, {
-          isHeadless: lifecycleService?.isHeadless(),
-          cliPort: cliArgs.port,
-          cliHost: cliArgs.host,
-        })
-        if (fallbackConfig) {
-          void services.webServerService.start(fallbackConfig).then((status) => {
-            if (status.running) {
-              if (lifecycleService?.isHeadless()) {
-                console.log(`[Headless] Web server listening at http://${status.host}:${status.port}`)
+        if (isDev) {
+          const fallbackConfig = resolveWebServerFallbackPlan(isDev)
+          if (fallbackConfig) {
+            void services.webServerService.start(fallbackConfig).then((status) => {
+              if (status.running && lifecycleService?.isHeadless()) {
+                console.log(`[Headless] Web server dev fallback listening at http://${status.host}:${status.port}`)
               }
-            } else {
-              console.error(`[Headless] Web server fallback failed to start on port ${status.port}: ${status.error ?? 'Unknown error'}`)
-            }
-          }).catch((err) => {
-            console.error('[Headless] Web server fallback start error:', err)
-          })
+            }).catch((fallbackErr) => {
+              console.error('[Headless] Web server dev fallback start error:', fallbackErr)
+            })
+          }
         }
       }
     }

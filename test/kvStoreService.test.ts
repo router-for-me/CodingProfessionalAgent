@@ -368,4 +368,13 @@ describe('KVStoreService', () => {
     const reloaded2 = new KVStoreService(storeFile)
     expect(reloaded2.getSync('async-key')).toEqual({ saved: true })
   })
+
+  it('records getLoadError when settings.json is corrupted and resets data', async () => {
+    const corruptFile = path.join(tempDir, 'corrupt-settings.json')
+    await fs.writeFile(corruptFile, '{ invalid json: corrupt')
+    const corruptService = new KVStoreService(corruptFile)
+    expect(await corruptService.get('anyKey')).toBeUndefined()
+    expect(corruptService.getLoadError()).toBeDefined()
+    corruptService.dispose()
+  })
 })

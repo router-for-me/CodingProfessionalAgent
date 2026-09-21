@@ -82,9 +82,10 @@ async function run() {
 
 function startElectron(url, viteProc) {
   console.log('[dev] Launching Electron...')
+  const forwardArgs = process.argv.slice(2)
   const electron = spawn(
     'pnpm',
-    ['exec', 'electron', 'dist-electron/src/main/index.js'],
+    ['exec', 'electron', 'dist-electron/src/main/index.js', ...forwardArgs],
     {
       cwd: rootDir,
       env: {

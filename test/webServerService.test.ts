@@ -96,6 +96,61 @@ describe('WebServerService', () => {
     expect(stopStatus.running).toBe(false)
   })
 
+  it('deduplicates concurrent start() calls using startInFlight', async () => {
+    const [status1, status2] = await Promise.all([
+      service.start({ host: '127.0.0.1', port: 0 }),
+      service.start({ host: '127.0.0.1', port: 0 }),
+    ])
+    expect(status1.running).toBe(true)
+    expect(status2.running).toBe(true)
+    expect(status1.port).toBe(status2.port)
+
+    await service.stop()
+  })
+
+  it('deduplicates concurrent start() calls during restart when stopping previous server', async () => {
+    const initialStatus = await service.start({ host: '127.0.0.1', port: 0 })
+    expect(initialStatus.running).toBe(true)
+
+    // Concurrent restarts requesting different port or config
+    const [status1, status2] = await Promise.all([
+      service.start({ host: '127.0.0.1', port: 0 }),
+      service.start({ host: '127.0.0.1', port: 0 }),
+    ])
+    expect(status1.running).toBe(true)
+    expect(status2.running).toBe(true)
+    expect(status1.port).toBe(status2.port)
+
+    await service.stop()
+  })
+
+  it('serializes concurrent start() calls with different configs without mixing password or host', async () => {
+    const [status1, status2] = await Promise.all([
+      service.start({ host: '127.0.0.1', port: 0, password: 'pass1' }),
+      service.start({ host: '127.0.0.1', port: 0, password: 'pass2' }),
+    ])
+    expect(status1.running).toBe(true)
+    expect(status2.running).toBe(true)
+
+    // The final active server has pass2 active, and pass1 is rejected
+    const finalPort = service.getStatus().port
+    const checkPass1 = await fetch(`http://127.0.0.1:${finalPort}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: 'pass1' }),
+    })
+    expect(checkPass1.status).toBe(401)
+
+    const checkPass2 = await fetch(`http://127.0.0.1:${finalPort}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: 'pass2' }),
+    })
+    expect(checkPass2.status).toBe(200)
+
+    await service.stop()
+  })
+
   it('serves static files and SPA fallback index.html', async () => {
     const status = await service.start({ host: '127.0.0.1', port: 0 })
     const port = status.port

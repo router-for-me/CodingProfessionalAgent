@@ -32,7 +32,7 @@ describe('HeadlessLifecycleService', () => {
         })
     })
 
-    it('initializes in HEADLESS mode when isHeadlessInitially is true', () => {
+    it('initializes in HEADLESS mode when isHeadlessInitially is true and hides dock on applyInitialPlatformState', () => {
         const service = new HeadlessLifecycleService({
             isHeadlessInitially: true,
             cliPort: 18888,
@@ -51,6 +51,22 @@ describe('HeadlessLifecycleService', () => {
 
         service.applyInitialPlatformState()
         expect(mockDock.hide).toHaveBeenCalled()
+    })
+
+    it('initializes in FOREGROUND mode and applyInitialPlatformState does not trigger dock hide', () => {
+        const service = new HeadlessLifecycleService({
+            isHeadlessInitially: false,
+            getMainWindow: () => mockWindow,
+            createMainWindow: () => mockWindow,
+            getAppIcon: () => undefined,
+            getTrayService: () => mockTrayService,
+            getSettings: mockGetSettings,
+            dock: mockDock,
+        })
+
+        expect(service.isHeadless()).toBe(false)
+        service.applyInitialPlatformState()
+        expect(mockDock.hide).not.toHaveBeenCalled()
     })
 
     it('transitions to foreground and restores window and tray', async () => {

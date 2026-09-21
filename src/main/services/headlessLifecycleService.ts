@@ -50,7 +50,7 @@ export class HeadlessLifecycleService {
         headlessCloseAction?: 'continue_headless' | 'quit'
         showInMenuBar?: boolean
     } | undefined
-    private readonly ensureWebServerRunning?: () => Promise<void>
+    readonly ensureWebServerRunning?: () => Promise<void>
     private readonly dock: DockAdapter | null
 
     constructor(options: HeadlessLifecycleOptions) {

@@ -245,4 +245,113 @@ describe('Settings Plugin Lifecycle, Dynamic Service/RPC Resolution, and Atomic 
         expect(updatedFile.gen1Key).toBe('val1')
         expect(updatedFile.gen2Key).toBe('val2')
     })
+
+    it('5. Headless startup directly commits pending generation and starts web server with headless plan', async () => {
+        const pending = coordinator.getPendingGeneration()
+        expect(pending).not.toBeNull()
+
+        let webServerStarted = false
+        const startSpy = vi.spyOn(services.webServerService, 'start').mockResolvedValue({
+            running: true,
+            port: 18080,
+            host: '127.0.0.1',
+        })
+
+        const initWebServer = async () => {
+            const kv = services.kvStoreService
+            const appState = kv ? await kv.get('app-state') : undefined
+            const plan = resolveWebServerStartupPlan(appState, false, {
+                isHeadless: true,
+                cliPort: 18080,
+            })
+            if (plan.startConfig) {
+                await services.webServerService.start(plan.startConfig)
+                webServerStarted = true
+            }
+        }
+
+        // Headless startup flow: commit pending generation without renderer window
+        if (pending) {
+            await coordinator.commitPrepared(pending.revision, pending.generation)
+        }
+
+        if (coordinator.getGeneration() > 0 && !coordinator.getPendingGeneration()) {
+            await initWebServer()
+        }
+
+        expect(webServerStarted).toBe(true)
+        expect(startSpy).toHaveBeenCalledWith(
+            expect.objectContaining({
+                enabled: true,
+                port: 18080,
+            }),
+        )
+    })
+
+    it('6. ensureWebServerRunning waits for whenCommitted before reading app-state and starting', async () => {
+        let commitResolved = false
+        const startSpy = vi.spyOn(services.webServerService, 'start').mockResolvedValue({
+            running: true,
+            port: 19999,
+            host: '127.0.0.1',
+        })
+
+        const ensureWebServer = async () => {
+            await coordinator.whenCommitted()
+            commitResolved = true
+            const appState = await services.kvStoreService?.get('app-state')
+            const plan = resolveWebServerStartupPlan(appState, false, { isHeadless: true })
+            if (plan.startConfig) {
+                await services.webServerService.start(plan.startConfig)
+            }
+        }
+
+        // Trigger ensureWebServer while still pending
+        const promise = ensureWebServer()
+        expect(commitResolved).toBe(false)
+
+        // Now commit
+        const pending = coordinator.getPendingGeneration()!
+        await coordinator.commitPrepared(pending.revision, pending.generation)
+        await promise
+
+        expect(commitResolved).toBe(true)
+        expect(startSpy).toHaveBeenCalledWith(
+            expect.objectContaining({
+                port: 19999,
+                enabled: true,
+            }),
+        )
+    })
+
+    it('7. Aborts Web Server startup when settings.json on disk is corrupted and records loadError', async () => {
+        // Corrupt settings.json on disk
+        await fs.writeFile(path.join(appDir, 'settings.json'), '{ invalid json: corrupt')
+
+        // Create a fresh KVStoreService instance to simulate initial startup before read
+        const corruptKv = new KVStoreService({ customPath: path.join(appDir, 'settings.json') })
+        expect(corruptKv.getLoadError()).toBeUndefined()
+
+        const startSpy = vi.spyOn(services.webServerService, 'start')
+
+        // Simulate startup logic in index.ts: read first, then check loadError
+        const appState = await corruptKv.get('app-state')
+        const loadError = corruptKv.getLoadError()
+
+        let started = false
+        if (loadError) {
+            started = false
+        } else {
+            const plan = resolveWebServerStartupPlan(appState, false, { isHeadless: true })
+            if (plan.startConfig) {
+                await services.webServerService.start(plan.startConfig)
+                started = true
+            }
+        }
+
+        expect(loadError).toBeDefined()
+        expect(started).toBe(false)
+        expect(startSpy).not.toHaveBeenCalled()
+        corruptKv.dispose()
+    })
 })

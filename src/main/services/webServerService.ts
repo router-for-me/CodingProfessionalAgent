@@ -70,6 +70,8 @@ export class WebServerService {
     private currentHost = '127.0.0.1'
     private currentPort = 18080
     private lastError?: string
+    private startInFlight: Promise<WebServerStatus> | null = null
+    private startInFlightConfig?: Partial<WebServerSettings>
     private customDistDir?: string
     private isDebug = false
     private onClientDisconnectCallback?: (clientId: string) => void
@@ -909,6 +911,27 @@ export class WebServerService {
         const port = typeof config?.port === 'number' && Number.isFinite(config.port) && config.port >= 0
             ? Math.floor(config.port)
             : this.currentPort || 18080
+        const password = config?.password
+
+        // If another start is currently in progress with identical target configuration, return it
+        if (
+            this.startInFlight &&
+            this.startInFlightConfig &&
+            (this.startInFlightConfig.host || '127.0.0.1').trim() === host &&
+            (this.startInFlightConfig.port ?? 18080) === port &&
+            (this.startInFlightConfig.password ?? '') === (password ?? '')
+        ) {
+            return this.startInFlight
+        }
+
+        // Wait for any concurrent start/restart operation with different config to finish
+        while (this.startInFlight) {
+            try {
+                await this.startInFlight
+            } catch {
+                // Ignore errors from previous in-flight start
+            }
+        }
 
         this.applyPasswordConfig(config)
 
@@ -917,17 +940,19 @@ export class WebServerService {
             return this.getStatus()
         }
 
-        // If running on different config, stop previous instance first
-        if (this.running) {
-            await this.stop()
-        }
+        this.startInFlightConfig = { host, port, password }
+        this.startInFlight = (async () => {
+            // If running on different config, stop previous instance first
+            if (this.running) {
+                await this.stop()
+            }
 
-        this.currentHost = host
-        this.currentPort = port
-        this.lastError = undefined
+            this.currentHost = host
+            this.currentPort = port
+            this.lastError = undefined
 
-        return new Promise<WebServerStatus>((resolve) => {
-            const server = http.createServer(async (req, res) => {
+            return new Promise<WebServerStatus>((resolve) => {
+                const server = http.createServer(async (req, res) => {
                 // Apply authentication mode CORS headers
                 if (!this.auth.isRequired()) {
                     res.setHeader('Access-Control-Allow-Origin', '*')
@@ -1134,6 +1159,12 @@ export class WebServerService {
                 resolve(this.getStatus())
             })
         })
+        })().finally(() => {
+            this.startInFlight = null
+            this.startInFlightConfig = undefined
+        })
+
+        return this.startInFlight
     }
 
     async stop(): Promise<WebServerStatus> {

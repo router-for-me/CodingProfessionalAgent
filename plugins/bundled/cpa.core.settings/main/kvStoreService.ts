@@ -76,6 +76,7 @@ export class KVStoreService {
 
     private loaded = false
     private loadPromise: Promise<void> | null = null
+    private loadError?: Error
 
     private dirtySettings = false
     private dirtyProjects = false
@@ -454,8 +455,9 @@ export class KVStoreService {
                 ) {
                     await this.save()
                 }
-            } catch {
+            } catch (err: unknown) {
                 this.data = {}
+                this.loadError = err instanceof Error ? err : new Error(String(err))
             } finally {
                 this.loaded = true
                 this.loadPromise = null
@@ -642,11 +644,17 @@ export class KVStoreService {
             ) {
                 this.saveSync()
             }
-        } catch {
+        } catch (err: unknown) {
             this.data = {}
+            this.loadError = err instanceof Error ? err : new Error(String(err))
         } finally {
             this.loaded = true
         }
+    }
+
+    /** Returns any error that occurred while loading settings from disk. */
+    getLoadError(): Error | undefined {
+        return this.loadError
     }
 
     async get(key: string): Promise<unknown> {
