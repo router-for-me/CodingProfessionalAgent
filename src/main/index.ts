@@ -325,6 +325,26 @@ async function bootstrap(): Promise<void> {
       pluginActivationCoordinator: coordinator,
       pluginResourceService: bootstrapResult.resourceService,
       isHeadless: () => lifecycleService?.isHeadless() ?? false,
+      onShowWindow: () => {
+        if (lifecycleService) {
+          void lifecycleService.transitionToForeground()
+          return
+        }
+        if (process.platform === 'darwin' && app.dock) {
+          app.dock.show()
+          const appIcon = getAppIcon()
+          if (appIcon) {
+            app.dock.setIcon(appIcon)
+          }
+        }
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          if (mainWindow.isMinimized()) mainWindow.restore()
+          if (!mainWindow.isVisible()) mainWindow.show()
+          mainWindow.focus()
+        } else if (services) {
+          mainWindow = createWindow(services)
+        }
+      },
     })
 
     lifecycleService = new HeadlessLifecycleService({
@@ -402,6 +422,9 @@ async function bootstrap(): Promise<void> {
     services.kvStoreService?.subscribe?.('app-state', (appState: any) => {
       if (appState?.settings?.headlessCloseAction) {
         lifecycleService?.setCachedCloseAction(appState.settings.headlessCloseAction)
+      }
+      if (typeof appState?.settings?.showInMenuBar === 'boolean') {
+        lifecycleService?.setCachedShowInMenuBar(appState.settings.showInMenuBar)
       }
     })
 

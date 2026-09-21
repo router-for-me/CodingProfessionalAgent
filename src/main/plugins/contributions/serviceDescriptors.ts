@@ -45,6 +45,7 @@ export interface PlatformServiceDescriptorOptions {
     gatewayDiscoveryService?: GatewayDiscoveryService
     trayService?: TrayService
     isHeadless?: () => boolean
+    onShowWindow?: () => void
 }
 
 export type CoreServiceDescriptorOptions = PlatformServiceDescriptorOptions
@@ -219,7 +220,7 @@ export function createPlatformServiceDescriptors(
         {
             id: 'trayService',
             dependencies: [],
-            create: () => options.trayService ?? new TrayService(getMainWindow, isDebug, options.isHeadless),
+            create: () => options.trayService ?? new TrayService(getMainWindow, isDebug, options.isHeadless, options.onShowWindow),
             dispose: (service: TrayService) => {
                 service.dispose()
             },

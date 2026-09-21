@@ -194,15 +194,18 @@ export class TrayService {
   private getMainWindow: () => BrowserWindow | null
   private readonly isDev: boolean
   private readonly isHeadless?: () => boolean
+  private readonly onShowWindow?: () => void
 
   constructor(
     getMainWindow: () => BrowserWindow | null,
     isDev?: boolean,
     isHeadless?: () => boolean,
+    onShowWindow?: () => void,
   ) {
     this.getMainWindow = getMainWindow
     this.isDev = isDev ?? isDevEnvironment()
     this.isHeadless = isHeadless
+    this.onShowWindow = onShowWindow
   }
 
   /** Returns whether the tray icon / menu bar mode is currently active. */
@@ -212,10 +215,6 @@ export class TrayService {
 
   /** Enables/disables the tray icon; keeps current locale when omitted. */
   setEnabled(enabled: boolean, locale?: TrayLocale): void {
-    if (enabled && this.isHeadless?.()) {
-      this.enabled = false
-      return
-    }
     this.enabled = enabled
     if (locale) {
       this.locale = locale
@@ -224,7 +223,7 @@ export class TrayService {
       this.show()
     } else {
       this.hide()
-      if (process.platform === 'darwin') {
+      if (process.platform === 'darwin' && !this.isHeadless?.()) {
         app.dock?.show?.()
       }
     }
@@ -239,6 +238,7 @@ export class TrayService {
   toggleWindow(): void {
     const win = this.getMainWindow()
     if (!win || win.isDestroyed()) {
+      this.showWindow()
       return
     }
     if (win.isVisible() && !win.isMinimized()) {
@@ -269,6 +269,10 @@ export class TrayService {
 
   /** Shows, restores, and focuses the main window, and shows macOS dock icon. */
   showWindow(): void {
+    if (this.onShowWindow) {
+      this.onShowWindow()
+      return
+    }
     if (process.platform === 'darwin') {
       app.dock?.show?.()
     }

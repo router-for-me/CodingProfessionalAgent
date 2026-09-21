@@ -36,6 +36,7 @@ export interface HeadlessLifecycleOptions {
 export class HeadlessLifecycleService {
     private mode: AppLifecycleMode
     private cachedCloseAction: 'continue_headless' | 'quit' = 'continue_headless'
+    private cachedShowInMenuBar = true
     private readonly cliPort?: number
     private readonly cliHost?: string
     private readonly getMainWindow: () => BrowserWindow | null
@@ -65,12 +66,34 @@ export class HeadlessLifecycleService {
         this.getSettingsSync = options.getSettingsSync
         this.ensureWebServerRunning = options.ensureWebServerRunning
         this.dock = options.dock !== undefined ? options.dock : ((process.platform === 'darwin' && app.dock) ? app.dock : null)
+
+        const syncSettings = options.getSettingsSync?.()
+        if (syncSettings?.headlessCloseAction) {
+            this.cachedCloseAction = syncSettings.headlessCloseAction
+        }
+        if (typeof syncSettings?.showInMenuBar === 'boolean') {
+            this.cachedShowInMenuBar = syncSettings.showInMenuBar
+        }
+
         void this.refreshSettings()
     }
 
     /** Directly updates the cached close action preference. */
     setCachedCloseAction(action: 'continue_headless' | 'quit'): void {
         this.cachedCloseAction = action
+        if (this.mode === 'HEADLESS') {
+            const shouldShow = this.cachedCloseAction === 'continue_headless' && this.cachedShowInMenuBar
+            this.getTrayService()?.setEnabled(shouldShow)
+        }
+    }
+
+    /** Directly updates the cached showInMenuBar preference. */
+    setCachedShowInMenuBar(enabled: boolean): void {
+        this.cachedShowInMenuBar = enabled
+        if (this.mode === 'HEADLESS') {
+            const shouldShow = this.cachedCloseAction === 'continue_headless' && this.cachedShowInMenuBar
+            this.getTrayService()?.setEnabled(shouldShow)
+        }
     }
 
     /** Updates cached close action preference from settings. */
@@ -79,6 +102,13 @@ export class HeadlessLifecycleService {
             const settings = await this.getSettings()
             if (settings?.headlessCloseAction) {
                 this.cachedCloseAction = settings.headlessCloseAction
+            }
+            if (typeof settings?.showInMenuBar === 'boolean') {
+                this.cachedShowInMenuBar = settings.showInMenuBar
+            }
+            if (this.mode === 'HEADLESS') {
+                const shouldShow = this.cachedCloseAction === 'continue_headless' && this.cachedShowInMenuBar
+                this.getTrayService()?.setEnabled(shouldShow)
             }
         } catch {
             // Ignore settings fetch errors
@@ -102,11 +132,19 @@ export class HeadlessLifecycleService {
 
     /**
      * Applies initial platform visibility states at startup.
-     * In headless mode on macOS, completely hides the Dock icon.
+     * In headless mode on macOS, completely hides the Dock icon and displays menu bar tray if configured.
      */
     applyInitialPlatformState(): void {
         if (this.mode === 'HEADLESS') {
             this.dock?.hide?.()
+            const syncSettings = this.getSettingsSync?.()
+            const closeAction = syncSettings?.headlessCloseAction ?? this.cachedCloseAction
+            const showInMenuBar = syncSettings?.showInMenuBar ?? this.cachedShowInMenuBar
+            if (closeAction === 'continue_headless' && showInMenuBar) {
+                this.getTrayService()?.setEnabled(true)
+            } else {
+                this.getTrayService()?.setEnabled(false)
+            }
         }
     }
 
@@ -146,8 +184,15 @@ export class HeadlessLifecycleService {
             if (settings?.headlessCloseAction) {
                 this.cachedCloseAction = settings.headlessCloseAction
             }
-            if (settings?.showInMenuBar) {
+            if (typeof settings?.showInMenuBar === 'boolean') {
+                this.cachedShowInMenuBar = settings.showInMenuBar
+            }
+            const closeAction = settings?.headlessCloseAction ?? this.cachedCloseAction
+            const showInMenuBar = settings?.showInMenuBar ?? this.cachedShowInMenuBar
+            if (closeAction === 'continue_headless' && showInMenuBar) {
                 this.getTrayService()?.setEnabled(true)
+            } else {
+                this.getTrayService()?.setEnabled(false)
             }
         } catch {
             // Ignore settings retrieval errors during transition
@@ -156,7 +201,8 @@ export class HeadlessLifecycleService {
 
     /**
      * Transitions from foreground mode back to silent headless background mode.
-     * Hides main window, macOS dock icon, and system tray, and ensures web server is running.
+     * Hides main window, macOS dock icon, and displays system tray if showInMenuBar is enabled,
+     * and ensures web server is running.
      */
     transitionToHeadless(): void {
         this.mode = 'HEADLESS'
@@ -167,7 +213,15 @@ export class HeadlessLifecycleService {
         }
 
         this.dock?.hide?.()
-        this.getTrayService()?.setEnabled(false)
+
+        const syncSettings = this.getSettingsSync?.()
+        const closeAction = syncSettings?.headlessCloseAction ?? this.cachedCloseAction
+        const showInMenuBar = syncSettings?.showInMenuBar ?? this.cachedShowInMenuBar
+        if (closeAction === 'continue_headless' && showInMenuBar) {
+            this.getTrayService()?.setEnabled(true)
+        } else {
+            this.getTrayService()?.setEnabled(false)
+        }
 
         void this.ensureWebServerRunning?.()
     }

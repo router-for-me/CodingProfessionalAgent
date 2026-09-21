@@ -48,6 +48,7 @@ function useThemeEffect() {
  */
 function useTraySyncEffect() {
     const showInMenuBar = useSettingsStore((state) => state.settings.showInMenuBar)
+    const headlessCloseAction = useSettingsStore((state) => state.settings.headlessCloseAction)
     const locale = useSettingsStore((state) => state.settings.locale)
 
     useEffect(() => {
@@ -55,10 +56,11 @@ function useTraySyncEffect() {
         if (!bridge?.SetTrayEnabled) {
             return
         }
-        void bridge.SetTrayEnabled(showInMenuBar, locale).catch(() => {
+        const isTrayEnabled = (headlessCloseAction ?? 'continue_headless') !== 'quit' && (showInMenuBar ?? true)
+        void bridge.SetTrayEnabled(isTrayEnabled, locale).catch(() => {
             // Tray sync must never crash the renderer.
         })
-    }, [showInMenuBar, locale])
+    }, [showInMenuBar, headlessCloseAction, locale])
 }
 
 /**

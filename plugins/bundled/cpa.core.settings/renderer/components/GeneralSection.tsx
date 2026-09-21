@@ -217,18 +217,6 @@ export function GeneralSection() {
                         }
                     />
                     <SettingsRow
-                        id="setting-menuBar"
-                        title={t('settings.general.menuBar')}
-                        description={t('settings.general.menuBar.desc')}
-                        control={
-                            <ToggleSwitch
-                                checked={showInMenuBar}
-                                label={t('settings.general.menuBar')}
-                                onChange={setShowInMenuBar}
-                            />
-                        }
-                    />
-                    <SettingsRow
                         id="setting-headlessCloseAction"
                         title={t('settings.general.headlessCloseAction')}
                         description={t('settings.general.headlessCloseAction.desc')}
@@ -250,6 +238,20 @@ export function GeneralSection() {
                             />
                         }
                     />
+                    {headlessCloseAction !== 'quit' ? (
+                        <SettingsRow
+                            id="setting-menuBar"
+                            title={t('settings.general.menuBar')}
+                            description={t('settings.general.menuBar.desc')}
+                            control={
+                                <ToggleSwitch
+                                    checked={showInMenuBar}
+                                    label={t('settings.general.menuBar')}
+                                    onChange={setShowInMenuBar}
+                                />
+                            }
+                        />
+                    ) : null}
                     <SettingsRow
                         id="setting-bottomPanel"
                         title={t('settings.general.bottomPanel')}

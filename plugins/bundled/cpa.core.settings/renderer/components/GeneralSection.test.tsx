@@ -240,4 +240,46 @@ describe('GeneralSection', () => {
 
         expect(useSettingsStore.getState().settings.headlessCloseAction).toBe('quit')
     })
+
+    it('renders headlessCloseAction setting above menuBar setting when continue_headless', () => {
+        useSettingsStore.setState({
+            settings: { ...DEFAULT_SETTINGS, headlessCloseAction: 'continue_headless', showInMenuBar: true },
+        })
+        const { container } = render(<GeneralSection />)
+
+        const headlessRow = container.querySelector('#setting-headlessCloseAction')
+        const menuBarRow = container.querySelector('#setting-menuBar')
+
+        expect(headlessRow).toBeInTheDocument()
+        expect(menuBarRow).toBeInTheDocument()
+        expect(
+            Boolean(headlessRow && menuBarRow && (headlessRow.compareDocumentPosition(menuBarRow) & Node.DOCUMENT_POSITION_FOLLOWING)),
+        ).toBe(true)
+    })
+
+    it('hides menuBar setting when headlessCloseAction is quit, and shows it when continue_headless', async () => {
+        const user = userEvent.setup()
+        useSettingsStore.setState({
+            settings: { ...DEFAULT_SETTINGS, headlessCloseAction: 'continue_headless', showInMenuBar: true },
+        })
+        render(<GeneralSection />)
+
+        expect(screen.getByRole('switch', { name: 'Show in menu bar' })).toBeInTheDocument()
+
+        const select = screen.getByRole('combobox', { name: 'When Window is Closed' })
+        await user.click(select)
+        const quitOption = await screen.findByRole('option', { name: 'Exit application completely' })
+        await user.click(quitOption)
+
+        expect(screen.queryByRole('switch', { name: 'Show in menu bar' })).not.toBeInTheDocument()
+        expect(document.querySelector('#setting-menuBar')).toBeNull()
+
+        // Switch back to continue_headless
+        await user.click(select)
+        const continueOption = await screen.findByRole('option', { name: 'Keep running in background (Headless)' })
+        await user.click(continueOption)
+
+        expect(screen.getByRole('switch', { name: 'Show in menu bar' })).toBeInTheDocument()
+        expect(document.querySelector('#setting-menuBar')).toBeInTheDocument()
+    })
 })

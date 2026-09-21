@@ -110,7 +110,7 @@ describe('HeadlessLifecycleService', () => {
         expect(mockDock.show).toHaveBeenCalled()
     })
 
-    it('transitions back to headless and hides window, dock, and tray', () => {
+    it('transitions back to headless, hides window and dock, but displays tray if showInMenuBar is true', () => {
         const service = new HeadlessLifecycleService({
             isHeadlessInitially: false,
             getMainWindow: () => mockWindow,
@@ -125,7 +125,51 @@ describe('HeadlessLifecycleService', () => {
         expect(service.isHeadless()).toBe(true)
         expect(mockWindow.hide).toHaveBeenCalled()
         expect(mockDock.hide).toHaveBeenCalled()
+        expect(mockTrayService.setEnabled).toHaveBeenCalledWith(true)
+    })
+
+    it('transitions back to headless and hides tray when showInMenuBar is false', () => {
+        const service = new HeadlessLifecycleService({
+            isHeadlessInitially: false,
+            getMainWindow: () => mockWindow,
+            createMainWindow: () => mockWindow,
+            getAppIcon: () => undefined,
+            getTrayService: () => mockTrayService,
+            getSettings: () => Promise.resolve({
+                headlessCloseAction: 'continue_headless',
+                showInMenuBar: false,
+            }),
+            getSettingsSync: () => ({
+                headlessCloseAction: 'continue_headless',
+                showInMenuBar: false,
+            }),
+            dock: mockDock,
+        })
+
+        service.transitionToHeadless()
+        expect(service.isHeadless()).toBe(true)
+        expect(mockWindow.hide).toHaveBeenCalled()
+        expect(mockDock.hide).toHaveBeenCalled()
         expect(mockTrayService.setEnabled).toHaveBeenCalledWith(false)
+    })
+
+    it('updates tray visibility in headless mode when showInMenuBar changes', () => {
+        const service = new HeadlessLifecycleService({
+            isHeadlessInitially: true,
+            getMainWindow: () => mockWindow,
+            createMainWindow: () => mockWindow,
+            getAppIcon: () => undefined,
+            getTrayService: () => mockTrayService,
+            getSettings: mockGetSettings,
+            dock: mockDock,
+        })
+
+        expect(service.isHeadless()).toBe(true)
+        service.setCachedShowInMenuBar(false)
+        expect(mockTrayService.setEnabled).toHaveBeenCalledWith(false)
+
+        service.setCachedShowInMenuBar(true)
+        expect(mockTrayService.setEnabled).toHaveBeenCalledWith(true)
     })
 
     it('intercepts window close to return to headless when headlessCloseAction is continue_headless', async () => {

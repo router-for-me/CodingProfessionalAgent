@@ -261,4 +261,20 @@ describe('TrayService', () => {
       expect(fallbackIcon.setTemplateImage).toHaveBeenCalledWith(true)
     }
   })
+
+  it('allows enabling tray icon when isHeadless is true', () => {
+    const headlessService = new TrayService(() => mockWindow as any, false, () => true)
+    headlessService.setEnabled(true, 'zh-CN')
+    expect(headlessService.isEnabled()).toBe(true)
+    expect(state.lastTrayInstance).not.toBeNull()
+    headlessService.dispose()
+  })
+
+  it('delegates to onShowWindow callback when provided', () => {
+    const onShowWindow = vi.fn()
+    const customService = new TrayService(() => mockWindow as any, false, undefined, onShowWindow)
+    customService.showWindow()
+    expect(onShowWindow).toHaveBeenCalledTimes(1)
+    customService.dispose()
+  })
 })

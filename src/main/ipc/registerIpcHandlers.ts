@@ -55,6 +55,7 @@ export interface CreateServicesOptions {
   gatewayDiscoveryService?: GatewayDiscoveryService
   trayService?: TrayService
   isHeadless?: () => boolean
+  onShowWindow?: () => void
 }
 
 export interface AppServices {
@@ -209,6 +210,7 @@ export function createServices(
     gatewayDiscoveryService: options?.gatewayDiscoveryService,
     trayService: options?.trayService,
     isHeadless: options?.isHeadless,
+    onShowWindow: options?.onShowWindow,
   })
 
   for (const descriptor of serviceDescriptors) {
