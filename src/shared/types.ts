@@ -463,6 +463,9 @@ export interface SessionDelegateRunRequest {
   images?: Array<{ data: string; mimeType: string; name?: string }>
   projectId?: string | null
   branch?: string | null
+  modelId?: string
+  reasoningEffort?: string
+  speed?: 'standard' | 'fast' | 'max'
   editMessageId?: string
   userEntryId?: string
   userEntryCreatedAt?: number

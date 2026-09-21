@@ -636,6 +636,9 @@ describe('Session Sync IPC & Broadcast', () => {
             images: [{ data: 'base64img', mimeType: 'image/png', name: 'screenshot.png' }],
             projectId: 'proj-1',
             branch: 'feature-branch',
+            modelId: 'gemini-3.8-flash',
+            reasoningEffort: 'high',
+            speed: 'fast',
             editMessageId: 'msg-123',
         }
 

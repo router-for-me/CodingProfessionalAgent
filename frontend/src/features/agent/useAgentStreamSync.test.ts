@@ -1861,6 +1861,9 @@ describe('useAgentStreamSync', () => {
                 images: undefined,
                 projectId: 'test-project',
                 branch: 'feature-branch',
+                modelId: 'test-model',
+                reasoningEffort: 'medium',
+                speed: 'standard',
                 editMessageId: undefined,
                 userEntryId: entries[0]?.id,
                 userEntryCreatedAt: entries[0]?.createdAt,
@@ -2150,6 +2153,66 @@ describe('useAgentStreamSync', () => {
         // Host broadcasts run status and stream events
         expect(broadcastRunStatusMock).toHaveBeenCalled()
         expect(broadcastStreamEventMock).toHaveBeenCalled()
+    })
+
+    it('keeps the Web runtime settings snapshot when shared session state changes during delegation', async () => {
+        useSettingsStore.getState().hydrate({
+            modelId: 'gpt-5.6-sol',
+            reasoningLevel: 'xhigh',
+            speed: 'standard',
+        })
+        const prepareInputs: AgentPrepareInput[] = []
+        service.prepareImpl = async (input) => {
+            prepareInputs.push(input)
+            return makePrepared()
+        }
+
+        renderHook(() => useAgentStream(), {
+            wrapper: createWrapper(service),
+        })
+
+        const emitNative = nativeEventListeners[0]!
+        const delegatedSessionId = 'delegated-web-runtime-settings'
+
+        await act(async () => {
+            emitNative({
+                kind: 'session:delegate-run',
+                data: JSON.stringify({
+                    sessionId: delegatedSessionId,
+                    text: 'Run with the Web-selected model',
+                    modelId: 'gemini-3.8-flash',
+                    reasoningEffort: 'high',
+                    speed: 'fast',
+                }),
+            })
+            useSessionStore.getState().setSessionRuntimeSettings(delegatedSessionId, {
+                modelId: 'gpt-5.6-sol',
+                reasoningEffort: 'xhigh',
+                speed: 'standard',
+            })
+        })
+
+        await waitFor(() => {
+            expect(prepareInputs).toHaveLength(1)
+        })
+
+        expect(prepareInputs[0]).toMatchObject({
+            modelId: 'gemini-3.8-flash',
+            reasoningLevel: 'high',
+            speed: 'fast',
+        })
+        expect(
+            useSessionStore.getState().sessions.find((session) => session.id === delegatedSessionId),
+        ).toMatchObject({
+            modelId: 'gemini-3.8-flash',
+            reasoningEffort: 'high',
+            speed: 'fast',
+        })
+        expect(useSettingsStore.getState().settings).toMatchObject({
+            modelId: 'gpt-5.6-sol',
+            reasoningLevel: 'xhigh',
+            speed: 'standard',
+        })
     })
 
     it('session:delegate-run in browser environment is ignored', async () => {
@@ -3167,7 +3230,12 @@ describe('useAgentStreamSync', () => {
         })
 
         let executionCount = 0
+        const prepareInputs: AgentPrepareInput[] = []
         const queueTestingService = new FakeSyncService()
+        queueTestingService.prepareImpl = async (input) => {
+            prepareInputs.push(input)
+            return makePrepared()
+        }
         const originalStreamChat = queueTestingService.streamChat.bind(queueTestingService)
         queueTestingService.streamChat = async function* (options: any) {
             executionCount++
@@ -3201,6 +3269,9 @@ describe('useAgentStreamSync', () => {
             requestId: 'queued-req-1',
             sessionId: hostSessionId,
             text: 'Queued prompt message',
+            modelId: 'gemini-3.8-flash',
+            reasoningEffort: 'high',
+            speed: 'fast' as const,
             followUpMode: 'queue' as const,
         }
 
@@ -3214,6 +3285,11 @@ describe('useAgentStreamSync', () => {
 
         // Queued request must NOT be ACKed yet
         expect(ackMock).not.toHaveBeenCalledWith('queued-req-1')
+        useSessionStore.getState().setSessionRuntimeSettings(hostSessionId!, {
+            modelId: 'gpt-5.6-sol',
+            reasoningEffort: 'xhigh',
+            speed: 'standard',
+        })
 
         // 3. Complete first stream
         await act(async () => {
@@ -3223,6 +3299,11 @@ describe('useAgentStreamSync', () => {
         // Wait for first execution to finish and queued execution to start
         await waitFor(() => {
             expect(executionCount).toBe(2)
+        })
+        expect(prepareInputs[1]).toMatchObject({
+            modelId: 'gemini-3.8-flash',
+            reasoningLevel: 'high',
+            speed: 'fast',
         })
 
         // Queued request must STILL NOT be ACKed because its execution is in flight!

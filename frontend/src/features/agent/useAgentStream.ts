@@ -111,6 +111,9 @@ export type AgentSendPayload = {
     userEntryCreatedAt?: number
     followUpMode?: 'steer' | 'queue'
     isQueuedExecution?: boolean
+    modelId?: string
+    reasoningEffort?: string
+    speed?: Session['speed']
     onSessionAccepted?: (sessionId: string) => void
     onRunFinish?: (succeeded: boolean) => void
 }
@@ -1052,6 +1055,22 @@ async function executeDelegateRun(
                     updatedAt: now,
                 })
             }
+
+            const runtimeSettings: Pick<Session, 'modelId' | 'reasoningEffort' | 'speed'> = {}
+            if (typeof req.modelId === 'string') {
+                runtimeSettings.modelId = req.modelId
+            }
+            if (typeof req.reasoningEffort === 'string') {
+                runtimeSettings.reasoningEffort = req.reasoningEffort
+            }
+            if (req.speed === 'standard' || req.speed === 'fast' || req.speed === 'max') {
+                runtimeSettings.speed = req.speed
+            }
+            if (Object.keys(runtimeSettings).length > 0) {
+                useSessionStore
+                    .getState()
+                    .setSessionRuntimeSettings(req.sessionId, runtimeSettings)
+            }
             await ensureSessionLoaded(req.sessionId)
         }
         if (
@@ -1080,6 +1099,9 @@ async function executeDelegateRun(
             projectId: req.projectId,
             branch: req.branch,
             sessionId: req.sessionId,
+            modelId: req.modelId,
+            reasoningEffort: req.reasoningEffort,
+            speed: req.speed,
             editMessageId: req.editMessageId,
             userEntryId: req.userEntryId,
             userEntryCreatedAt: req.userEntryCreatedAt,
@@ -1504,6 +1526,21 @@ function resolveSettingsForSession(session: Session) {
         modelId: session.modelId ?? settings.modelId,
         reasoningLevel: session.reasoningEffort ?? settings.reasoningLevel,
         speed: session.speed ?? settings.speed,
+    }
+}
+
+function resolveSettingsForPayload(
+    session: Session | undefined,
+    payload: Pick<AgentSendPayload, 'modelId' | 'reasoningEffort' | 'speed'>,
+) {
+    const settings = session
+        ? resolveSettingsForSession(session)
+        : { ...useSettingsStore.getState().settings }
+    return {
+        ...settings,
+        modelId: payload.modelId ?? settings.modelId,
+        reasoningLevel: payload.reasoningEffort ?? settings.reasoningLevel,
+        speed: payload.speed ?? settings.speed,
     }
 }
 
@@ -2320,9 +2357,7 @@ export function useAgentStream(
             const targetSession = capturedSessionId
                 ? sessionState.sessions.find((s) => s.id === capturedSessionId)
                 : undefined
-            const settings = targetSession
-                ? resolveSettingsForSession(targetSession)
-                : { ...useSettingsStore.getState().settings }
+            const settings = resolveSettingsForPayload(targetSession, payload)
 
             if (payload.editMessageId && targetSessionId) {
                 const oldSteers = rt.pendingSteers.get(targetSessionId)
@@ -3173,6 +3208,9 @@ export function useAgentStream(
                           userEntryCreatedAt: input.userEntryCreatedAt,
                           followUpMode: input.followUpMode,
                           isQueuedExecution: input.isQueuedExecution,
+                          modelId: input.modelId,
+                          reasoningEffort: input.reasoningEffort,
+                          speed: input.speed,
                           onSessionAccepted: input.onSessionAccepted ?? opts?.onSessionAccepted,
                           onRunFinish: input.onRunFinish,
                       }
@@ -3192,9 +3230,7 @@ export function useAgentStream(
                 const targetSession = targetSessionId
                     ? sessionState.sessions.find((s) => s.id === targetSessionId)
                     : undefined
-                const settings = targetSession
-                    ? resolveSettingsForSession(targetSession)
-                    : { ...useSettingsStore.getState().settings }
+                const settings = resolveSettingsForPayload(targetSession, payload)
                 const capturedProjectId =
                     payload.projectId !== undefined
                         ? payload.projectId
@@ -3376,6 +3412,9 @@ export function useAgentStream(
                             images: images.length > 0 ? [...images] : undefined,
                             projectId: capturedProjectId ?? null,
                             branch: capturedBranch ?? null,
+                            modelId: settings.modelId,
+                            reasoningEffort: settings.reasoningLevel,
+                            speed: settings.speed,
                             editMessageId: payload.editMessageId,
                             userEntryId: userEntry.id,
                             userEntryCreatedAt: userEntry.createdAt,
