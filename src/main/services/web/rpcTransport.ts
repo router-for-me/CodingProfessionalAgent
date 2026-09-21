@@ -62,11 +62,12 @@ export class WebRpcTransport {
             return { error: 'Invalid JSON body' }
         }
 
-        const { id, method, args, clientId } = body as {
+        const { id, method, args, clientId, runtime } = body as {
             id?: unknown
             method?: unknown
             args?: unknown
             clientId?: unknown
+            runtime?: unknown
         }
 
         if (typeof method !== 'string' || !method.trim()) {
@@ -75,8 +76,13 @@ export class WebRpcTransport {
 
         const rpcArgs = Array.isArray(args) ? [...args] : []
         const requestClientId = typeof clientId === 'string' && clientId.trim() ? clientId.trim() : undefined
+        const requestRuntime =
+            runtime === 'main' || runtime === 'renderer' || runtime === 'agent'
+                ? runtime
+                : undefined
         const mergedContext: Partial<RpcInvocationContext> = {
             ...context,
+            ...(requestRuntime ? { runtime: requestRuntime } : {}),
             ...(requestClientId
                 ? {
                       clientId: requestClientId,
@@ -114,10 +120,13 @@ export class WebRpcTransport {
         }
 
         if (msg.type === 'rpc' || msg.method) {
-            const { id, method, args } = msg
+            const { id, method, args, runtime } = msg
             const rpcArgs = Array.isArray(args) ? [...args] : []
 
             const context = this.identityAdapter.createWsInvocationContext(wsContext.clientId)
+            if (runtime === 'main' || runtime === 'renderer' || runtime === 'agent') {
+                context.runtime = runtime
+            }
 
             try {
                 const result = await this.dispatch(method, rpcArgs, context)

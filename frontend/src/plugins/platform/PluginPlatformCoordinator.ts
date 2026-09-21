@@ -40,7 +40,10 @@ export interface PluginPlatformCoordinatorOptions {
     agentHost?: AgentPluginRuntimeHost
     coordinator?: PluginRuntimeCoordinator
     mainParticipant?: MainGenerationParticipant
-    grantTicketTransport?: (ticket: string) => Promise<CapabilityInvokeResponse<string> | any>
+    grantTicketTransport?: (
+        ticket: string,
+        runtime?: 'renderer' | 'agent',
+    ) => Promise<CapabilityInvokeResponse<string> | any>
 }
 
 export interface PreparePlatformGenerationOptions {
@@ -57,7 +60,10 @@ export class PluginPlatformCoordinator {
     readonly agentHost: AgentPluginRuntimeHost
     readonly coordinator: PluginRuntimeCoordinator
     private mainParticipant?: MainGenerationParticipant
-    private readonly grantTicketTransport?: (ticket: string) => Promise<CapabilityInvokeResponse<string> | any>
+    private readonly grantTicketTransport?: (
+        ticket: string,
+        runtime?: 'renderer' | 'agent',
+    ) => Promise<CapabilityInvokeResponse<string> | any>
 
     private isCommitted = false
     private activeRevision = ''
@@ -161,10 +167,13 @@ export class PluginPlatformCoordinator {
 
         // Redeem grant tickets issued by Main in prepared state before activating plugin entries
         if (mainState?.grantTickets) {
-            const redeemTicket = async (ticket: string): Promise<CapabilityHandle | null> => {
+            const redeemTicket = async (
+                ticket: string,
+                runtime?: 'renderer' | 'agent',
+            ): Promise<CapabilityHandle | null> => {
                 try {
                     if (this.grantTicketTransport) {
-                        const res = await this.grantTicketTransport(ticket)
+                        const res = await this.grantTicketTransport(ticket, runtime)
                         if (res && typeof res === 'object' && 'ok' in res) {
                             if (res.ok === true && 'value' in res) return res.value as CapabilityHandle
                             return null
@@ -173,7 +182,7 @@ export class PluginPlatformCoordinator {
                     } else {
                         const hostTrans = getHostTransport()
                         if (hostTrans?.grantTicket) {
-                            const res = await hostTrans.grantTicket(ticket)
+                            const res = await hostTrans.grantTicket(ticket, runtime)
                             if (res && typeof res === 'object' && 'ok' in res && (res as any).ok === true && 'value' in res) {
                                 return (res as any).value as CapabilityHandle
                             }
@@ -187,13 +196,13 @@ export class PluginPlatformCoordinator {
 
             for (const [pluginId, tickets] of Object.entries(mainState.grantTickets)) {
                 if (tickets?.renderer) {
-                    const handle = await redeemTicket(tickets.renderer)
+                    const handle = await redeemTicket(tickets.renderer, 'renderer')
                     if (handle) {
                         this.rendererHost.setPluginHandle(pluginId, handle, targetGeneration)
                     }
                 }
                 if (tickets?.agent) {
-                    const handle = await redeemTicket(tickets.agent)
+                    const handle = await redeemTicket(tickets.agent, 'agent')
                     if (handle) {
                         this.agentHost.setPluginHandle(pluginId, handle, targetGeneration)
                     }

@@ -541,7 +541,7 @@ export function registerCapabilityTransport(options: RegisterCapabilityTransport
     // 4. Register fixed IPC handler: cpa:capability:grant (Redeem grant ticket)
     const grantHandler = async (
         event: Electron.IpcMainInvokeEvent,
-        request: { ticket: string },
+        request: { ticket: string; runtime?: 'main' | 'renderer' | 'agent' },
     ): Promise<CapabilityInvokeResponse<string>> => {
         if (!request || typeof request.ticket !== 'string' || !request.ticket.trim()) {
             return {
@@ -552,7 +552,9 @@ export function registerCapabilityTransport(options: RegisterCapabilityTransport
             }
         }
 
-        const trustedContext = extractTrustedInvocationContext(event)
+        const trustedContext = extractTrustedInvocationContext(event, {
+            runtime: request.runtime,
+        })
 
         try {
             const handle = broker.redeemGrantTicket(request.ticket, trustedContext)

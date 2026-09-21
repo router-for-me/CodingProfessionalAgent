@@ -827,6 +827,10 @@ export class WebServerService {
         this.rpcTransport.setDispatcher(dispatcher)
     }
 
+    getRpcDispatcher(): RpcDispatcher | null {
+        return this.rpcTransport.getDispatcher()
+    }
+
     getRouteRegistry(): WebRouteRegistry {
         return this.routeRegistry
     }

@@ -22,8 +22,8 @@ const hostTransport: HostTransportApi = {
     invoke: (handle: string, method: string, args: unknown[] = []) => {
         return localIpc.invoke('cpa:capability:invoke', { handle, method, args })
     },
-    grantTicket: (ticket: string) => {
-        return localIpc.invoke('cpa:capability:grant', { ticket })
+    grantTicket: (ticket: string, runtime?: 'main' | 'renderer' | 'agent') => {
+        return localIpc.invoke('cpa:capability:grant', { ticket, runtime })
     },
     subscribe: (
         handle: string,

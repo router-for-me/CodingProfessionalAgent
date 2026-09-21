@@ -405,11 +405,11 @@ export class BrowserBridgeClient implements HostTransportApi {
         return this.requestRpc<T>(method, args)
     }
 
-    async grantTicket(ticket: string): Promise<unknown> {
+    async grantTicket(ticket: string, runtime?: 'main' | 'renderer' | 'agent'): Promise<unknown> {
         if (!ticket || typeof ticket !== 'string' || !ticket.trim()) {
             throw new Error('Invalid capability grant ticket')
         }
-        return this.requestRpc('capability:grant', [{ ticket }])
+        return this.requestRpc('capability:grant', [{ ticket, runtime }])
     }
 
     onNativeEvent(callback: NativeEventCallback): () => void {

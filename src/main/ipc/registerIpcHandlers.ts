@@ -232,6 +232,7 @@ export function createServices(
 
   const toWebCapabilityContext = (
     context?: RpcInvocationContext,
+    runtimeOverride?: 'main' | 'renderer' | 'agent',
   ): CapabilityInvocationContext => {
     const clientId = context?.clientId
     return {
@@ -240,7 +241,7 @@ export function createServices(
       senderId: context?.senderId ?? 0,
       frameUrl: context?.frameUrl ?? '',
       transport: 'web',
-      runtime: context?.runtime ?? 'renderer',
+      runtime: runtimeOverride ?? context?.runtime,
       processId: context?.processId,
       routingId: context?.routingId,
       documentId: context?.documentId ?? (clientId ? `web:${clientId}` : undefined),
@@ -259,13 +260,21 @@ export function createServices(
       if (!ticket.trim()) {
         throw new PluginCapabilityError('Invalid capability grant request: ticket is required')
       }
-      const handle = capabilityBroker.redeemGrantTicket(ticket, toWebCapabilityContext(context))
+      const runtimeArg =
+        typeof args[0] === 'object' && args[0] !== null && 'runtime' in (args[0] as object)
+          ? (args[0] as { runtime?: unknown }).runtime
+          : args[1]
+      const runtime =
+        runtimeArg === 'main' || runtimeArg === 'renderer' || runtimeArg === 'agent'
+          ? runtimeArg
+          : context?.runtime
+      const handle = capabilityBroker.redeemGrantTicket(ticket, toWebCapabilityContext(context, runtime))
       return { ok: true, value: handle as string }
     }
 
     if (capabilityBroker && method === 'capability:invoke') {
       const payload = args[0] as
-        | { handle?: unknown; method?: unknown; args?: unknown }
+        | { handle?: unknown; method?: unknown; args?: unknown; runtime?: unknown }
         | undefined
       const handle =
         typeof payload?.handle === 'string'
@@ -284,6 +293,11 @@ export function createServices(
         : Array.isArray(args[2])
           ? args[2]
           : []
+      const runtimeArg = payload?.runtime ?? args[3]
+      const runtime =
+        runtimeArg === 'main' || runtimeArg === 'renderer' || runtimeArg === 'agent'
+          ? runtimeArg
+          : context?.runtime
 
       if (!handle.trim() || !invokeMethod.trim()) {
         throw new PluginCapabilityError('Invalid capability invoke request payload')
@@ -293,7 +307,7 @@ export function createServices(
         handle as CapabilityHandle,
         invokeMethod,
         invokeArgs,
-        toWebCapabilityContext(context),
+        toWebCapabilityContext(context, runtime),
       )
     }
 

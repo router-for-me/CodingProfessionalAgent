@@ -72,11 +72,11 @@ describe('browserBridge', () => {
     it('redeems grant tickets and routes capability handles through capability:invoke', async () => {
         const client = new BrowserBridgeClient()
 
-        const grantPromise = client.grantTicket('ticket_abc')
+        const grantPromise = client.grantTicket('ticket_abc', 'agent')
         expect(lastCreatedWs!.send).toHaveBeenCalled()
         const grantPayload = JSON.parse(lastCreatedWs!.send.mock.calls[0][0])
         expect(grantPayload.method).toBe('capability:grant')
-        expect(grantPayload.args).toEqual([{ ticket: 'ticket_abc' }])
+        expect(grantPayload.args).toEqual([{ ticket: 'ticket_abc', runtime: 'agent' }])
         expect(grantPayload.clientId).toBe(client.getClientId())
 
         lastCreatedWs!.onmessage?.({

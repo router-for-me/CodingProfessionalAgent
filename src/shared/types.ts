@@ -562,7 +562,7 @@ export interface QueryMetricsResult {
 export interface HostTransportApi {
   invoke(handle: string, method: string, args?: unknown[]): Promise<unknown>
   claimPlatformHandle?(): Promise<{ ok: boolean; value?: string; error?: unknown }>
-  grantTicket?(ticket: string): Promise<unknown>
+  grantTicket?(ticket: string, runtime?: 'main' | 'renderer' | 'agent'): Promise<unknown>
   subscribeNativeEvents(listener: (event: NativeEvent) => void): () => void
   subscribe?(handle: string, eventName: string, listener: (payload: unknown) => void): () => void
 }

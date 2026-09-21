@@ -23,7 +23,7 @@ export class WebIdentityAdapter {
             senderId: 0,
             frameUrl: '',
             transport: 'web',
-            runtime: 'renderer',
+            runtime: undefined,
             clientId,
             documentId: `web:${clientId}`,
         }
@@ -42,7 +42,7 @@ export class WebIdentityAdapter {
             senderId: 0,
             frameUrl: request?.url ?? '',
             transport: 'web',
-            runtime: 'renderer',
+            runtime: undefined,
             clientId: resolvedClientId,
             documentId: `web:${resolvedClientId}`,
         }
@@ -61,7 +61,7 @@ export class WebIdentityAdapter {
             senderId: context?.senderId ?? 0,
             frameUrl: context?.frameUrl ?? '',
             transport: context?.transport ?? 'web',
-            runtime: context?.runtime ?? 'renderer',
+            runtime: context?.runtime,
             processId: context?.processId,
             routingId: context?.routingId,
             clientId,

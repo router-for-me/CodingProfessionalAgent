@@ -822,7 +822,6 @@ describe('PluginPlatformCoordinator', () => {
                 sourceRoot: '/plugins/bundled/cpa.test.secured',
                 entries: { renderer: './index.ts' },
             }
-            const graph = createGraphDTO([pkg])
 
             let capturedClient: any = null
             const rendererHost = new RendererPluginRuntimeHost({
@@ -836,24 +835,56 @@ describe('PluginPlatformCoordinator', () => {
                     },
                 },
             })
-            const agentHost = new AgentPluginRuntimeHost()
 
-            const redeemedTickets: string[] = []
-            const grantTransport = vi.fn().mockImplementation(async (ticket: string) => {
-                redeemedTickets.push(ticket)
+            const redeemedCalls: Array<{ ticket: string; runtime?: string }> = []
+            const grantTransport = vi.fn().mockImplementation(async (ticket: string, runtime?: string) => {
+                redeemedCalls.push({ ticket, runtime })
                 return { ok: true, value: `handle_for_${ticket}` }
+            })
+
+            let capturedAgentClient: any = null
+            const pkgWithBoth: ResolvedPluginPackage = {
+                manifest: {
+                    id: 'cpa.test.secured',
+                    name: 'Secured Plugin',
+                    version: '1.0.0',
+                    apiVersion: '1.0.0',
+                    engines: { cpa: '>=1.0.0' },
+                    criticality: 'required',
+                    entries: { renderer: './renderer.ts', agent: './agent.ts' },
+                    dependencies: {},
+                    capabilities: ['filesystem.read', 'storage.kv'],
+                    contributes: {},
+                },
+                source: { kind: 'bundled', spec: 'bundled:cpa.test.secured' },
+                sourceRoot: '/plugins/bundled/cpa.test.secured',
+                entries: { renderer: './renderer.ts', agent: './agent.ts' },
+            }
+            const graphWithBoth = createGraphDTO([pkgWithBoth])
+
+            const testAgentHost = new AgentPluginRuntimeHost({
+                bundledPackages: [pkgWithBoth],
+                defaultDefinitions: {
+                    'cpa.test.secured': {
+                        runtime: 'agent',
+                        activate: (ctx) => {
+                            capturedAgentClient = ctx.capabilityClient
+                        },
+                    },
+                },
             })
 
             const mainParticipant: MainGenerationParticipant = {
                 async getPreparedState() {
                     return {
                         phase: 'prepared',
-                        revision: graph.revision,
+                        revision: graphWithBoth.revision,
                         generation: 1,
-                        graph,
+                        graph: graphWithBoth,
                         grantTickets: {
                             'cpa.test.secured': {
                                 renderer: 'ticket_sec_12345',
+                                agent: 'ticket_agent_67890',
                             },
                         },
                     }
@@ -864,18 +895,25 @@ describe('PluginPlatformCoordinator', () => {
 
             const coordinator = new PluginPlatformCoordinator({
                 rendererHost,
-                agentHost,
+                agentHost: testAgentHost,
                 mainParticipant,
                 grantTicketTransport: grantTransport,
             })
 
-            const prepared = await coordinator.prepareGeneration(graph)
+            const prepared = await coordinator.prepareGeneration(graphWithBoth)
             await prepared.commit()
 
-            expect(redeemedTickets).toEqual(['ticket_sec_12345'])
+            expect(redeemedCalls).toEqual([
+                { ticket: 'ticket_sec_12345', runtime: 'renderer' },
+                { ticket: 'ticket_agent_67890', runtime: 'agent' },
+            ])
             expect(capturedClient).toBeDefined()
             expect(capturedClient.has('filesystem.read')).toBe(true)
             expect(capturedClient.getHandle()).toBe('handle_for_ticket_sec_12345')
+
+            expect(capturedAgentClient).toBeDefined()
+            expect(capturedAgentClient.has('storage.kv')).toBe(true)
+            expect(capturedAgentClient.getHandle()).toBe('handle_for_ticket_agent_67890')
         })
     })
 
