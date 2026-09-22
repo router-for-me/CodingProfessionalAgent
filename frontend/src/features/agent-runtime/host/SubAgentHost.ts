@@ -21,6 +21,7 @@ import { buildSystemPrompt } from '../context/systemPrompt'
 import { formatWorktreeModePrompt } from '../context/worktreeMode'
 import { HookProvider } from '../providers/HookProvider'
 import { resolveDynamicReasoningEffort } from '../agent/agentLoop'
+import type { PreparedAgentRun } from '@/features/agent/types'
 
 const DEFAULT_SUBAGENT_SETTINGS: SubagentsSettings = {
     enabled: true,
@@ -258,6 +259,7 @@ export interface SubAgentRunRequest {
     agentId: string
     sessionId: string
     runId: string
+    prepared: PreparedAgentRun
     entries: readonly ConversationEntry[]
     userEntry: UserEntry
     model: ModelCatalogEntry
@@ -275,7 +277,7 @@ export interface SubAgentRunRequest {
 }
 
 export interface SubAgentHostConfig {
-    prepared: any
+    prepared: PreparedAgentRun
     codingTools: readonly AgentTool[]
     allTools?: readonly AgentTool[]
     subagentsSettings?: SubagentsSettings
@@ -448,6 +450,8 @@ export class SubAgentHost {
 
     private config: SubAgentHostConfig | null = null
     private parent: SubAgentParentContext | null = null
+    private readonly configsByParentSession = new Map<string, SubAgentHostConfig>()
+    private readonly parentsBySession = new Map<string, SubAgentParentContext>()
 
     constructor(deps: SubAgentHostDependencies) {
         this.generateId = deps.generateId
@@ -455,11 +459,30 @@ export class SubAgentHost {
         this.runChild = deps.run
     }
 
-    private findMatchingRole(query?: string): SubagentRole | undefined {
+    private getConfig(parentSessionId?: string): SubAgentHostConfig | null {
+        if (parentSessionId) {
+            const scoped = this.configsByParentSession.get(parentSessionId)
+            if (scoped) return scoped
+        }
+        return this.config
+    }
+
+    private getParentContext(parentSessionId?: string): SubAgentParentContext | null {
+        if (parentSessionId) {
+            const scoped = this.parentsBySession.get(parentSessionId)
+            if (scoped) return scoped
+        }
+        return this.parent
+    }
+
+    private findMatchingRole(
+        query?: string,
+        config: SubAgentHostConfig | null = this.config,
+    ): SubagentRole | undefined {
         if (!query) return undefined
         const trimmed = query.trim().toLowerCase()
         if (!trimmed) return undefined
-        const roles = this.config?.subagentsSettings?.roles ?? []
+        const roles = config?.subagentsSettings?.roles ?? []
         // Prioritize exact ID match first, then name match (with whitespace trimming)
         return (
             roles.find((r) => r.id && r.id.trim().toLowerCase() === trimmed) ??
@@ -467,13 +490,13 @@ export class SubAgentHost {
         )
     }
 
-    private getLimits(): {
+    private getLimits(config: SubAgentHostConfig | null = this.config): {
         enabled: boolean
         maxGlobal: number
         maxSession: number
         maxDepth: number
     } {
-        const s = this.config?.subagentsSettings ?? DEFAULT_SUBAGENT_SETTINGS
+        const s = config?.subagentsSettings ?? DEFAULT_SUBAGENT_SETTINGS
         return {
             enabled: s.enabled ?? true,
             maxGlobal: typeof s.concurrency === 'number' && s.concurrency > 0 ? s.concurrency : 10,
@@ -533,7 +556,6 @@ export class SubAgentHost {
 
     private drainQueue(): void {
         if (this.slotWaiters.length === 0) return
-        const { maxGlobal, maxSession } = this.getLimits()
 
         // Clean up any aborted waiters
         for (let i = this.slotWaiters.length - 1; i >= 0; i--) {
@@ -549,8 +571,14 @@ export class SubAgentHost {
         let i = 0
         while (i < this.slotWaiters.length) {
             const candidate = this.slotWaiters[i]!
+            const candidateLimits = this.getLimits(
+                this.getConfig(candidate.parentSessionId),
+            )
             const { runningGlobal, runningSession } = this.getRunningCounts(candidate.parentSessionId)
-            if (runningGlobal < maxGlobal && runningSession < maxSession) {
+            if (
+                runningGlobal < candidateLimits.maxGlobal &&
+                runningSession < candidateLimits.maxSession
+            ) {
                 this.slotWaiters.splice(i, 1)
                 candidate.resolve()
             } else {
@@ -559,12 +587,46 @@ export class SubAgentHost {
         }
     }
 
-    configure(config: SubAgentHostConfig): void {
+    configure(config: SubAgentHostConfig, parentSessionId?: string | null): void {
         this.config = config
+        const scopedSessionId = parentSessionId?.trim()
+        if (scopedSessionId) {
+            this.configsByParentSession.set(scopedSessionId, config)
+        }
     }
 
-    setParentContext(parent: SubAgentParentContext | null): void {
+    setParentContext(
+        parent: SubAgentParentContext | null,
+        config?: SubAgentHostConfig,
+    ): void {
+        if (!parent) {
+            this.parent = null
+            this.parentsBySession.clear()
+            this.configsByParentSession.clear()
+            return
+        }
+
         this.parent = parent
+        this.parentsBySession.set(parent.sessionId, parent)
+        const scopedConfig = config ?? this.config
+        if (scopedConfig) {
+            this.configsByParentSession.set(parent.sessionId, scopedConfig)
+        }
+    }
+
+    clearParentContext(sessionId: string, runId?: string): void {
+        const current = this.parentsBySession.get(sessionId)
+        if (current && (!runId || current.runId === runId)) {
+            this.parentsBySession.delete(sessionId)
+            this.configsByParentSession.delete(sessionId)
+        }
+        if (
+            this.parent?.sessionId === sessionId &&
+            (!runId || this.parent.runId === runId)
+        ) {
+            const remaining = [...this.parentsBySession.values()]
+            this.parent = remaining.length > 0 ? remaining[remaining.length - 1]! : null
+        }
     }
 
     subscribe(listener: SubAgentHostListener): () => void {
@@ -665,27 +727,32 @@ export class SubAgentHost {
         if (!requestedName) {
             return textResult('spawn_agent requires a non-empty name', true)
         }
-        const prepared = this.config?.prepared
         const rawParentSessionId = options.parentSessionId ?? this.parent?.sessionId
-        if (!prepared || !rawParentSessionId) {
+        if (!rawParentSessionId) {
             return textResult('No active parent session to spawn a sub-agent', true)
         }
 
-        const { enabled, maxGlobal, maxSession, maxDepth } = this.getLimits()
+        // Determine depth, root parent session, and its run-scoped configuration.
+        const parentAgent = options.callerAgentId
+            ? this.agents.get(options.callerAgentId)
+            : this.agents.get(rawParentSessionId)
+        const parentSessionId = parentAgent?.parentSessionId ?? rawParentSessionId
+        const config = this.getConfig(parentSessionId)
+        const prepared = config?.prepared
+        if (!prepared) {
+            return textResult('No active parent session to spawn a sub-agent', true)
+        }
+
+        const { enabled, maxGlobal, maxSession, maxDepth } = this.getLimits(config)
         if (!enabled) {
             return textResult('Subagents are disabled in settings', true)
         }
 
-        // Determine depth & parent agent
-        const parentAgent = options.callerAgentId
-            ? this.agents.get(options.callerAgentId)
-            : this.agents.get(rawParentSessionId)
         const parentDepth = parentAgent?.depth ?? 0
         if (parentDepth >= maxDepth) {
             return textResult(`Subagent max depth of ${maxDepth} reached; nested subagents are not permitted`, true)
         }
         const depth = parentDepth + 1
-        const parentSessionId = parentAgent?.parentSessionId ?? rawParentSessionId
 
         // Reuse existing sub-agent when replaying/resuming a tool call for this parent session
         const targetToolCallId = options.toolCallId
@@ -739,9 +806,9 @@ export class SubAgentHost {
             })
 
             let childEntries: ConversationEntry[] = []
-            if (this.config?.getEntries) {
+            if (config.getEntries) {
                 try {
-                    const loaded = await this.config.getEntries(existingAgent.sessionId)
+                    const loaded = await config.getEntries(existingAgent.sessionId)
                     if (Array.isArray(loaded)) {
                         childEntries = loaded
                     }
@@ -768,8 +835,8 @@ export class SubAgentHost {
         const id = this.generateId()
 
         const matchedRole =
-            this.findMatchingRole(options.role) ??
-            this.findMatchingRole(requestedName)
+            this.findMatchingRole(options.role, config) ??
+            this.findMatchingRole(requestedName, config)
 
         const roleId = matchedRole?.id
         const roleName = matchedRole?.name
@@ -782,11 +849,11 @@ export class SubAgentHost {
             (matchedRole?.reasoningEffort && matchedRole.reasoningEffort !== 'default')
                 ? matchedRole.reasoningEffort
                 : (options.reasoningEffort ?? parsedEffort)
-        const model = this.resolveModel(parsedModelId || effectiveModelId)
+        const model = this.resolveModel(parsedModelId || effectiveModelId, config)
         const dynamicParentEffort = resolveDynamicReasoningEffort(
             prepared.reasoningEffort,
             prepared.model,
-            this.parent?.getRuntimeSettings,
+            this.getParentContext(parentSessionId)?.getRuntimeSettings,
         )
         const reasoningEffort = resolveChildReasoning(
             model,
@@ -875,7 +942,7 @@ export class SubAgentHost {
             },
             {
                 hooks: prepared?.generationSnapshot?.hooks,
-                extensionRegistry: this.config?.extensionRegistry,
+                extensionRegistry: config.extensionRegistry,
             },
         )
         if (!startOutcome.continue) {
@@ -918,7 +985,7 @@ export class SubAgentHost {
                 },
                 {
                     hooks: prepared?.generationSnapshot?.hooks,
-                    extensionRegistry: this.config?.extensionRegistry,
+                    extensionRegistry: config.extensionRegistry,
                 },
             )
             return textResult(errorMessageOf(error), true)
@@ -948,7 +1015,7 @@ export class SubAgentHost {
             },
             {
                 hooks: prepared?.generationSnapshot?.hooks,
-                extensionRegistry: this.config?.extensionRegistry,
+                extensionRegistry: config.extensionRegistry,
             },
         )
         const last = final?.lastMessage?.trim() ?? ''
@@ -1198,10 +1265,11 @@ export class SubAgentHost {
             )
         }
 
+        const config = this.getConfig(record.parentSessionId)
         let entries: ConversationEntry[] = options.entries ? [...options.entries] : []
-        if (entries.length === 0 && this.config?.getEntries) {
+        if (entries.length === 0 && config?.getEntries) {
             try {
-                const loaded = await this.config.getEntries(record.sessionId)
+                const loaded = await config.getEntries(record.sessionId)
                 if (Array.isArray(loaded)) {
                     entries = [...loaded]
                 }
@@ -1370,9 +1438,10 @@ export class SubAgentHost {
 
         let existingEntries = this.runtimes.get(agentId)?.entries.slice() ?? []
         const record = this.agents.get(agentId)
-        if (existingEntries.length === 0 && record && this.config?.getEntries) {
+        const config = record ? this.getConfig(record.parentSessionId) : null
+        if (existingEntries.length === 0 && record && config?.getEntries) {
             try {
-                const loaded = await this.config.getEntries(record.sessionId)
+                const loaded = await config.getEntries(record.sessionId)
                 if (Array.isArray(loaded) && loaded.length > 0) {
                     existingEntries = [...loaded]
                 }
@@ -1446,12 +1515,12 @@ export class SubAgentHost {
         userEntry: UserEntry,
     ): Promise<void> {
         const record = this.agents.get(agentId)
-        const config = this.config
+        const config = record ? this.getConfig(record.parentSessionId) : null
         if (!record || !config) {
             throw new Error('Sub-agent runtime is not configured')
         }
-        const model = this.resolveModel(record.modelId)
-        const { enabled, maxDepth } = this.getLimits()
+        const model = this.resolveModel(record.modelId, config)
+        const { enabled, maxDepth } = this.getLimits(config)
         const currentDepth = record.depth ?? 1
         const canSpawnChildren = enabled && currentDepth < maxDepth
 
@@ -1461,10 +1530,10 @@ export class SubAgentHost {
 
         const effectiveRolePrompt =
             record.rolePrompt ||
-            this.findMatchingRole(record.roleId || record.name)?.description
+            this.findMatchingRole(record.roleId || record.name, config)?.description
         const effectiveRoleName =
             record.roleName ||
-            this.findMatchingRole(record.roleId || record.name)?.name
+            this.findMatchingRole(record.roleId || record.name, config)?.name
 
         const developerPrompt = buildSubAgentDeveloperPrompt(
             effectiveRoleName,
@@ -1474,6 +1543,7 @@ export class SubAgentHost {
             agentId,
             sessionId: record.sessionId,
             runId: this.generateId(),
+            prepared: config.prepared,
             entries: runtime.entries.slice(),
             userEntry,
             model,
@@ -1512,8 +1582,10 @@ export class SubAgentHost {
         })
     }
 
-    private resolveModel(modelId?: string): ModelCatalogEntry {
-        const config = this.config
+    private resolveModel(
+        modelId: string | undefined,
+        config: SubAgentHostConfig | null,
+    ): ModelCatalogEntry {
         if (!config) {
             throw new Error('Sub-agent runtime is not configured')
         }

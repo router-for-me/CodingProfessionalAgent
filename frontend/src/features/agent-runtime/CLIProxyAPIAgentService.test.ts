@@ -1448,6 +1448,131 @@ function createWorktreePrepareInput(
     })
 
     describe('sub-agent independent connections', () => {
+        it('pins child tools and cwd to the parent run across unrelated prepares', async () => {
+            const { service, bridge, fakeClient } = createService()
+            await bridge.mkdirAll('/repo-a')
+            await bridge.mkdirAll('/repo-b')
+
+            const projectPrepared = await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'key',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                requestApproval: false,
+                projectPath: '/repo-a',
+                sessionId: 'project-session',
+            })
+            const pureChatPrepared = await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'key',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                requestApproval: false,
+                sessionId: 'pure-chat-session',
+            })
+            expect(pureChatPrepared.tools).toEqual([])
+
+            fakeClient.queue(
+                {
+                    kind: 'stream',
+                    final: (seed) =>
+                        doneAssistant(seed, {
+                            stopReason: 'stop',
+                            content: [{ type: 'text', text: 'first child done' }],
+                        }),
+                },
+                {
+                    kind: 'stream',
+                    final: (seed) =>
+                        doneAssistant(seed, {
+                            stopReason: 'stop',
+                            content: [{ type: 'text', text: 'second child done' }],
+                        }),
+                },
+                {
+                    kind: 'stream',
+                    final: (seed) =>
+                        doneAssistant(seed, {
+                            stopReason: 'stop',
+                            content: [{ type: 'text', text: 'parent done' }],
+                        }),
+                },
+            )
+
+            const parentUser = userEntry(
+                'parent-user',
+                'start project work',
+                'project-session',
+            )
+            const parentStream = service.streamChat({
+                prepared: projectPrepared,
+                sessionId: 'project-session',
+                runId: 'project-run',
+                entries: [parentUser],
+                userEntry: parentUser,
+            })
+            const firstEvent = await parentStream.next()
+            expect(firstEvent.value).toMatchObject({ type: 'agent-start' })
+
+            const firstResult = await service.subAgents.spawn('inspect repo A', {
+                name: 'FirstWorker',
+                modelId: modelBase.id,
+                parentSessionId: 'project-session',
+            })
+            expect(firstResult.isError).toBeFalsy()
+            expect(fakeClient.calls[1]?.tools?.map((tool) => tool.name)).toEqual([
+                'read',
+                'bash',
+                'edit',
+                'write',
+            ])
+            expect(fakeClient.calls[1]?.systemPrompt).toContain(
+                'Current working directory: /repo-a',
+            )
+
+            await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'key',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                requestApproval: false,
+                projectPath: '/repo-b',
+                sessionId: 'other-project-session',
+            })
+
+            const secondResult = await service.subAgents.spawn('recheck repo A', {
+                name: 'SecondWorker',
+                modelId: modelBase.id,
+                parentSessionId: 'project-session',
+            })
+            expect(secondResult.isError).toBeFalsy()
+            expect(fakeClient.calls[2]?.tools?.map((tool) => tool.name)).toEqual([
+                'read',
+                'bash',
+                'edit',
+                'write',
+            ])
+            expect(fakeClient.calls[2]?.systemPrompt).toContain(
+                'Current working directory: /repo-a',
+            )
+            expect(fakeClient.calls[2]?.systemPrompt).not.toContain(
+                'Current working directory: /repo-b',
+            )
+
+            for await (const _event of {
+                [Symbol.asyncIterator]: () => parentStream,
+            }) {
+                // Drain the parent run so scoped resources are released.
+            }
+            expect(fakeClient.calls).toHaveLength(3)
+        })
+
         it('opens a dedicated manager and sends the child model upstream', async () => {
             const bridge = new FakeNativeBridge()
             const managers: CPAConnectionManager[] = []

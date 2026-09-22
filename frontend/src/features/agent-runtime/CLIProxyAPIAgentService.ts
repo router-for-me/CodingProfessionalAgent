@@ -73,6 +73,7 @@ import {
     codingToolsOnly,
     isSubAgentToolName,
     resolveChildReasoning,
+    type SubAgentHostConfig,
     type SubAgentRunRequest,
 } from './host/SubAgentHost'
 import { HookProvider } from './providers/HookProvider'
@@ -968,6 +969,8 @@ export class CLIProxyAPIAgentService implements AgentService {
     private lastConfigDisposeError: AgentPreflightError | null = null
     /** Last successfully committed prepared snapshot (tests / diagnostics). */
     private latestSnapshot: PreparedAgentRun | null = null
+    /** Immutable subagent configuration associated with each prepared run. */
+    private readonly subAgentConfigs = new WeakMap<PreparedAgentRun, SubAgentHostConfig>()
 
     constructor(deps: CLIProxyAPIAgentServiceDependencies) {
         this.bridge = deps.bridge
@@ -1346,6 +1349,20 @@ export class CLIProxyAPIAgentService implements AgentService {
                 generationSnapshot,
             }) as PreparedAgentRun
 
+            const subAgentConfig: SubAgentHostConfig = {
+                prepared,
+                codingTools: freezeTools(codingToolsOnly(toolsRaw)),
+                allTools: freezeTools(toolsRaw),
+                subagentsSettings,
+                gitSettings,
+                models: deepFreezeData(
+                    deepCloneData(models),
+                ) as ModelCatalogEntry[],
+                extensionRegistry: this.extensionRegistry,
+                getEntries: input.getEntries,
+            }
+            this.subAgentConfigs.set(prepared, subAgentConfig)
+
             // Only the namespace rotation critical section holds the config mutex.
             const release = await this.configMutex.acquire(signal)
             try {
@@ -1373,18 +1390,7 @@ export class CLIProxyAPIAgentService implements AgentService {
 
                 this.committedGeneration = gen
                 this.latestSnapshot = prepared
-                this.subAgents.configure({
-                    prepared,
-                    codingTools: freezeTools(codingToolsOnly(toolsRaw)),
-                    allTools: freezeTools(toolsRaw),
-                    subagentsSettings,
-                    gitSettings,
-                    models: deepFreezeData(
-                        deepCloneData(models),
-                    ) as ModelCatalogEntry[],
-                    extensionRegistry: this.extensionRegistry,
-                    getEntries: input.getEntries,
-                })
+                this.subAgents.configure(subAgentConfig, input.sessionId)
                 return prepared
             } finally {
                 release()
@@ -1465,7 +1471,7 @@ export class CLIProxyAPIAgentService implements AgentService {
             } finally {
                 if (!bodyEntered) {
                     unlink()
-                    this.subAgents.setParentContext(null)
+                    this.subAgents.clearParentContext(sessionId, runId)
                     this.releaseActive(token)
                     await disposeGenerationSnapshot(prepared.generationSnapshot)
                 }
@@ -1481,7 +1487,7 @@ export class CLIProxyAPIAgentService implements AgentService {
             } finally {
                 if (!bodyEntered) {
                     unlink()
-                    this.subAgents.setParentContext(null)
+                    this.subAgents.clearParentContext(sessionId, runId)
                     this.releaseActive(token)
                     await disposeGenerationSnapshot(prepared.generationSnapshot)
                 }
@@ -1523,11 +1529,23 @@ export class CLIProxyAPIAgentService implements AgentService {
             if (warmer && !warmer.isDrained) return
             await disposeSnapshotOnce()
         }
-        this.subAgents.setParentContext({
-            sessionId,
-            runId,
-            getRuntimeSettings: (input as AgentStreamChatInput).getRuntimeSettings,
-        })
+        const subAgentConfig = this.subAgentConfigs.get(prepared) ?? {
+            prepared,
+            codingTools: freezeTools(codingToolsOnly(prepared.tools)),
+            allTools: freezeTools(prepared.tools),
+            subagentsSettings: prepared.subagentsSettings,
+            gitSettings: prepared.gitSettings,
+            models: prepared.models ?? [prepared.model],
+            extensionRegistry: this.extensionRegistry,
+        }
+        this.subAgents.setParentContext(
+            {
+                sessionId,
+                runId,
+                getRuntimeSettings: (input as AgentStreamChatInput).getRuntimeSettings,
+            },
+            subAgentConfig,
+        )
         try {
             const { manager, namespace } = await this.ensureConnectionManager(
                 prepared,
@@ -1735,7 +1753,7 @@ export class CLIProxyAPIAgentService implements AgentService {
             throw new Error(message)
         } finally {
             unlink()
-            this.subAgents.setParentContext(null)
+            this.subAgents.clearParentContext(sessionId, runId)
             this.releaseActive(token)
             await modelInvoker?.close()
             agentRunSettled = true
@@ -2015,10 +2033,7 @@ export class CLIProxyAPIAgentService implements AgentService {
         request: SubAgentRunRequest,
     ): AsyncGenerator<AgentRunEvent> {
         this.assertNotDisposed()
-        const prepared = this.latestSnapshot
-        if (!prepared) {
-            throw new Error('No prepared snapshot for sub-agent run')
-        }
+        const prepared = request.prepared
 
         const controller = new AbortController()
         const unlink = linkAbortSignals(request.signal, controller)
@@ -2209,6 +2224,7 @@ export class CLIProxyAPIAgentService implements AgentService {
             ),
         )
         this.subAgents.abortAll()
+        this.subAgents.setParentContext(null)
         this.abortChildOps()
         for (const active of this.activeOps.values()) {
             if (active.kind === 'stream' && active.loop) {

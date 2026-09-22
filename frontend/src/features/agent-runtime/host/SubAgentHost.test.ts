@@ -142,6 +142,75 @@ describe('SubAgentHost', () => {
         expect(record?.reasoningEffort).toBe('medium')
     })
 
+    it('keeps run-scoped tools and prepared state isolated across parent sessions', async () => {
+        const requests: SubAgentRunRequest[] = []
+        const host = new SubAgentHost({
+            generateId: (() => {
+                let count = 0
+                return () => `isolated-${++count}`
+            })(),
+            now: () => 10,
+            run: (request) => {
+                requests.push(request)
+                return scriptedRun(request, ['isolated child done'])
+            },
+        })
+        const projectTool: AgentTool = {
+            ...readTool,
+            name: 'project-a-read',
+            label: 'project-a-read',
+        }
+        const projectPrepared = {
+            ...preparedRun(),
+            projectCwd: '/repo-a',
+            projectPaths: ['/repo-a'],
+            tools: [projectTool],
+        }
+        const pureChatPrepared = {
+            ...preparedRun(),
+            projectCwd: undefined,
+            projectPaths: [],
+            tools: [],
+        }
+        const projectConfig = {
+            prepared: projectPrepared,
+            codingTools: [projectTool],
+            models: [model],
+        }
+        const pureChatConfig = {
+            prepared: pureChatPrepared,
+            codingTools: [],
+            models: [model],
+        }
+
+        host.configure(projectConfig)
+        host.setParentContext(
+            { sessionId: 'project-session', runId: 'project-run' },
+            projectConfig,
+        )
+        host.configure(pureChatConfig)
+        host.setParentContext(
+            { sessionId: 'pure-chat-session', runId: 'pure-chat-run' },
+            pureChatConfig,
+        )
+        host.clearParentContext('pure-chat-session', 'pure-chat-run')
+
+        const result = await host.spawn('inspect project A', {
+            name: 'ScopedWorker',
+            parentSessionId: 'project-session',
+        })
+
+        expect(result.isError).toBeFalsy()
+        expect(requests).toHaveLength(1)
+        expect(requests[0]?.prepared).toBe(projectPrepared)
+        expect(requests[0]?.tools.map((tool) => tool.name)).toEqual([
+            'project-a-read',
+        ])
+        expect(requests[0]?.systemPrompt).toContain(
+            'Current working directory: /repo-a',
+        )
+    })
+
     it('passes the requested catalog model into the child run', async () => {
         const replies = ['used flash']
         let seenModelId = ''
@@ -1679,7 +1748,7 @@ describe('SubAgentHost', () => {
         const preparedWithGit = {
             ...preparedRun(),
             gitSettings: {
-                mergeMethod: 'merge',
+                mergeMethod: 'merge' as const,
                 alwaysForcePush: true,
                 createDraftPr: false,
                 commitInstructions: 'Prefix with subagent task ID',
