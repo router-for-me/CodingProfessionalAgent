@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useHostServices, useTranslation } from '@cpa/plugin-ui'
 import { useNavigate } from '@tanstack/react-router'
 import {
@@ -21,6 +21,7 @@ export function HomeEmpty({ onSelect }: HomeEmptyProps = {}) {
     const navigate = useNavigate()
     const services = useHostServices()
     const locale = (i18n.language || 'zh-CN').startsWith('zh') ? 'zh-CN' : 'en'
+    const [submitting, setSubmitting] = useState(false)
 
     const logoRef = useRef<SVGSVGElement | null>(null)
     const animStateRef = useRef({
@@ -100,8 +101,8 @@ export function HomeEmpty({ onSelect }: HomeEmptyProps = {}) {
             return
         }
 
-        const isStreaming = (services as any)?.agent?.isStreaming
-        if (isStreaming) return
+        if (submitting) return
+        setSubmitting(true)
 
         const prompt = getQuickActionPrompt(kind, locale)
         const pendingSessionContext = services?.ui?.getPendingSessionContext?.() ?? {
@@ -112,33 +113,22 @@ export function HomeEmpty({ onSelect }: HomeEmptyProps = {}) {
         }
 
         void (async () => {
-            if ((services as any)?.agent?.send) {
-                const sessionId = await (services as any).agent.send({
-                    text: prompt,
-                    kind,
-                    projectId: pendingSessionContext.projectId,
-                    branch: pendingSessionContext.branch,
-                    workLocation: pendingSessionContext.workLocation,
-                    environmentId: pendingSessionContext.environmentId,
-                    sessionId: null,
-                })
-                if (!sessionId) return
-                if (services?.navigation?.navigate) {
-                    await services.navigation.navigate(`/chat/${sessionId}`)
-                } else {
-                    void navigate({
-                        to: '/chat/$sessionId',
-                        params: { sessionId },
-                    } as any)
-                }
-            } else if (services?.sessions?.create) {
-                const sessionId = await services.sessions.create({
-                    projectId: pendingSessionContext.projectId ?? undefined,
-                    branch: pendingSessionContext.branch ?? undefined,
-                    workLocation: pendingSessionContext.workLocation,
-                    environmentId: pendingSessionContext.environmentId,
-                })
-                if (sessionId) {
+            try {
+                const sendFn = services?.agentRun?.send ?? services?.chatMessages?.send
+
+                if (sendFn) {
+                    const sessionId = await sendFn({
+                        text: prompt,
+                        projectId: pendingSessionContext.projectId,
+                        branch: pendingSessionContext.branch,
+                        workLocation: pendingSessionContext.workLocation,
+                        environmentId: pendingSessionContext.environmentId,
+                        sessionId: null as any,
+                    })
+                    if (!sessionId) {
+                        setSubmitting(false)
+                        return
+                    }
                     if (services?.navigation?.navigate) {
                         await services.navigation.navigate(`/chat/${sessionId}`)
                     } else {
@@ -147,13 +137,35 @@ export function HomeEmpty({ onSelect }: HomeEmptyProps = {}) {
                             params: { sessionId },
                         } as any)
                     }
+                } else if (services?.sessions?.create) {
+                    const sessionId = await services.sessions.create({
+                        projectId: pendingSessionContext.projectId ?? undefined,
+                        branch: pendingSessionContext.branch ?? undefined,
+                        workLocation: pendingSessionContext.workLocation,
+                        environmentId: pendingSessionContext.environmentId,
+                    })
+                    if (sessionId) {
+                        if (services?.navigation?.navigate) {
+                            await services.navigation.navigate(`/chat/${sessionId}`)
+                        } else {
+                            void navigate({
+                                to: '/chat/$sessionId',
+                                params: { sessionId },
+                            } as any)
+                        }
+                    } else {
+                        setSubmitting(false)
+                    }
+                } else if (services?.navigation?.navigate) {
+                    await services.navigation.navigate('/chat/new')
+                } else {
+                    void navigate({
+                        to: '/',
+                    })
                 }
-            } else if (services?.navigation?.navigate) {
-                await services.navigation.navigate('/chat/new')
-            } else {
-                void navigate({
-                    to: '/',
-                })
+            } catch (err) {
+                setSubmitting(false)
+                console.error('[HomeEmpty] Failed to start quick action:', err)
             }
         })()
     }

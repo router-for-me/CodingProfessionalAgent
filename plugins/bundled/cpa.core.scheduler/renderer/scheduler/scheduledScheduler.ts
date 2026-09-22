@@ -279,6 +279,7 @@ export class ScheduledTaskScheduler {
                 ? currentSessions.find((s) => s.id === task.chatSessionId)
                 : null
 
+            const isUsingExistingSession = Boolean(existingSession)
             if (existingSession) {
                 sessionId = existingSession.id
             } else if (this.services?.sessions?.create) {
@@ -297,12 +298,16 @@ export class ScheduledTaskScheduler {
 
             this.services?.ui?.pushToast?.(`Scheduled task [${task.title}] started as planned`)
 
-            if ((this.services as any)?.agent?.send) {
-                await (this.services as any).agent.send({
+            const sendFn = this.services?.agentRun?.send ?? this.services?.chatMessages?.send
+
+            if (sendFn && sessionId) {
+                await sendFn({
                     text: task.prompt,
                     projectId: targetProjectId ?? undefined,
-                    branch: pendingContext.branch ?? undefined,
-                    sessionId: isExistingChat ? task.chatSessionId : sessionId,
+                    branch: isUsingExistingSession ? undefined : (pendingContext.branch ?? undefined),
+                    workLocation: isUsingExistingSession ? undefined : (pendingContext.workLocation ?? 'local'),
+                    environmentId: isUsingExistingSession ? undefined : (pendingContext.environmentId ?? null),
+                    sessionId,
                 })
             }
         } catch (err) {

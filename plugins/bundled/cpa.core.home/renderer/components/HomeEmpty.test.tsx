@@ -88,16 +88,15 @@ describe('HomeEmpty component', () => {
         })
     })
 
-    it('sends prompt and navigates when clicking card with agent service', async () => {
+    it('sends prompt and navigates when clicking card with chatMessages service', async () => {
         const send = vi.fn().mockResolvedValue('sess-agent-1')
         const navigate = vi.fn().mockResolvedValue(undefined)
         const mockServices: any = {
             sessions: {
                 setCurrentSessionId: vi.fn(),
             },
-            agent: {
+            chatMessages: {
                 send,
-                isStreaming: false,
             },
             ui: {
                 getPendingSessionContext: () => ({
@@ -124,13 +123,57 @@ describe('HomeEmpty component', () => {
         await waitFor(() => {
             expect(send).toHaveBeenCalledWith(
                 expect.objectContaining({
-                    kind: 'review',
                     projectId: 'proj-2',
                     branch: 'feature',
                     workLocation: 'worktree',
                 }),
             )
             expect(navigate).toHaveBeenCalledWith('/chat/sess-agent-1')
+        })
+    })
+
+    it('sends prompt and navigates when clicking card with agentRun service', async () => {
+        const send = vi.fn().mockResolvedValue('sess-agent-2')
+        const navigate = vi.fn().mockResolvedValue(undefined)
+        const mockServices: any = {
+            sessions: {
+                setCurrentSessionId: vi.fn(),
+            },
+            agentRun: {
+                send,
+                getRunState: () => ({ isStreaming: false, activeRunId: null }),
+            },
+            ui: {
+                getPendingSessionContext: () => ({
+                    projectId: 'proj-3',
+                    branch: 'main',
+                    workLocation: 'local',
+                    environmentId: null,
+                }),
+            },
+            navigation: {
+                navigate,
+            },
+        }
+
+        render(
+            <HostServicesProvider services={mockServices}>
+                <HomeEmpty />
+            </HostServicesProvider>,
+        )
+
+        const cards = screen.getAllByRole('listitem')
+        fireEvent.click(cards[0]!) // explore
+
+        await waitFor(() => {
+            expect(send).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    projectId: 'proj-3',
+                    branch: 'main',
+                    workLocation: 'local',
+                }),
+            )
+            expect(navigate).toHaveBeenCalledWith('/chat/sess-agent-2')
         })
     })
 

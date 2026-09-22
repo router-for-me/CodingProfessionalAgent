@@ -66,7 +66,7 @@ describe('scheduledScheduler', () => {
                 }),
                 pushToast: toastMock,
             } as any,
-            agent: {
+            agentRun: {
                 send: sendMock,
             } as any,
         } as unknown as HostServices
@@ -272,6 +272,40 @@ describe('scheduledScheduler', () => {
                 expect.objectContaining({
                     sessionId: 'existing-sess-1',
                     text: 'Run something',
+                    workLocation: undefined,
+                    environmentId: undefined,
+                }),
+            )
+        })
+
+        it('creates a new session and sends prompt to the new session when existing-chat session is missing', async () => {
+            const scheduler = new ScheduledTaskScheduler()
+            scheduler.setServices(mockServices)
+            const now = new Date(2025, 4, 15, 9, 0, 0)
+
+            const task: ScheduledTask = {
+                id: 'task-missing-existing',
+                title: 'Task for Missing Chat',
+                schedule: 'Daily 09:00:00',
+                prompt: 'Run something after deletion',
+                enabled: true,
+                status: 'active',
+                createdAt: 1000,
+                runIn: 'existing-chat',
+                chatSessionId: 'deleted-session-999',
+            }
+            useScheduledTasksStore.setState({ tasks: [task] })
+
+            const triggered = await scheduler.tick(now)
+            expect(triggered).toHaveLength(1)
+            expect(mockSessions).toHaveLength(1)
+            const createdSessionId = mockSessions[0]?.id
+            expect(createdSessionId).toBeDefined()
+            expect(createdSessionId).not.toBe('deleted-session-999')
+            expect(sendMock).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    sessionId: createdSessionId,
+                    text: 'Run something after deletion',
                 }),
             )
         })
@@ -301,6 +335,49 @@ describe('scheduledScheduler', () => {
             expect(mockSessions).toHaveLength(1)
             expect(mockSessions[0]?.title).toBe('Task for New Chat')
             expect(mockSessions[0]?.projectId).toBe('proj-1')
+            expect(sendMock).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    sessionId: mockSessions[0]?.id,
+                    text: 'Run something new',
+                    projectId: 'proj-1',
+                }),
+            )
+        })
+
+        it('falls back to chatMessages.send when agentRun is undefined', async () => {
+            const fallbackSend = vi.fn().mockResolvedValue('session-chatmessages-1')
+            const servicesWithChatMessages = {
+                ...mockServices,
+                agentRun: undefined,
+                chatMessages: {
+                    send: fallbackSend,
+                } as any,
+            } as unknown as HostServices
+
+            const scheduler = new ScheduledTaskScheduler()
+            scheduler.setServices(servicesWithChatMessages)
+            const now = new Date(2025, 4, 15, 9, 0, 0)
+
+            const task: ScheduledTask = {
+                id: 'task-fallback',
+                title: 'Task Fallback ChatMessages',
+                schedule: 'Daily 09:00:00',
+                prompt: 'Fallback prompt',
+                enabled: true,
+                status: 'active',
+                createdAt: 1000,
+                runIn: 'new-chat',
+            }
+            useScheduledTasksStore.setState({ tasks: [task] })
+
+            await scheduler.tick(now)
+
+            expect(fallbackSend).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    sessionId: mockSessions[0]?.id,
+                    text: 'Fallback prompt',
+                }),
+            )
         })
 
         it('re-associates a recreated project by its unchanged path', async () => {
