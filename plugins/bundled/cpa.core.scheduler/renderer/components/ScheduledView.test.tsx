@@ -372,4 +372,44 @@ describe('ScheduledView', () => {
         })
         expect(listMock).toHaveBeenCalled()
     })
+
+    it('correctly localizes task list and filter tabs in zh-CN locale', async () => {
+        await i18n.changeLanguage('zh-CN')
+        useScheduledTasksStore.setState({
+            tasks: [
+                {
+                    id: 'task-zh',
+                    title: '测试任务',
+                    schedule: 'Daily 9:00',
+                    prompt: '测试内容',
+                    enabled: true,
+                    status: 'active',
+                    unread: false,
+                    createdAt: Date.now(),
+                },
+            ],
+        })
+
+        const { unmount } = render(
+            <HostServicesProvider services={mockServices}>
+                <ScheduledView />
+            </HostServicesProvider>,
+        )
+
+        expect(screen.getByText('已安排的任务')).toBeInTheDocument()
+        expect(screen.getByText('全部')).toBeInTheDocument()
+        expect(screen.getByText('已开启')).toBeInTheDocument()
+        expect(screen.getByText('已暂停')).toBeInTheDocument()
+        expect(screen.getByText('已完成')).toBeInTheDocument()
+        expect(screen.getByText('全部标记为已读')).toBeInTheDocument()
+        expect(screen.getByTitle('暂停')).toBeInTheDocument()
+        expect(screen.getByTitle('编辑')).toBeInTheDocument()
+        expect(screen.getByTitle('删除')).toBeInTheDocument()
+
+        // Schedule subtitle should be localized to 每天
+        expect(screen.getByText(/每天 9:00/)).toBeInTheDocument()
+
+        unmount()
+        await i18n.changeLanguage('en')
+    })
 })

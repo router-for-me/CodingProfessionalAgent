@@ -1053,4 +1053,32 @@ describe('ScheduledCreateDrawer', () => {
         expect(screen.queryByRole('listbox')).toBeNull()
         expect(onCloseMock).not.toHaveBeenCalled()
     })
+
+    it('correctly localizes options in zh-CN locale', async () => {
+        await i18n.changeLanguage('zh-CN')
+        const { unmount } = render(
+            <HostServicesProvider services={hostServices}>
+                <ScheduledCreateDrawer
+                    open
+                    onClose={onCloseMock}
+                    models={mockModels}
+                />
+            </HostServicesProvider>,
+        )
+
+        // "Existing chat" should be localized as "现有聊天"
+        expect(screen.getByText('现有聊天')).toBeInTheDocument()
+
+        // "Daily" should be localized as "每天"
+        expect(screen.getByText('每天')).toBeInTheDocument()
+
+        // "Important updates" should be localized as "重要更新"
+        expect(screen.getByText('重要更新')).toBeInTheDocument()
+
+        // Resize sidebar aria-label
+        expect(screen.getByLabelText('调整侧边栏宽度')).toBeInTheDocument()
+
+        unmount()
+        await i18n.changeLanguage('en')
+    })
 })

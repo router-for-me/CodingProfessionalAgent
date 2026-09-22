@@ -85,15 +85,72 @@ const SUGGESTIONS: SuggestionItem[] = [
     },
 ]
 
+const WEEKDAY_KEYS: Record<number, string> = {
+    0: 'common.sunday',
+    1: 'common.monday',
+    2: 'common.tuesday',
+    3: 'common.wednesday',
+    4: 'common.thursday',
+    5: 'common.friday',
+    6: 'common.saturday',
+}
+
+const ENGLISH_WEEKDAY_MAP: Record<string, number> = {
+    sunday: 0,
+    sun: 0,
+    monday: 1,
+    mon: 1,
+    tuesday: 2,
+    tue: 2,
+    wednesday: 3,
+    wed: 3,
+    thursday: 4,
+    thu: 4,
+    friday: 5,
+    fri: 5,
+    saturday: 6,
+    sat: 6,
+}
+
+function formatScheduleDisplay(schedule: string, t: any): string {
+    const raw = schedule.trim()
+    const lower = raw.toLowerCase()
+    const timeMatch = raw.match(/(\d{1,2}:\d{2}(?::\d{2})?)/)
+    const timeStr = timeMatch ? timeMatch[1] : ''
+
+    if (lower.startsWith('daily')) {
+        const prefix = t('scheduled.drawer.daily', t('scheduled.drawer.repeatDaily', 'Daily'))
+        return timeStr ? `${prefix} ${timeStr}` : prefix
+    }
+    if (lower.startsWith('weekdays')) {
+        const prefix = t('scheduled.drawer.weekdays', t('scheduled.drawer.repeatWeekdays', 'Weekdays'))
+        return timeStr ? `${prefix} ${timeStr}` : prefix
+    }
+    if (lower.startsWith('hourly')) {
+        const prefix = t('scheduled.drawer.hourly', t('scheduled.drawer.repeatHourly', 'Hourly'))
+        return timeStr ? `${prefix} ${timeStr}` : prefix
+    }
+    for (const [dayName, dayIndex] of Object.entries(ENGLISH_WEEKDAY_MAP)) {
+        if (lower.startsWith(dayName)) {
+            const dayKey = WEEKDAY_KEYS[dayIndex]
+            const dayLabel = dayKey ? t(dayKey, dayName) : dayName
+            return timeStr ? `${dayLabel} ${timeStr}` : dayLabel
+        }
+    }
+    return raw
+}
+
 function formatTaskSubtitle(task: ScheduledTask, t: any): string {
+    const displaySchedule = formatScheduleDisplay(task.schedule, t)
+
     if (task.status === 'completed') {
-        return `${task.schedule} · ${t('scheduled.completedStatus', 'Completed')}`
+        return `${displaySchedule} · ${t('scheduled.completedStatus', 'Completed')}`
     }
     if (task.enabled === false || task.status === 'paused') {
-        return `${task.schedule} · ${t('scheduled.pausedStatus', 'Paused')}`
+        return `${displaySchedule} · ${t('scheduled.pausedStatus', 'Paused')}`
     }
 
-    const fullSchedule = task.schedule
+    const fullSchedule = displaySchedule
 
     const timeMatch = task.schedule.match(/(\d{1,2}):(\d{2})/)
     if (!timeMatch) {
@@ -222,7 +279,7 @@ export function ScheduledView() {
             title: t(suggestion.titleKey, suggestion.defaultTitle),
             schedule: t(suggestion.timeKey, suggestion.defaultTime),
             description: t(suggestion.descKey, suggestion.defaultDesc),
-            prompt: t(suggestion.descKey, suggestion.defaultDesc),
+            prompt: t(suggestion.promptKey, suggestion.defaultPrompt),
             enabled: true,
             status: 'active',
             unread: true,
@@ -353,6 +410,7 @@ export function ScheduledView() {
                                 {searchQuery ? (
                                     <button
                                         type="button"
+                                        aria-label={t('common.clear', 'Clear')}
                                         onClick={() => setSearchQuery('')}
                                         className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
                                     >

@@ -563,7 +563,7 @@ function DrawerChatSelectRow({
                             {searchQuery ? (
                                 <button
                                     type="button"
-                                    aria-label="Clear"
+                                    aria-label={t('common.clear', 'Clear')}
                                     onClick={() => setSearchQuery('')}
                                     className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
                                 >
@@ -625,6 +625,10 @@ function DrawerChatSelectRow({
                                             </button>
                                         )
                                     })}
+                                </div>
+                            ) : searchQuery ? (
+                                <div className="py-3 text-center text-xs text-[var(--text-muted)] font-[inherit]">
+                                    {t('scheduled.drawer.noChatsFound', 'No chats found')}
                                 </div>
                             ) : null}
                         </div>
@@ -1025,7 +1029,7 @@ export function ScheduledCreateDrawer({
             {!isMobile ? (
                 <div
                     role="separator"
-                    aria-label="Resize sidebar"
+                    aria-label={t('scheduled.drawer.resize', 'Resize sidebar')}
                     onPointerDown={handleResizeStart}
                     className={cn(
                         'absolute inset-y-0 left-0 z-50 w-3 -ml-1.5 cursor-col-resize touch-none',
@@ -1043,8 +1047,8 @@ export function ScheduledCreateDrawer({
                 <div className="flex items-center gap-2">
                     <span className="text-[15px] font-semibold text-[var(--text-primary)] font-[inherit]">
                         {isEditMode
-                            ? t('scheduled.drawer.edit', 'Edit')
-                            : t('scheduled.drawer.new', 'New')}
+                            ? t('scheduled.drawer.edit', t('scheduled.drawer.editTitle', 'Edit'))
+                            : t('scheduled.drawer.new', t('scheduled.drawer.newTitle', 'New'))}
                     </span>
                 </div>
 
@@ -1058,7 +1062,7 @@ export function ScheduledCreateDrawer({
                             className="flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs text-[var(--accent-blue)] hover:bg-[var(--bg-sidebar-hover)] transition-colors cursor-pointer font-[inherit]"
                         >
                             <Play className="size-3" />
-                            <span>{t('scheduled.drawer.runNow', 'Run now')}</span>
+                            <span>{t('scheduled.drawer.runNow', t('scheduled.runNow', 'Run now'))}</span>
                         </button>
                     ) : null}
 
@@ -1080,7 +1084,7 @@ export function ScheduledCreateDrawer({
 
                     <button
                         type="button"
-                        aria-label="Close"
+                        aria-label={t('common.close', 'Close')}
                         onClick={onClose}
                         className="flex size-7 items-center justify-center rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-sidebar-hover)] hover:text-[var(--text-primary)] transition-colors cursor-pointer"
                     >
@@ -1155,8 +1159,8 @@ export function ScheduledCreateDrawer({
                         label={t('scheduled.drawer.runIn', 'Run in')}
                         value={runIn}
                         options={[
-                            { value: 'existing-chat', label: t('scheduled.drawer.existingChat', 'Existing chat') },
-                            { value: 'new-chat', label: t('scheduled.drawer.newChat', 'New chat') },
+                            { value: 'existing-chat', label: t('scheduled.drawer.existingChat', t('scheduled.drawer.runInExisting', 'Existing chat')) },
+                            { value: 'new-chat', label: t('scheduled.drawer.newChat', t('scheduled.drawer.runInNew', 'New chat')) },
                         ]}
                         onChange={(val) => setRunIn(val)}
                     />
@@ -1248,10 +1252,10 @@ export function ScheduledCreateDrawer({
                         label={t('scheduled.drawer.repeat', 'Repeat')}
                         value={frequency}
                         options={[
-                            { value: 'daily', label: t('scheduled.drawer.daily', 'Daily') },
-                            { value: 'weekdays', label: t('scheduled.drawer.weekdays', 'Weekdays') },
-                            { value: 'weekly', label: t('scheduled.drawer.weekly', 'Weekly') },
-                            { value: 'hourly', label: t('scheduled.drawer.hourly', 'Hourly') },
+                            { value: 'daily', label: t('scheduled.drawer.daily', t('scheduled.drawer.repeatDaily', 'Daily')) },
+                            { value: 'weekdays', label: t('scheduled.drawer.weekdays', t('scheduled.drawer.repeatWeekdays', 'Weekdays')) },
+                            { value: 'weekly', label: t('scheduled.drawer.weekly', t('scheduled.drawer.repeatWeekly', 'Weekly')) },
+                            { value: 'hourly', label: t('scheduled.drawer.hourly', t('scheduled.drawer.repeatHourly', 'Hourly')) },
                         ]}
                         onChange={(val) => setFrequency(val)}
                     />
@@ -1283,8 +1287,8 @@ export function ScheduledCreateDrawer({
                         label={t('scheduled.drawer.notification', 'Notifications')}
                         value={notification}
                         options={[
-                            { value: 'important', label: t('scheduled.drawer.notificationImportant', 'Important updates') },
-                            { value: 'failure-only', label: t('scheduled.drawer.notificationFailureOnly', 'Only unsuccessful runs') },
+                            { value: 'important', label: t('scheduled.drawer.notificationImportant', t('scheduled.drawer.notifyImportant', 'Important updates')) },
+                            { value: 'failure-only', label: t('scheduled.drawer.notificationFailureOnly', t('scheduled.drawer.notifyFailureOnly', 'Only unsuccessful runs')) },
                         ]}
                         onChange={(val) => setNotification(val)}
                     />
