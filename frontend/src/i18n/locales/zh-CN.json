@@ -870,6 +870,7 @@
   "tool.display.send_message": "发送消息",
   "tool.display.stop_agent": "停止子代理",
   "tool.display.session_search": "搜索会话",
+  "tool.display.session_create": "创建会话",
   "tool.display.create_session": "创建会话",
   "ask.customPromptDefault": "否，并告诉 CPA 应该如何做得不同",
   "ask.skip": "跳过",

@@ -28,13 +28,13 @@ describe('cpa.core.session-manager agent entry', () => {
 
         const tools = harness.getRegistered('tool-factory')
         expect(tools.map((t) => t.id).sort()).toEqual([
-            'create_session',
+            'session_create',
             'session_search',
             'title',
         ])
 
         const sessionSearchFactory = tools.find((t) => t.id === 'session_search')?.value as any
-        const createSessionFactory = tools.find((t) => t.id === 'create_session')?.value as any
+        const createSessionFactory = tools.find((t) => t.id === 'session_create')?.value as any
         const setTitleFactory = tools.find((t) => t.id === 'title')?.value as any
 
         expect(sessionSearchFactory.requiresScheduledSession).toBe(true)
@@ -63,7 +63,7 @@ describe('cpa.core.session-manager agent entry', () => {
         expect(createdSearchTool).toBeDefined()
         expect(createdSearchTool.name).toBe('session_search')
         expect(createdNewSessionTool).toBeDefined()
-        expect(createdNewSessionTool.name).toBe('create_session')
+        expect(createdNewSessionTool.name).toBe('session_create')
     })
 
     describe('set_session_title tool', () => {
@@ -249,7 +249,7 @@ describe('cpa.core.session-manager agent entry', () => {
         })
     })
 
-    describe('create_session tool', () => {
+    describe('session_create tool', () => {
         it('rejects execution when no scheduleId in context', async () => {
             const tool = createSessionCreateTool()
             const result = await tool.execute({ title: 'Test' }, {})

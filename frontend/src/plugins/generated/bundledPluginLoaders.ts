@@ -96,7 +96,7 @@ export const bundledManifests: Readonly<Record<string, PluginManifest>> = Object
                 "tool-factory": [
                         "title",
                         "session_search",
-                        "create_session"
+                        "session_create"
                 ]
         }
 }),

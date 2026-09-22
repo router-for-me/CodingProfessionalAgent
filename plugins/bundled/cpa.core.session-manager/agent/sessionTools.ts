@@ -7,7 +7,8 @@ import type {
 } from '@cpa/plugin-api'
 
 export const SESSION_SEARCH_TOOL_NAME = 'session_search'
-export const CREATE_SESSION_TOOL_NAME = 'create_session'
+export const SESSION_CREATE_TOOL_NAME = 'session_create'
+export const CREATE_SESSION_TOOL_NAME = SESSION_CREATE_TOOL_NAME
 
 export interface SessionSearchArgs {
     query?: string
@@ -440,7 +441,7 @@ ${turnsSummary.length > 0 ? turnsSummary.join('\n\n') : 'No messages in this ses
 
 export function createSessionCreateTool(options?: SessionToolOptions): AgentToolContribution {
     return {
-        name: CREATE_SESSION_TOOL_NAME,
+        name: SESSION_CREATE_TOOL_NAME,
         description:
             'Create a new conversation session associated with a project or schedule. Optionally initialize with a prompt and trigger execution. Enables multi-session orchestration, sub-task isolation, and structured workflow pipelining.',
         targetAgent: 'all',
@@ -483,7 +484,7 @@ export function createSessionCreateTool(options?: SessionToolOptions): AgentTool
         execute: async (args: Record<string, unknown>, context: unknown) => {
             const callingScheduleId = resolveSessionScheduleId(context, options)
             if (!callingScheduleId) {
-                return 'Error: create_session is only available in sessions created by scheduled tasks.'
+                return 'Error: session_create is only available in sessions created by scheduled tasks.'
             }
 
             const params = args as unknown as CreateSessionArgs

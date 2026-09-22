@@ -870,6 +870,7 @@
   "tool.display.send_message": "Send message",
   "tool.display.stop_agent": "Stop subagent",
   "tool.display.session_search": "Search sessions",
+  "tool.display.session_create": "Create session",
   "tool.display.create_session": "Create session",
   "ask.customPromptDefault": "No, and tell CPA what to do differently",
   "ask.skip": "Skip",

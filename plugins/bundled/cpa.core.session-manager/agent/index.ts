@@ -9,12 +9,14 @@ import {
     createSessionCreateTool,
     resolveSessionScheduleId,
     SESSION_SEARCH_TOOL_NAME,
+    SESSION_CREATE_TOOL_NAME,
     CREATE_SESSION_TOOL_NAME,
 } from './sessionTools.js'
 
 export {
     SET_SESSION_TITLE_TOOL_NAME,
     SESSION_SEARCH_TOOL_NAME,
+    SESSION_CREATE_TOOL_NAME,
     CREATE_SESSION_TOOL_NAME,
     createSetSessionTitleTool,
     createSessionSearchTool,
@@ -95,10 +97,10 @@ export const sessionManagerAgentEntry = definePluginEntry({
 
         context.register<ToolFactoryContribution>({
             kind: 'tool-factory',
-            id: CREATE_SESSION_TOOL_NAME,
+            id: SESSION_CREATE_TOOL_NAME,
             value: {
-                id: CREATE_SESSION_TOOL_NAME,
-                name: CREATE_SESSION_TOOL_NAME,
+                id: SESSION_CREATE_TOOL_NAME,
+                name: SESSION_CREATE_TOOL_NAME,
                 label: 'Create Session',
                 description: 'Create a new conversation session.',
                 parameters: {

@@ -87,7 +87,7 @@
         "tool-factory": [
             "title",
             "session_search",
-            "create_session"
+            "session_create"
         ]
     }
 }

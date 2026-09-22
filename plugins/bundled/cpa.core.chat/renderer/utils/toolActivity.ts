@@ -76,6 +76,11 @@ const BUILTIN_TOOL_SUMMARIES: Record<
     running: 'tool.summary.searchingSessions',
     done: 'tool.summary.searchedSessions',
   },
+  session_create: {
+    kind: 'other',
+    running: 'tool.summary.creatingSession',
+    done: 'tool.summary.createdSession',
+  },
   create_session: {
     kind: 'other',
     running: 'tool.summary.creatingSession',
