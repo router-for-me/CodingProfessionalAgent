@@ -275,6 +275,8 @@ export class ScheduledTaskScheduler {
                 task.chatSessionId !== 'new-chat'
 
             const currentSessions = this.services?.sessions?.getSnapshot?.() ?? []
+            const foregroundSessionId =
+                this.services?.sessions?.getCurrentSessionId?.() ?? null
             const existingSession = isExistingChat
                 ? currentSessions.find((s) => s.id === task.chatSessionId)
                 : null
@@ -294,6 +296,11 @@ export class ScheduledTaskScheduler {
                     reasoningEffort: task.reasoningLevel,
                 })
                 sessionId = typeof createdId === 'string' ? createdId : String(createdId)
+                if (
+                    this.services.sessions.getCurrentSessionId?.() === sessionId
+                ) {
+                    this.services.sessions.setCurrentSessionId?.(foregroundSessionId)
+                }
             }
 
             this.services?.ui?.pushToast?.(`Scheduled task [${task.title}] started as planned`)

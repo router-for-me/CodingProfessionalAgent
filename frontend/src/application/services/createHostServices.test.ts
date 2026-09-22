@@ -335,6 +335,21 @@ describe('createHostServices', () => {
         expect(useUiStore.getState().settingsParams).toBeUndefined()
     })
 
+    it('stores composer drafts under already-normalized keys', () => {
+        const services = createHostServices()
+        useUiStore.setState({ composerDraft: '', composerDrafts: {} })
+
+        services.ui?.setComposerDraft?.('new-chat', 'New chat draft')
+        services.ui?.setComposerDraft?.('session:sess-1', 'Session draft')
+
+        expect(services.ui?.getComposerDraft?.('new-chat')).toBe('New chat draft')
+        expect(services.ui?.getComposerDraft?.('session:sess-1')).toBe('Session draft')
+        expect(useUiStore.getState().composerDrafts).toEqual({
+            'new-chat': 'New chat draft',
+            'session:sess-1': 'Session draft',
+        })
+    })
+
     it('delegates schedule operations through ScheduleService', async () => {
         const capabilityClient = {
             invoke: vi.fn().mockImplementation((method: string) => {

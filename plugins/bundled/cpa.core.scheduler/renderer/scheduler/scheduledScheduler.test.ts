@@ -15,10 +15,12 @@ describe('scheduledScheduler', () => {
     let mockServices: HostServices
     let sendMock: ReturnType<typeof vi.fn>
     let toastMock: ReturnType<typeof vi.fn>
+    let mockCurrentSessionId: string | null
 
     beforeEach(() => {
         mockSessions = []
         mockProjects = []
+        mockCurrentSessionId = 'foreground-session'
         sendMock = vi.fn().mockResolvedValue('session-created-1')
         toastMock = vi.fn()
 
@@ -40,7 +42,12 @@ describe('scheduledScheduler', () => {
                         updatedAt: Date.now(),
                     }
                     mockSessions.push(newSession)
+                    mockCurrentSessionId = id
                     return id
+                },
+                getCurrentSessionId: () => mockCurrentSessionId,
+                setCurrentSessionId: (id) => {
+                    mockCurrentSessionId = id
                 },
                 update: async (id, patch) => {
                     const idx = mockSessions.findIndex((s) => s.id === id)
@@ -341,6 +348,35 @@ describe('scheduledScheduler', () => {
                     text: 'Run something new',
                     projectId: 'proj-1',
                 }),
+            )
+        })
+
+        it('preserves the foreground session when creating a background scheduled session', async () => {
+            const scheduler = new ScheduledTaskScheduler()
+            scheduler.setServices(mockServices)
+            const now = new Date(2025, 4, 15, 9, 0, 0)
+
+            useScheduledTasksStore.setState({
+                tasks: [
+                    {
+                        id: 'task-background',
+                        title: 'Background Task',
+                        schedule: 'Daily 09:00:00',
+                        prompt: 'Run in the background',
+                        enabled: true,
+                        status: 'active',
+                        createdAt: 1000,
+                        runIn: 'new-chat',
+                    },
+                ],
+            })
+
+            await scheduler.tick(now)
+
+            expect(mockSessions).toHaveLength(1)
+            expect(mockCurrentSessionId).toBe('foreground-session')
+            expect(sendMock).toHaveBeenCalledWith(
+                expect.objectContaining({ sessionId: mockSessions[0]?.id }),
             )
         })
 

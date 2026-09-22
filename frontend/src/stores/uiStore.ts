@@ -18,7 +18,10 @@ export const MAX_BOTTOM_PANEL_HEIGHT = 560
 const NEW_CHAT_COMPOSER_DRAFT_KEY = 'new-chat'
 
 export function getComposerDraftKey(sessionId?: string | null): string {
-  return sessionId ? `session:${sessionId}` : NEW_CHAT_COMPOSER_DRAFT_KEY
+  if (!sessionId || sessionId === NEW_CHAT_COMPOSER_DRAFT_KEY) {
+    return NEW_CHAT_COMPOSER_DRAFT_KEY
+  }
+  return sessionId.startsWith('session:') ? sessionId : `session:${sessionId}`
 }
 
 function clampWidth(
