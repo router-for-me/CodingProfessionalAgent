@@ -480,7 +480,7 @@ function DrawerChatSelectRow({
     const newChatLabel = t('scheduled.drawer.chatNew', 'New chat')
 
     const activeSessions = useMemo(
-        () => sessions.filter((s) => s.archivedAt === undefined),
+        () => sessions.filter((s) => s.archivedAt === undefined || s.archivedAt === null),
         [sessions],
     )
 
@@ -730,9 +730,43 @@ export function ScheduledCreateDrawer({
 
     const [activeSkillIndex, setActiveSkillIndex] = useState(0)
 
-    const sessions = hostServices?.sessions?.getSnapshot?.() ?? EMPTY_SESSIONS
-    const projects = hostServices?.projects?.getSnapshot?.() ?? EMPTY_PROJECTS
+    const [sessions, setSessions] = useState<readonly SessionItem[]>(
+        () => hostServices?.sessions?.getSnapshot?.() ?? EMPTY_SESSIONS,
+    )
+    const [projects, setProjects] = useState<readonly Project[]>(
+        () => hostServices?.projects?.getSnapshot?.() ?? EMPTY_PROJECTS,
+    )
     const settings = hostServices?.settings?.getSnapshot?.() ?? ({} as any)
+
+    useEffect(() => {
+        if (!open) return
+        setSessions(hostServices?.sessions?.getSnapshot?.() ?? EMPTY_SESSIONS)
+        const unsubscribe = hostServices?.sessions?.subscribe?.((updatedSessions) => {
+            if (Array.isArray(updatedSessions)) {
+                setSessions(updatedSessions)
+            } else {
+                setSessions(hostServices?.sessions?.getSnapshot?.() ?? EMPTY_SESSIONS)
+            }
+        })
+        return () => {
+            unsubscribe?.()
+        }
+    }, [hostServices?.sessions, open])
+
+    useEffect(() => {
+        if (!open) return
+        setProjects(hostServices?.projects?.getSnapshot?.() ?? EMPTY_PROJECTS)
+        const unsubscribe = hostServices?.projects?.subscribe?.((updatedProjects) => {
+            if (Array.isArray(updatedProjects)) {
+                setProjects(updatedProjects)
+            } else {
+                setProjects(hostServices?.projects?.getSnapshot?.() ?? EMPTY_PROJECTS)
+            }
+        })
+        return () => {
+            unsubscribe?.()
+        }
+    }, [hostServices?.projects, open])
 
     useEffect(() => {
         const checkMobile = () => {
@@ -961,11 +995,16 @@ export function ScheduledCreateDrawer({
         onClose()
     }
 
-    // Historical execution runs
+    // Historical execution runs (exclude archived and deleted sessions)
     const historicalRuns = useMemo(() => {
         if (!editingTask) return []
         return sessions
-            .filter((s) => s.scheduleId === editingTask.id)
+            .filter(
+                (s) =>
+                    Boolean(s) &&
+                    s.scheduleId === editingTask.id &&
+                    (s.archivedAt === undefined || s.archivedAt === null),
+            )
             .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
     }, [editingTask, sessions])
 

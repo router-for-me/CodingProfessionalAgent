@@ -445,6 +445,247 @@ describe('ScheduledCreateDrawer', () => {
         })
     })
 
+    it('excludes archived sessions from execution results list and numbers only active runs', () => {
+        const existingTask = {
+            id: 'task-hist-mixed',
+            title: 'Mixed History Task',
+            prompt: 'Run something',
+            schedule: 'Daily 09:00:00',
+            enabled: true,
+            createdAt: Date.now(),
+        }
+
+        mockSessions = [
+            {
+                id: 'sess-active-1',
+                title: 'First Active Run',
+                scheduleId: 'task-hist-mixed',
+                pinned: false,
+                createdAt: 1000,
+                updatedAt: 1000,
+            },
+            {
+                id: 'sess-archived-2',
+                title: 'Archived Middle Run',
+                scheduleId: 'task-hist-mixed',
+                pinned: false,
+                archivedAt: 1700002000000,
+                createdAt: 2000,
+                updatedAt: 2000,
+            },
+            {
+                id: 'sess-active-3',
+                title: 'Latest Active Run',
+                scheduleId: 'task-hist-mixed',
+                pinned: false,
+                createdAt: 3000,
+                updatedAt: 3000,
+            },
+        ]
+
+        render(
+            <HostServicesProvider services={hostServices}>
+                <ScheduledCreateDrawer
+                    open
+                    onClose={onCloseMock}
+                    editingTask={existingTask}
+                    models={mockModels}
+                />
+            </HostServicesProvider>,
+        )
+
+        expect(screen.getByText('Execution results')).toBeInTheDocument()
+        expect(screen.getByText('Latest Active Run')).toBeInTheDocument()
+        expect(screen.getByText('First Active Run')).toBeInTheDocument()
+        expect(screen.queryByText('Archived Middle Run')).not.toBeInTheDocument()
+
+        // Sequence numbers should only count the 2 active runs (#1 and #2)
+        const latestRow = screen.getByText('Latest Active Run').closest('div')
+        const firstRow = screen.getByText('First Active Run').closest('div')
+        expect(latestRow).toHaveTextContent('#2')
+        expect(firstRow).toHaveTextContent('#1')
+        expect(screen.queryByText('#3')).not.toBeInTheDocument()
+    })
+
+    it('treats archivedAt: null as unarchived in execution results', () => {
+        const existingTask = {
+            id: 'task-hist-null-archived',
+            title: 'Null Archived Task',
+            prompt: 'Run something',
+            schedule: 'Daily 09:00:00',
+            enabled: true,
+            createdAt: Date.now(),
+        }
+
+        mockSessions = [
+            {
+                id: 'sess-null-archived',
+                title: 'Unarchived Null Run',
+                scheduleId: 'task-hist-null-archived',
+                pinned: false,
+                archivedAt: null as any,
+                createdAt: 1000,
+                updatedAt: 1000,
+            },
+        ]
+
+        render(
+            <HostServicesProvider services={hostServices}>
+                <ScheduledCreateDrawer
+                    open
+                    onClose={onCloseMock}
+                    editingTask={existingTask}
+                    models={mockModels}
+                />
+            </HostServicesProvider>,
+        )
+
+        expect(screen.getByText('Execution results')).toBeInTheDocument()
+        expect(screen.getByText('Unarchived Null Run')).toBeInTheDocument()
+    })
+
+    it('hides execution results section when all task runs are archived', () => {
+        const existingTask = {
+            id: 'task-hist-all-archived',
+            title: 'All Archived Task',
+            prompt: 'Run something',
+            schedule: 'Daily 09:00:00',
+            enabled: true,
+            createdAt: Date.now(),
+        }
+
+        mockSessions = [
+            {
+                id: 'sess-archived-1',
+                title: 'Archived Run 1',
+                scheduleId: 'task-hist-all-archived',
+                pinned: false,
+                archivedAt: 1700001000000,
+                createdAt: 1000,
+                updatedAt: 1000,
+            },
+            {
+                id: 'sess-archived-2',
+                title: 'Archived Run 2',
+                scheduleId: 'task-hist-all-archived',
+                pinned: false,
+                archivedAt: 1700002000000,
+                createdAt: 2000,
+                updatedAt: 2000,
+            },
+        ]
+
+        render(
+            <HostServicesProvider services={hostServices}>
+                <ScheduledCreateDrawer
+                    open
+                    onClose={onCloseMock}
+                    editingTask={existingTask}
+                    models={mockModels}
+                />
+            </HostServicesProvider>,
+        )
+
+        expect(screen.queryByText('Execution results')).not.toBeInTheDocument()
+        expect(screen.queryByText('Archived Run 1')).not.toBeInTheDocument()
+        expect(screen.queryByText('Archived Run 2')).not.toBeInTheDocument()
+    })
+
+    it('dynamically updates and hides execution results section when runs are archived or deleted', async () => {
+        const existingTask = {
+            id: 'task-hist-dynamic',
+            title: 'Dynamic Run Task',
+            prompt: 'Run dynamic',
+            schedule: 'Daily 09:00:00',
+            enabled: true,
+            createdAt: Date.now(),
+        }
+
+        let sessionListener: ((sessions: readonly SessionItem[]) => void) | undefined
+        let currentSessions: SessionItem[] = [
+            {
+                id: 'sess-dyn-1',
+                title: 'Dynamic Run 1',
+                scheduleId: 'task-hist-dynamic',
+                pinned: false,
+                createdAt: 1000,
+                updatedAt: 1000,
+            },
+        ]
+
+        const unsubscribeSessionsMock = vi.fn()
+        const reactiveServices = {
+            ...hostServices,
+            sessions: {
+                ...hostServices.sessions,
+                getSnapshot: () => currentSessions,
+                subscribe: (listener: (sessions: readonly SessionItem[]) => void) => {
+                    sessionListener = listener
+                    listener(currentSessions)
+                    return unsubscribeSessionsMock
+                },
+            },
+        } as unknown as HostServices
+
+        const { act } = await import('@testing-library/react')
+
+        const { unmount } = render(
+            <HostServicesProvider services={reactiveServices}>
+                <ScheduledCreateDrawer
+                    open
+                    onClose={onCloseMock}
+                    editingTask={existingTask}
+                    models={mockModels}
+                />
+            </HostServicesProvider>,
+        )
+
+        // Initially shown
+        expect(screen.getByText('Execution results')).toBeInTheDocument()
+        expect(screen.getByText('Dynamic Run 1')).toBeInTheDocument()
+
+        // 1. Archive the run -> execution results should hide
+        act(() => {
+            currentSessions = [
+                {
+                    ...currentSessions[0]!,
+                    archivedAt: Date.now(),
+                },
+            ]
+            sessionListener?.(currentSessions)
+        })
+
+        expect(screen.queryByText('Execution results')).not.toBeInTheDocument()
+        expect(screen.queryByText('Dynamic Run 1')).not.toBeInTheDocument()
+
+        // 2. Unarchive the run -> execution results should reappear
+        act(() => {
+            currentSessions = [
+                {
+                    ...currentSessions[0]!,
+                    archivedAt: undefined,
+                },
+            ]
+            sessionListener?.(currentSessions)
+        })
+
+        expect(screen.getByText('Execution results')).toBeInTheDocument()
+        expect(screen.getByText('Dynamic Run 1')).toBeInTheDocument()
+
+        // 3. Delete the run -> execution results should hide
+        act(() => {
+            currentSessions = []
+            sessionListener?.(currentSessions)
+        })
+
+        expect(screen.queryByText('Execution results')).not.toBeInTheDocument()
+        expect(screen.queryByText('Dynamic Run 1')).not.toBeInTheDocument()
+
+        // 4. Unmount cleans up subscriptions
+        unmount()
+        expect(unsubscribeSessionsMock).toHaveBeenCalled()
+    })
+
     it('filters sessions in chat dropdown when searching', async () => {
         render(
             <HostServicesProvider services={hostServices}>
