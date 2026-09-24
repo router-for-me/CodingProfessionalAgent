@@ -78,6 +78,29 @@ describe('useCollapsibleOpen', () => {
         expect(result.current.transition).toBe(false)
     })
 
+    it('clears the transition flag after the custom duration', async () => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+        const customDuration = 300
+        const { result, rerender } = renderHook(
+            ({ open }) => useCollapsibleOpen(open, { durationMs: customDuration }),
+            { initialProps: { open: true } },
+        )
+
+        rerender({ open: false })
+        await flushAnimationFrame()
+        expect(result.current.transition).toBe(true)
+
+        await act(async () => {
+            vi.advanceTimersByTime(200)
+        })
+        expect(result.current.transition).toBe(true)
+
+        await act(async () => {
+            vi.advanceTimersByTime(100)
+        })
+        expect(result.current.transition).toBe(false)
+    })
+
     it('skips animation when the user prefers reduced motion', async () => {
         mockMatchMedia(true)
         const { result, rerender } = renderHook(

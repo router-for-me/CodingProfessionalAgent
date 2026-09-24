@@ -210,6 +210,215 @@ describe('SubAgentPanel collapse animation', () => {
         })
         expect(panel).toHaveAttribute('data-state', 'open')
     })
+
+    it('pre-sets inner content width to target panel width during collapsed state and updates on manual resize', () => {
+        useUiStore.setState({ rightSidebarCollapsed: true })
+        const { rerender } = render(<SubAgentPanel sessionId="sess-1" />)
+        const panel = screen.getByTestId('subagent-panel')
+        const content = screen.getByTestId('subagent-panel-content')
+
+        // Outer aside is collapsed to 0 width
+        expect(panel).toHaveStyle({ width: '0px' })
+        // Inner content preserves full panelWidth so child elements/text are not squeezed into narrow widths
+        expect(content).toHaveStyle({ width: '280px', minWidth: '280px' })
+        expect(content.className).toContain('shrink-0')
+
+        // Expanding the sidebar keeps the pre-set width intact
+        useUiStore.setState({ rightSidebarCollapsed: false })
+        rerender(<SubAgentPanel sessionId="sess-1" />)
+        expect(content).toHaveStyle({ width: '280px', minWidth: '280px' })
+
+        // Manual resize updates the inner content size dynamically to match user preference
+        const handle = screen.getByRole('separator', { name: 'Resize right sidebar' })
+        const viewportWidth = window.innerWidth
+        fireEvent.pointerDown(handle, { clientX: viewportWidth - 280, button: 0 })
+        fireEvent.pointerMove(window, { clientX: viewportWidth - 450 })
+        fireEvent.pointerUp(window)
+
+        expect(useUiStore.getState().rightSidebarWidth).toBe(450)
+        expect(content).toHaveStyle({ width: '450px', minWidth: '450px' })
+    })
+
+    it('pre-sets inner content width during maximize transition and preserves width when collapsing from maximized', async () => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+        try {
+            const { rerender } = render(<SubAgentPanel sessionId="sess-1" />)
+            const content = screen.getByTestId('subagent-panel-content')
+
+            // Normal state: 280px with visible border-l separator
+            const panel = screen.getByTestId('subagent-panel')
+            expect(panel.className).toContain('border-l')
+            expect(content).toHaveStyle({ width: '280px', minWidth: '280px' })
+
+            // Trigger maximize: inner content width is immediately pre-set to full available width
+            // throughout the 200ms flex animation, avoiding multi-frame reflow of inner text.
+            act(() => {
+                useUiStore.setState({ rightSidebarMaximized: true })
+            })
+            rerender(<SubAgentPanel sessionId="sess-1" />)
+
+            expect(panel.className).toContain('overflow-hidden')
+            expect(content.className).toContain('overflow-hidden')
+            expect(content.className).toContain('flex')
+            expect(content.className).not.toContain('absolute')
+
+            const expectedMaximizedWidth = `${window.innerWidth - useUiStore.getState().sidebarWidth}px`
+            expect(content).toHaveStyle({
+                width: expectedMaximizedWidth,
+                minWidth: expectedMaximizedWidth,
+            })
+
+            // Mid-animation (e.g. at 150ms): width remains locked to target width rather than fluid 100%
+            act(() => {
+                vi.advanceTimersByTime(150)
+            })
+            expect(content).toHaveStyle({
+                width: expectedMaximizedWidth,
+                minWidth: expectedMaximizedWidth,
+            })
+
+            // Rapid consecutive maximize/restore toggle resets timer so width lock does not drop prematurely
+            act(() => {
+                useUiStore.setState({ rightSidebarMaximized: false })
+            })
+            rerender(<SubAgentPanel sessionId="sess-1" />)
+            expect(content).toHaveStyle({ width: '280px', minWidth: '280px' })
+
+            act(() => {
+                useUiStore.setState({ rightSidebarMaximized: true })
+            })
+            rerender(<SubAgentPanel sessionId="sess-1" />)
+            expect(content).toHaveStyle({
+                width: expectedMaximizedWidth,
+                minWidth: expectedMaximizedWidth,
+            })
+
+            // 150ms into the new animation, the new timer still protects the width
+            act(() => {
+                vi.advanceTimersByTime(150)
+            })
+            expect(content).toHaveStyle({
+                width: expectedMaximizedWidth,
+                minWidth: expectedMaximizedWidth,
+            })
+
+            // After full 250ms of the second animation, unlocks to fluid 100% and restores overflow-visible for popups
+            act(() => {
+                vi.advanceTimersByTime(100)
+            })
+            expect(content).toHaveStyle({
+                width: '100%',
+            })
+            expect(content.className).toContain('overflow-visible')
+
+            // Collapse while maximized: inner content keeps maximized width during collapse transition
+            act(() => {
+                useUiStore.getState().toggleRightSidebarCollapsed()
+            })
+            rerender(<SubAgentPanel sessionId="sess-1" />)
+
+            const collapsedPanel = screen.getByTestId('subagent-panel')
+            expect(collapsedPanel).toBeInTheDocument()
+            expect(content).toHaveStyle({
+                width: expectedMaximizedWidth,
+                minWidth: expectedMaximizedWidth,
+            })
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
+    it('applies motion-reduce:transition-none and skips animation transition when prefers-reduced-motion is active', () => {
+        const originalMatchMedia = window.matchMedia
+        try {
+            window.matchMedia = ((query: string) =>
+                ({
+                    matches: query.includes('prefers-reduced-motion'),
+                    media: query,
+                    addEventListener: () => undefined,
+                    removeEventListener: () => undefined,
+                    addListener: () => undefined,
+                    removeListener: () => undefined,
+                    dispatchEvent: () => false,
+                    onchange: null,
+                }) as MediaQueryList) as typeof window.matchMedia
+
+            useUiStore.setState({ rightSidebarCollapsed: true })
+            const { rerender } = render(<SubAgentPanel sessionId="sess-1" />)
+            const panel = screen.getByTestId('subagent-panel')
+            expect(panel.className).toContain('motion-reduce:transition-none')
+
+            // Expanding immediately flips visual open state without a lingering transition
+            act(() => {
+                useUiStore.setState({ rightSidebarCollapsed: false })
+            })
+            rerender(<SubAgentPanel sessionId="sess-1" />)
+            expect(panel).toHaveStyle({ width: '280px' })
+            expect(panel.className).toContain('overflow-visible')
+
+            const content = screen.getByTestId('subagent-panel-content')
+            expect(content).toHaveStyle({ width: '280px', minWidth: '280px' })
+
+            // Toggling left sidebar while right panel is maximized under reduced motion mode
+            act(() => {
+                useUiStore.setState({ rightSidebarMaximized: true, sidebarCollapsed: false })
+            })
+            rerender(<SubAgentPanel sessionId="sess-1" />)
+            expect(content).toHaveStyle({ width: '100%' })
+
+            act(() => {
+                useUiStore.setState({ sidebarCollapsed: true })
+            })
+            rerender(<SubAgentPanel sessionId="sess-1" />)
+            expect(content).toHaveStyle({ width: '100%' })
+        } finally {
+            window.matchMedia = originalMatchMedia
+        }
+    })
+
+    it('locks inner content width to target available width when left sidebar is toggled while maximized', () => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+        try {
+            useUiStore.setState({ rightSidebarMaximized: true, sidebarCollapsed: false })
+            const { rerender } = render(<SubAgentPanel sessionId="sess-1" />)
+            const content = screen.getByTestId('subagent-panel-content')
+
+            // Flush initial maximize transition
+            act(() => {
+                vi.advanceTimersByTime(250)
+            })
+            expect(content).toHaveStyle({ width: '100%' })
+
+            // Collapse left sidebar: right panel content width is immediately pre-set to full window width
+            act(() => {
+                useUiStore.setState({ sidebarCollapsed: true })
+            })
+            rerender(<SubAgentPanel sessionId="sess-1" />)
+
+            const fullWindowWidth = `${window.innerWidth}px`
+            expect(content).toHaveStyle({
+                width: fullWindowWidth,
+                minWidth: fullWindowWidth,
+            })
+
+            // Mid-animation: stays locked
+            act(() => {
+                vi.advanceTimersByTime(150)
+            })
+            expect(content).toHaveStyle({
+                width: fullWindowWidth,
+                minWidth: fullWindowWidth,
+            })
+
+            // Post-animation: unlocks back to fluid 100%
+            act(() => {
+                vi.advanceTimersByTime(100)
+            })
+            expect(content).toHaveStyle({ width: '100%' })
+        } finally {
+            vi.useRealTimers()
+        }
+    })
 })
 
 describe('SubAgentPanel resize handle', () => {

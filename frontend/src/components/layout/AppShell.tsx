@@ -95,7 +95,7 @@ export function AppShell() {
                     isRightMaximized
                         ? 'w-0 flex-none opacity-0 pointer-events-none'
                         : 'min-w-0 flex-1 opacity-100',
-                    'transition-[width,flex,opacity] duration-300 ease-out'
+                    'transition-[width,flex,opacity] duration-200 ease-out motion-reduce:transition-none'
                 )}
                 style={{
                     flex: isRightMaximized ? '0 0 0px' : '1 1 0%',

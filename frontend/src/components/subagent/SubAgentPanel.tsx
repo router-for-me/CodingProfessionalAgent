@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Plus, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { rendererEventBus } from '@/plugins/platform/eventBus'
@@ -18,7 +18,10 @@ import {
     BottomPanelToggle,
     RightSidebarToggle,
 } from '@/components/layout/WindowToolbar'
-import { useCollapsibleOpen } from '@/components/layout/useCollapsibleOpen'
+import {
+    prefersReducedMotion,
+    useCollapsibleOpen,
+} from '@/components/layout/useCollapsibleOpen'
 import { useProjectStore } from '@/stores/projectStore'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useSettingsStore } from '@/stores/settingsStore'
@@ -60,8 +63,51 @@ export function SubAgentPanel({
     const collapsed = useUiStore((state) => state.rightSidebarCollapsed)
     const setRightSidebarCollapsed = useUiStore((state) => state.setRightSidebarCollapsed)
     const sidebarCollapsed = useUiStore((state) => state.sidebarCollapsed)
+    const sidebarWidth = useUiStore((state) => state.sidebarWidth)
     const maximized = useUiStore((state) => state.rightSidebarMaximized) && !collapsed
     const collapse = useCollapsibleOpen(!collapsed)
+
+    const [isMaxTransitioning, setIsMaxTransitioning] = useState(false)
+    const [maxTransitionEpoch, setMaxTransitionEpoch] = useState(0)
+    const prevMaximizedRef = useRef(maximized)
+    const prevCollapsedRef = useRef(collapsed)
+    const prevSidebarCollapsedRef = useRef(sidebarCollapsed)
+    const collapsedFromMaximizedRef = useRef(false)
+    const wasMaximized = prevMaximizedRef.current
+
+    // Synchronize transition flag during render to avoid any first-frame text reflow
+    if (prevMaximizedRef.current !== maximized) {
+        prevMaximizedRef.current = maximized
+        if (!collapsed && !prefersReducedMotion()) {
+            setIsMaxTransitioning(true)
+            setMaxTransitionEpoch((epoch) => epoch + 1)
+        }
+    }
+
+    if (prevSidebarCollapsedRef.current !== sidebarCollapsed) {
+        prevSidebarCollapsedRef.current = sidebarCollapsed
+        if (maximized && !collapsed && !prefersReducedMotion()) {
+            setIsMaxTransitioning(true)
+            setMaxTransitionEpoch((epoch) => epoch + 1)
+        }
+    }
+
+    if (prevCollapsedRef.current !== collapsed) {
+        if (collapsed && wasMaximized) {
+            collapsedFromMaximizedRef.current = true
+        } else if (!collapsed) {
+            collapsedFromMaximizedRef.current = false
+        }
+        prevCollapsedRef.current = collapsed
+    }
+
+    useEffect(() => {
+        if (maxTransitionEpoch === 0) return
+        const timer = window.setTimeout(() => {
+            setIsMaxTransitioning(false)
+        }, 250)
+        return () => window.clearTimeout(timer)
+    }, [maxTransitionEpoch])
 
     const rightPanelOpenTabs = useUiStore((state) => state.rightPanelOpenTabs)
     const rightPanelActiveTab = useUiStore((state) => state.rightPanelActiveTab)
@@ -242,6 +288,25 @@ export function SubAgentPanel({
     const isWebLayout = isBrowserEnvironment() || isWindowsPlatform()
     const isMobile = useIsMobileBrowser()
 
+    const availableMaximizedWidth = typeof window !== 'undefined'
+        ? window.innerWidth - (sidebarCollapsed ? 0 : sidebarWidth)
+        : DEFAULT_RIGHT_SIDEBAR_WIDTH
+
+    // Pre-set inner content width so text/child elements never reflow into narrow widths
+    // during collapse, expand, or maximize animations.
+    const isCollapsingFromMaximized =
+        collapsedFromMaximizedRef.current && (collapsed || !collapse.open || collapse.transition)
+
+    const isLayoutTransitioning =
+        !collapse.open || collapse.transition || isMaxTransitioning
+
+    const targetContentWidth = isCollapsingFromMaximized || maximized
+        ? availableMaximizedWidth
+        : panelWidth
+
+    const useFluidWidth =
+        maximized && !isMaxTransitioning && collapse.open && !isCollapsingFromMaximized
+
     useEffect(() => {
         if (!isMobile || collapsed) return
         const handleKeyDown = (event: KeyboardEvent) => {
@@ -273,14 +338,14 @@ export function SubAgentPanel({
                     ? 'fixed inset-0 z-50 flex h-full w-full flex-col overflow-hidden app-background-surface bg-[var(--bg-app)]'
                     : cn(
                         'relative flex h-full flex-col',
-                        !collapse.open || collapse.transition
+                        isLayoutTransitioning
                             ? 'overflow-hidden'
                             : 'overflow-visible',
                         !maximized && 'border-l border-[var(--border-subtle)]',
                         'app-background-surface bg-[var(--bg-app)]',
                         maximized ? 'min-w-0 flex-1' : 'shrink-0',
                         !isResizing &&
-                            'transition-[width,flex] duration-300 ease-out',
+                            'transition-[width,flex] duration-200 ease-out motion-reduce:transition-none',
                     ),
             )}
             style={
@@ -290,7 +355,7 @@ export function SubAgentPanel({
                         width: maximized
                             ? undefined
                             : collapse.open
-                              ? panelWidth
+                              ? (isCollapsingFromMaximized ? availableMaximizedWidth : panelWidth)
                               : 0,
                         flex: maximized ? '1 1 0%' : '0 0 auto',
                     }
@@ -302,7 +367,22 @@ export function SubAgentPanel({
             data-mobile={isMobile ? 'true' : undefined}
             data-testid="subagent-panel"
         >
-            <div className="flex h-full min-h-0 w-full flex-col">
+            <div
+                data-testid="subagent-panel-content"
+                className={cn(
+                    'flex h-full min-h-0 flex-col',
+                    isLayoutTransitioning ? 'overflow-hidden' : 'overflow-visible',
+                    isMobile ? 'w-full' : 'shrink-0',
+                )}
+                style={
+                    isMobile
+                        ? undefined
+                        : {
+                            width: useFluidWidth ? '100%' : targetContentWidth,
+                            minWidth: useFluidWidth ? undefined : targetContentWidth,
+                        }
+                }
+            >
                 <div
                     className={cn(
                         'flex h-[var(--titlebar-height)] shrink-0 items-center border-b border-[var(--border-subtle)] py-0',

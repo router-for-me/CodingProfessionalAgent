@@ -113,7 +113,7 @@ export function BottomPanel() {
             data-state={collapse.open ? 'open' : 'closed'}
             className={cn(
                 'relative flex shrink-0 flex-col overflow-hidden border-t border-[var(--border-subtle)] app-background-surface bg-[var(--bg-app)]',
-                !isResizing && 'transition-[height] duration-200 ease-out',
+                !isResizing && 'transition-[height] duration-200 ease-out motion-reduce:transition-none',
             )}
             style={{ height: collapse.open ? height : 0 }}
         >

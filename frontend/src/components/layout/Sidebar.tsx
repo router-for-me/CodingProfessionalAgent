@@ -78,7 +78,7 @@ export function Sidebar() {
                 !collapse.open || collapse.transition
                     ? 'overflow-hidden'
                     : 'overflow-visible',
-                !isResizing && 'transition-[width] duration-200 ease-out',
+                !isResizing && 'transition-[width] duration-200 ease-out motion-reduce:transition-none',
             )}
             style={{ width: collapse.open ? sidebarWidth : 0 }}
             aria-hidden={sidebarCollapsed}

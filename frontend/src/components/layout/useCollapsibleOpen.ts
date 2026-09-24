@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useState } from 'react'
 
 export const PANEL_COLLAPSE_DURATION_MS = 200
 
-function prefersReducedMotion(): boolean {
+export function prefersReducedMotion(): boolean {
     if (
         typeof window === 'undefined' ||
         typeof window.matchMedia !== 'function'
@@ -18,12 +18,13 @@ function prefersReducedMotion(): boolean {
  */
 export function useCollapsibleOpen(
     open: boolean,
-    options?: { animatePresent?: boolean },
+    options?: { animatePresent?: boolean; durationMs?: number },
 ): { open: boolean; transition: boolean } {
     const [renderOpen, setRenderOpen] = useState(
         options?.animatePresent ? false : open,
     )
     const [transition, setTransition] = useState(false)
+    const durationMs = options?.durationMs ?? PANEL_COLLAPSE_DURATION_MS
 
     useLayoutEffect(() => {
         if (open === renderOpen) return
@@ -45,9 +46,9 @@ export function useCollapsibleOpen(
         if (!transition) return
         const timer = window.setTimeout(() => {
             setTransition(false)
-        }, PANEL_COLLAPSE_DURATION_MS)
+        }, durationMs)
         return () => window.clearTimeout(timer)
-    }, [transition, renderOpen])
+    }, [transition, renderOpen, durationMs])
 
     return { open: renderOpen, transition }
 }
