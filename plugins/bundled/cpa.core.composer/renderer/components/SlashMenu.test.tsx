@@ -43,7 +43,7 @@ const prompts = [
 ] as const
 
 describe('buildSlashSuggestions', () => {
-    it('includes compact and templates in deterministic order, without skills', () => {
+    it('includes compact, model, and templates in deterministic order, without skills', () => {
         const items = buildSlashSuggestions({
             query: '',
             skills: skills as any,
@@ -53,6 +53,7 @@ describe('buildSlashSuggestions', () => {
 
         expect(items.map((item) => item.command)).toEqual([
             '/compact',
+            '/model',
             '/draft',
             '/review',
         ])
@@ -105,7 +106,7 @@ describe('buildSlashSuggestions', () => {
             compactDescription: 'Compact context',
         })
         const commands = suggestions.map((item) => item.command)
-        expect(commands).toEqual(['/compact', '/ship'])
+        expect(commands).toEqual(['/compact', '/model', '/ship'])
         expect(commands).not.toContain('/skill:ship')
         expect(commands.filter((c) => c === '/compact')).toHaveLength(1)
         expect(diagnostics.some((d) => d.includes('compact') && d.includes('template'))).toBe(
@@ -121,10 +122,97 @@ describe('buildSlashSuggestions', () => {
             compactDescription: 'c',
         })
         expect(items[0]?.id).toBe(slashOptionId('builtin', 'compact', 0))
-        expect(items[1]?.id).toBe(slashOptionId('template', 'Foo Bar', 1))
-        expect(items[1]?.id).toMatch(/^slash-option-template-1-/)
-        expect(items[1]?.id).not.toMatch(/\s/)
+        expect(items[1]?.id).toBe(slashOptionId('builtin', 'model', 1))
+        expect(items[2]?.id).toBe(slashOptionId('template', 'Foo Bar', 2))
+        expect(items[2]?.id).toMatch(/^slash-option-template-2-/)
+        expect(items[2]?.id).not.toMatch(/\s/)
         expect(items[0]?.id).not.toBe(items[1]?.id)
+    })
+
+    it('supports localized command names and cross-language alias queries', () => {
+        const zhItems = buildSlashSuggestions({
+            query: '',
+            skills: [],
+            prompts: [],
+            compactName: '压缩',
+            compactDescription: '压缩对话上下文',
+            modelName: '模型',
+            modelDescription: '打开模型选择器',
+        })
+
+        expect(zhItems.map((item) => item.command)).toEqual(['/压缩', '/模型'])
+
+        // Querying with Chinese prefix
+        const matchZhCompact = buildSlashSuggestions({
+            query: '压',
+            skills: [],
+            prompts: [],
+            compactName: '压缩',
+            compactDescription: '压缩对话上下文',
+            modelName: '模型',
+            modelDescription: '打开模型选择器',
+        })
+        expect(matchZhCompact.map((item) => item.command)).toEqual(['/压缩'])
+
+        // Querying with English alias "compact" in Chinese locale
+        const matchEnCompactInZh = buildSlashSuggestions({
+            query: 'compact',
+            skills: [],
+            prompts: [],
+            compactName: '压缩',
+            compactDescription: '压缩对话上下文',
+            modelName: '模型',
+            modelDescription: '打开模型选择器',
+        })
+        expect(matchEnCompactInZh.map((item) => item.command)).toEqual(['/压缩'])
+
+        // Querying with English prefix "comp"
+        const matchEnPrefixInZh = buildSlashSuggestions({
+            query: 'comp',
+            skills: [],
+            prompts: [],
+            compactName: '压缩',
+            compactDescription: '压缩对话上下文',
+            modelName: '模型',
+            modelDescription: '打开模型选择器',
+        })
+        expect(matchEnPrefixInZh.map((item) => item.command)).toEqual(['/压缩'])
+
+        // Querying with Chinese prefix "模" for model
+        const matchZhModel = buildSlashSuggestions({
+            query: '模',
+            skills: [],
+            prompts: [],
+            compactName: '压缩',
+            compactDescription: '压缩对话上下文',
+            modelName: '模型',
+            modelDescription: '打开模型选择器',
+        })
+        expect(matchZhModel.map((item) => item.command)).toEqual(['/模型'])
+
+        // Querying with English alias "model" for model in Chinese locale
+        const matchEnModelInZh = buildSlashSuggestions({
+            query: 'model',
+            skills: [],
+            prompts: [],
+            compactName: '压缩',
+            compactDescription: '压缩对话上下文',
+            modelName: '模型',
+            modelDescription: '打开模型选择器',
+        })
+        expect(matchEnModelInZh.map((item) => item.command)).toEqual(['/模型'])
+
+        // Querying with English prefix "mod"
+        const matchEnModPrefixInZh = buildSlashSuggestions({
+            query: 'mod',
+            skills: [],
+            prompts: [],
+            compactName: '压缩',
+            compactDescription: '压缩对话上下文',
+            modelName: '模型',
+            modelDescription: '打开模型选择器',
+        })
+        expect(matchEnModPrefixInZh.map((item) => item.command)).toEqual(['/模型'])
     })
 })
 

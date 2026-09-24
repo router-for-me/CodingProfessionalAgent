@@ -1,3 +1,4 @@
+import { isBuiltinSlashCommand } from './slashCommands.js'
 import type { PromptTemplate } from '../types.js'
 
 export function parseCommandArgs(argsString: string): string[] {
@@ -149,7 +150,7 @@ export function expandPromptTemplate(text: string, templates: readonly PromptTem
         return text
     }
 
-    if (text.startsWith('/skill:') || text.startsWith('/compact')) {
+    if (text.startsWith('/skill:') || isBuiltinSlashCommand(text)) {
         return text
     }
 

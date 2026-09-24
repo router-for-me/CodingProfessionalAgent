@@ -15,6 +15,7 @@ import {
     AttachControl,
 } from './components/ComposerToolbarControls.js'
 import { expandPromptTemplate } from './utils/promptTemplates.js'
+import { isBuiltinSlashCommand } from './utils/slashCommands.js'
 import {
     executeCycleReasoningEffort,
     executeNextModel,
@@ -108,8 +109,7 @@ export const composerRendererEntry = definePluginEntry({
                     const trimmed = text.trim()
                     if (
                         trimmed.startsWith('/') &&
-                        !trimmed.startsWith('/compact') &&
-                        !trimmed.startsWith('/skill:')
+                        !isBuiltinSlashCommand(trimmed)
                     ) {
                         const prompts = (ctx as any)?.prompts || []
                         const expanded = expandPromptTemplate(trimmed, prompts)
@@ -195,6 +195,7 @@ export const composerRendererEntry = definePluginEntry({
                 title: 'shortcuts.item.openModelSelector.title',
                 description: 'shortcuts.item.openModelSelector.desc',
                 defaultShortcuts: ['Ctrl+Shift+M'],
+                placements: [{ surface: 'composer.slash', order: 20 }],
                 handler: (actionCtx) => {
                     actionCtx.services.ui?.emitEvent?.('composer:toggle-model-selector')
                 },

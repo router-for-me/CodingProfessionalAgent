@@ -60,6 +60,7 @@ import {
     type SupportedImageMimeType,
 } from '../utils/image.js'
 import { expandPromptTemplate } from '../utils/promptTemplates.js'
+import { parseSlashCommand } from '../utils/slashCommands.js'
 import {
     filterCatalogModels,
     normalizeModelPreferences,
@@ -451,6 +452,22 @@ const BaseComposer = memo(function BaseComposer({
         }
     }, [isRunning, quickModelPickerOpen])
 
+    const handleOpenModelSelector = useCallback(() => {
+        if (isRunningRef.current) return
+        setComposerDraft('')
+        setSlashOpen(false)
+        setSkillOpen(false)
+        setImageError(null)
+        setModelPickerQuery('')
+        setModelPickerCursor(0)
+        setAttachMenuOpen(false)
+        setModelPickerActiveIndex(0)
+        setQuickModelPickerOpen(true)
+        setTimeout(() => {
+            textareaRef.current?.focus()
+        }, 0)
+    }, [])
+
     const focusInput = useCallback(() => {
         const el = textareaRef.current
         if (!el) return
@@ -588,6 +605,10 @@ const BaseComposer = memo(function BaseComposer({
     const isProcessingAttachments = processingCount > 0
 
     const slashQuery = getSlashQuery(draft)
+    const compactName = t('slash.compact.name', { defaultValue: 'compact' })
+    const compactDescription = t('slash.compact.description', { defaultValue: 'Compact conversation context' })
+    const modelName = t('slash.model.name', { defaultValue: 'model' })
+    const modelDescription = t('slash.model.description', { defaultValue: 'Open model selector' })
 
     const previewResources = slashFrozenRef.current ?? { skills, prompts }
     const previewBuild =
@@ -597,7 +618,10 @@ const BaseComposer = memo(function BaseComposer({
                   query: slashQuery,
                   skills: previewResources.skills,
                   prompts: previewResources.prompts,
-                  compactDescription: t('slash.compact.description', { defaultValue: 'Compact conversation context' }),
+                  compactName,
+                  compactDescription,
+                  modelName,
+                  modelDescription,
               })
     const previewHasMatches = previewBuild.suggestions.length > 0
     const menuActuallyOpen =
@@ -624,7 +648,10 @@ const BaseComposer = memo(function BaseComposer({
                       query: slashQuery,
                       skills: finalResources.skills,
                       prompts: finalResources.prompts,
-                      compactDescription: t('slash.compact.description', { defaultValue: 'Compact conversation context' }),
+                      compactName,
+                      compactDescription,
+                      modelName,
+                      modelDescription,
                   })
 
     const slashSuggestions: SlashSuggestion[] = slashBuild.suggestions.map(
@@ -787,28 +814,60 @@ const BaseComposer = memo(function BaseComposer({
     const expandSendText = (
         raw: string,
         promptsSnap: readonly PromptTemplate[],
-    ): { text: string; isCompact: boolean; focus: string } => {
+    ): {
+        text: string
+        isCompact: boolean
+        focus: string
+        isModel: boolean
+    } => {
         const trimmed = raw.trim()
-        if (trimmed === '/compact' || trimmed.startsWith('/compact ')) {
-            const focus =
-                trimmed === '/compact' ? '' : trimmed.slice('/compact'.length).trim()
-            return { text: trimmed, isCompact: true, focus }
+        const parsed = parseSlashCommand(trimmed, {
+            compact: [compactName],
+            model: [modelName],
+        })
+
+        if (parsed.type === 'compact') {
+            return {
+                text: trimmed,
+                isCompact: true,
+                focus: parsed.focus,
+                isModel: false,
+            }
         }
+
+        if (parsed.type === 'model') {
+            return {
+                text: trimmed,
+                isCompact: false,
+                focus: '',
+                isModel: true,
+            }
+        }
+
         if (trimmed.startsWith('/skill:') || trimmed.startsWith('$')) {
             return {
                 text: trimmed,
                 isCompact: false,
                 focus: '',
+                isModel: false,
             }
         }
+
         if (trimmed.startsWith('/')) {
             return {
                 text: expandPromptTemplate(trimmed, promptsSnap),
                 isCompact: false,
                 focus: '',
+                isModel: false,
             }
         }
-        return { text: trimmed, isCompact: false, focus: '' }
+
+        return {
+            text: trimmed,
+            isCompact: false,
+            focus: '',
+            isModel: false,
+        }
     }
 
     const handleSubmit = async (overrideFollowUpMode?: 'steer' | 'queue') => {
@@ -825,6 +884,10 @@ const BaseComposer = memo(function BaseComposer({
         ).slice() as PromptTemplate[]
 
         const expanded = expandSendText(raw, promptsSnap)
+        if (expanded.isModel) {
+            handleOpenModelSelector()
+            return
+        }
         if (expanded.isCompact) {
             if (isRunning) return
             if (!onCompact) {
@@ -1055,6 +1118,10 @@ const BaseComposer = memo(function BaseComposer({
     }
 
     const applySlashSuggestion = (item: SlashSuggestion) => {
+        if (item.action === 'model') {
+            handleOpenModelSelector()
+            return
+        }
         setComposerDraft(item.insertText)
         setSlashOpen(false)
         textareaRef.current?.focus()

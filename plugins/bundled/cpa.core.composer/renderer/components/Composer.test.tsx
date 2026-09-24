@@ -516,6 +516,74 @@ describe('Composer slash commands', () => {
         expectComposerValue('')
     })
 
+    it('calls onCompact for localized /压缩 and extracts focus parameter', async () => {
+        const user = userEvent.setup()
+        const onSend = vi.fn()
+        const onCompact = vi.fn(async () => undefined)
+
+        render(<Composer onSend={onSend} onCompact={onCompact} />)
+
+        const textarea = screen.getByTestId('composer-input')
+        await user.type(textarea, '/压缩 重点关注权限模块')
+        await user.click(screen.getByRole('button', { name: 'Send' }))
+
+        expect(onCompact).toHaveBeenCalledWith('重点关注权限模块')
+        expect(onSend).not.toHaveBeenCalled()
+        expectComposerValue('')
+    })
+
+    it('opens model selector and clears draft when /model is submitted', async () => {
+        const user = userEvent.setup()
+        const onSend = vi.fn()
+
+        render(<Composer onSend={onSend} />)
+
+        const textarea = screen.getByTestId('composer-input')
+        await user.type(textarea, '/model')
+        await user.click(screen.getByRole('button', { name: 'Send' }))
+
+        expect(onSend).not.toHaveBeenCalled()
+        expectComposerValue('')
+        // Quick model picker listbox is opened
+        expect(screen.getByRole('listbox', { name: /model/i })).toBeInTheDocument()
+    })
+
+    it('opens model selector and clears draft when localized /模型 is submitted', async () => {
+        const user = userEvent.setup()
+        const onSend = vi.fn()
+
+        render(<Composer onSend={onSend} />)
+
+        const textarea = screen.getByTestId('composer-input')
+        await user.type(textarea, '/模型')
+        await user.click(screen.getByRole('button', { name: 'Send' }))
+
+        expect(onSend).not.toHaveBeenCalled()
+        expectComposerValue('')
+        expect(screen.getByRole('listbox', { name: /model/i })).toBeInTheDocument()
+    })
+
+    it('opens model selector when model suggestion is selected from slash menu', async () => {
+        const user = userEvent.setup()
+        const onSend = vi.fn()
+
+        render(<Composer onSend={onSend} />)
+
+        const textarea = screen.getByTestId('composer-input')
+        await user.type(textarea, '/mod')
+
+        // Slash menu is visible with /model option
+        const modelOption = screen.getByRole('option', { name: /\/model/i })
+        expect(modelOption).toBeInTheDocument()
+
+        // Select the model option
+        await user.click(modelOption)
+
+        // Draft is cleared and model selector is opened
+        expectComposerValue('')
+        expect(screen.getByRole('listbox', { name: /model/i })).toBeInTheDocument()
+    })
+
     it('clears composer input immediately before compaction completes', async () => {
         const user = userEvent.setup()
         let resolveCompact!: () => void

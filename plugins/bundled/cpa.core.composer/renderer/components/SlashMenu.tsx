@@ -2,6 +2,11 @@ import type { KeyboardEvent } from 'react'
 import { cn, useTranslation } from '@cpa/plugin-ui'
 import type { ActionContribution } from '@cpa/plugin-api'
 import type { PromptTemplate, Skill } from '../types.js'
+import {
+    COMPACT_COMMAND_ALIASES,
+    MODEL_COMMAND_ALIASES,
+    matchSlashQuery,
+} from '../utils/slashCommands.js'
 
 export type SlashGroup = 'builtin' | 'skill' | 'template'
 
@@ -12,13 +17,18 @@ export interface SlashSuggestion {
     description: string
     insertText: string
     disabled?: boolean
+    aliases?: readonly string[]
+    action?: 'compact' | 'model' | (string & {})
 }
 
 export interface BuildSlashSuggestionsInput {
     query: string
     skills: readonly Pick<Skill, 'name' | 'description' | 'disableModelInvocation'>[]
     prompts: readonly Pick<PromptTemplate, 'name' | 'description'>[]
-    compactDescription: string
+    compactDescription?: string
+    compactName?: string
+    modelDescription?: string
+    modelName?: string
     actions?: readonly ActionContribution[]
 }
 
@@ -54,6 +64,7 @@ export function buildSlashSuggestionsWithDiagnostics(
         commandBody: string,
         group: SlashGroup,
         suggestion: SlashSuggestion,
+        extraKeys?: readonly string[],
     ): boolean => {
         const key = commandBody.toLowerCase()
         const existing = claimed.get(key)
@@ -64,6 +75,14 @@ export function buildSlashSuggestionsWithDiagnostics(
             return false
         }
         claimed.set(key, group)
+        if (extraKeys) {
+            for (const extra of extraKeys) {
+                const eKey = extra.toLowerCase()
+                if (!claimed.has(eKey)) {
+                    claimed.set(eKey, group)
+                }
+            }
+        }
         items.push(suggestion)
         return true
     }
@@ -71,18 +90,37 @@ export function buildSlashSuggestionsWithDiagnostics(
     let optionIndex = 0
     const slashActions = input.actions ?? []
     let hasCompact = false
+    let hasModel = false
 
     for (const action of slashActions) {
         const rawName = action.id.startsWith('/') ? action.id.slice(1) : action.id
-        const commandBody = rawName === 'composer.compact' ? 'compact' : rawName
+        const commandBody =
+            rawName === 'composer.compact'
+                ? 'compact'
+                : rawName === 'open-model-selector'
+                  ? 'model'
+                  : rawName
+
         if (commandBody === 'compact') {
             hasCompact = true
+        } else if (commandBody === 'model') {
+            hasModel = true
         }
+
         const command = `/${commandBody}`
         const description =
             commandBody === 'compact' && input.compactDescription
                 ? input.compactDescription
-                : (action.description ?? action.title)
+                : commandBody === 'model' && input.modelDescription
+                  ? input.modelDescription
+                  : (action.description ?? action.title)
+
+        const aliases =
+            commandBody === 'compact'
+                ? COMPACT_COMMAND_ALIASES
+                : commandBody === 'model'
+                  ? MODEL_COMMAND_ALIASES
+                  : undefined
 
         const suggestion: SlashSuggestion = {
             id: slashOptionId('builtin', commandBody, optionIndex),
@@ -90,26 +128,67 @@ export function buildSlashSuggestionsWithDiagnostics(
             command,
             description,
             insertText: `${command} `,
+            aliases,
+            action: commandBody === 'compact' ? 'compact' : commandBody === 'model' ? 'model' : undefined,
         }
 
-        if (matchesQuery(query, commandBody, description)) {
-            if (claim(commandBody, 'builtin', suggestion)) optionIndex += 1
+        if (matchesQuery(query, commandBody, description, aliases)) {
+            if (claim(commandBody, 'builtin', suggestion, aliases)) optionIndex += 1
         }
     }
 
-    if (!hasCompact && input.compactDescription !== undefined) {
+    // 1. Register builtin Compact command if not already registered via actions
+    if (!hasCompact) {
+        const compactName = (input.compactName || 'compact').trim()
+        const compactDesc =
+            input.compactDescription ?? 'Compact conversation context'
+        const compactCmd = `/${compactName}`
+        const compactAliases = Array.from(
+            new Set([...COMPACT_COMMAND_ALIASES, compactName.toLowerCase()]),
+        )
+
         const compact: SlashSuggestion = {
             id: slashOptionId('builtin', 'compact', optionIndex),
             group: 'builtin',
-            command: '/compact',
-            description: input.compactDescription,
-            insertText: '/compact ',
+            command: compactCmd,
+            description: compactDesc,
+            insertText: `${compactCmd} `,
+            aliases: compactAliases,
+            action: 'compact',
         }
-        if (matchesQuery(query, 'compact', compact.description)) {
-            if (claim('compact', 'builtin', compact)) optionIndex += 1
+        if (matchesQuery(query, compactName, compactDesc, compactAliases)) {
+            if (claim('compact', 'builtin', compact, [compactName, ...compactAliases])) {
+                optionIndex += 1
+            }
         }
     }
 
+    // 2. Register builtin Model command if not already registered via actions
+    if (!hasModel) {
+        const modelName = (input.modelName || 'model').trim()
+        const modelDesc = input.modelDescription ?? 'Open model selector'
+        const modelCmd = `/${modelName}`
+        const modelAliases = Array.from(
+            new Set([...MODEL_COMMAND_ALIASES, modelName.toLowerCase()]),
+        )
+
+        const model: SlashSuggestion = {
+            id: slashOptionId('builtin', 'model', optionIndex),
+            group: 'builtin',
+            command: modelCmd,
+            description: modelDesc,
+            insertText: `${modelCmd} `,
+            aliases: modelAliases,
+            action: 'model',
+        }
+        if (matchesQuery(query, modelName, modelDesc, modelAliases)) {
+            if (claim('model', 'builtin', model, [modelName, ...modelAliases])) {
+                optionIndex += 1
+            }
+        }
+    }
+
+    // 3. Register template commands
     const prompts = [...input.prompts].sort((a, b) =>
         a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }),
     )
@@ -141,15 +220,13 @@ export function slashOptionId(
     return `${sanitizeAriaId(prefix)}-${sanitizeAriaId(String(group))}-${index}-${escaped}`
 }
 
-function matchesQuery(
+export function matchesQuery(
     query: string,
     commandBody: string,
-    _description: string,
+    description: string,
+    aliases?: readonly string[],
 ): boolean {
-    if (!query) return true
-    const body = commandBody.toLowerCase()
-    const q = query.toLowerCase()
-    return body.startsWith(q)
+    return matchSlashQuery(query, commandBody, description, aliases)
 }
 
 export interface SlashMenuProps {
@@ -255,6 +332,6 @@ export function SlashMenu({
 
 export function getSlashQuery(text: string): string | null {
     if (!text.startsWith('/')) return null
-    if (/\s/.test(text)) return null
+    if (/[\s\u3000]/.test(text)) return null
     return text.slice(1)
 }
