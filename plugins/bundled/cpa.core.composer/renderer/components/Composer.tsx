@@ -835,13 +835,12 @@ const BaseComposer = memo(function BaseComposer({
                 }
                 return
             }
+            setComposerDraft('')
+            setSlashOpen(false)
+            setSkillOpen(false)
+            setImageError(null)
             try {
                 await onCompact(expanded.focus)
-                if (!mountedRef.current) return
-                setComposerDraft('')
-                setSlashOpen(false)
-                setSkillOpen(false)
-                setImageError(null)
             } catch (error) {
                 if (!mountedRef.current) return
                 const message =

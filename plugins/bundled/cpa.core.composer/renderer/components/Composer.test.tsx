@@ -516,7 +516,32 @@ describe('Composer slash commands', () => {
         expectComposerValue('')
     })
 
-    it('keeps draft when onCompact rejects or is missing; no unhandled rejection', async () => {
+    it('clears composer input immediately before compaction completes', async () => {
+        const user = userEvent.setup()
+        let resolveCompact!: () => void
+        const compactPromise = new Promise<void>((resolve) => {
+            resolveCompact = resolve
+        })
+        const onCompact = vi.fn(() => compactPromise)
+
+        render(<Composer onSend={() => undefined} onCompact={onCompact} />)
+
+        const textarea = screen.getByTestId('composer-input')
+        await user.type(textarea, '/compact focus on auth')
+        await user.click(screen.getByRole('button', { name: 'Send' }))
+
+        expect(onCompact).toHaveBeenCalledWith('focus on auth')
+        // Cleared immediately upon send, before compaction finishes
+        expectComposerValue('')
+
+        resolveCompact()
+        await act(async () => {
+            await compactPromise
+        })
+        expectComposerValue('')
+    })
+
+    it('keeps draft when onCompact is missing; shows error toast when onCompact rejects', async () => {
         const user = userEvent.setup()
         const onCompact = vi.fn(async () => {
             throw new Error('compact failed')
@@ -531,10 +556,12 @@ describe('Composer slash commands', () => {
         await user.click(screen.getByRole('button', { name: 'Send' }))
 
         expect(onCompact).toHaveBeenCalledWith('')
-        expectComposerValue('/compact')
+        // Input is cleared immediately upon send before compaction completes
+        expectComposerValue('')
         expect(screen.getByText('compact failed')).toBeInTheDocument()
 
         rerender(<Composer onSend={() => undefined} onCompact={undefined} />)
+        await user.type(textarea, '/compact')
         await user.click(screen.getByRole('button', { name: 'Send' }))
         expectComposerValue('/compact')
     })
