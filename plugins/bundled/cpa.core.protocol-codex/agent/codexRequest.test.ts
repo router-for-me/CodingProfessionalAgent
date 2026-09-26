@@ -167,7 +167,7 @@ describe('buildCodexRequest', () => {
         expect(noTools).not.toHaveProperty('service_tier')
     })
 
-    it('omits reasoning when effort is off and keeps the original request value otherwise', () => {
+    it('omits reasoning for off or unsupported effort', () => {
         const off = buildCodexRequest({
             model: visionModel,
             sessionId: 's-off',
@@ -191,10 +191,9 @@ describe('buildCodexRequest', () => {
             sessionId: 's-custom',
             systemPrompt: 'sys',
             entries: [],
-            // Preserve raw request value from model catalog (not remapped).
             reasoningEffort: 'xhigh',
         })
-        expect(custom.reasoning).toEqual({ effort: 'xhigh', summary: 'auto' })
+        expect(custom).not.toHaveProperty('reasoning')
     })
 
     it('embeds image data URLs, compaction summary context, and normalized tool call ids', () => {
@@ -309,5 +308,276 @@ describe('buildCodexRequest', () => {
             content: [{ type: 'input_text', text: 'Role: Reviewer\nStrict review rules.' }],
         })
         expect(body.instructions).toBe('Base system instructions.')
+    })
+
+    it('pins top-level reasoning.effort to baseReasoningEffort and injects configuration_update for mid-conversation changes', () => {
+        const reasoningModel: ModelCatalogEntry = {
+            id: 'gpt-6-astra',
+            label: 'GPT-6 Astra',
+            supportsFast: true,
+            reasoningLevels: [
+                { id: 'low', requestValue: 'low' },
+                { id: 'medium', requestValue: 'medium' },
+                { id: 'high', requestValue: 'high' },
+            ],
+            input: ['text', 'image'],
+            contextWindow: 128_000,
+            maxTokens: 16_384,
+        }
+
+        const entries: ConversationEntry[] = [
+            {
+                id: 'u1',
+                sessionId: 's-multi',
+                createdAt: 1,
+                kind: 'user',
+                reasoningEffort: 'low',
+                content: [{ type: 'text', text: 'Turn 1 prompt' }],
+            },
+            {
+                id: 'a1',
+                sessionId: 's-multi',
+                createdAt: 2,
+                kind: 'assistant',
+                reasoningEffort: 'low',
+                model: 'gpt-6-astra',
+                stopReason: 'stop',
+                status: 'done',
+                content: [{ type: 'text', text: 'Turn 1 answer' }],
+            },
+            {
+                id: 'u2',
+                sessionId: 's-multi',
+                createdAt: 3,
+                kind: 'user',
+                reasoningEffort: 'high',
+                content: [{ type: 'text', text: 'Turn 2 prompt with high effort' }],
+            },
+        ]
+
+        const body = buildCodexRequest({
+            model: reasoningModel,
+            sessionId: 's-multi',
+            systemPrompt: 'System instructions',
+            entries,
+            reasoningEffort: 'high',
+            baseReasoningEffort: 'low',
+        })
+
+        // Request-level reasoning.effort MUST be 'low' to preserve prompt caching
+        expect(body.reasoning).toEqual({
+            effort: 'low',
+            summary: 'auto',
+        })
+
+        // The input array MUST contain the configuration_update before u2
+        const configUpdate = body.input.find(
+            (item) => (item as { type?: string }).type === 'configuration_update',
+        )
+        expect(configUpdate).toEqual({
+            type: 'configuration_update',
+            reasoning: { effort: 'high' },
+        })
+    })
+
+    it('supports configuration updates and base reasoning effort pinning across non-GPT-6 models with reasoning levels', () => {
+        const model = {
+            ...visionModel,
+            id: 'claude-3-7-sonnet',
+            reasoningLevels: [
+                { id: 'low', requestValue: 'low-effort' },
+                { id: 'high', requestValue: 'high-effort' },
+            ],
+        }
+        const entries: ConversationEntry[] = [
+            { id: 'u1', sessionId: 's1', createdAt: 1, kind: 'user', reasoningEffort: 'low', content: [{ type: 'text', text: 'First' }] },
+            { id: 'u2', sessionId: 's1', createdAt: 2, kind: 'user', reasoningEffort: 'high', content: [{ type: 'text', text: 'Second' }] },
+        ]
+        const body = buildCodexRequest({
+            model,
+            sessionId: 's1',
+            systemPrompt: 'System instructions',
+            entries,
+            reasoningEffort: 'high',
+            baseReasoningEffort: 'low',
+        })
+        expect(body.reasoning).toEqual({ effort: 'low-effort', summary: 'auto' })
+        expect(body.input).toContainEqual({
+            type: 'configuration_update',
+            reasoning: { effort: 'high-effort' },
+        })
+    })
+
+    it('maps historical and current level IDs before constructing GPT-6 requests', () => {
+        const model = {
+            ...visionModel,
+            id: 'gpt-6-astra',
+            reasoningLevels: [
+                { id: 'off', requestValue: 'none' },
+                { id: 'high', requestValue: 'high-effort' },
+            ],
+        }
+        const entries: ConversationEntry[] = [
+            { id: 'u1', sessionId: 's1', createdAt: 1, kind: 'user', reasoningEffort: 'off', content: [{ type: 'text', text: 'First' }] },
+            { id: 'u2', sessionId: 's1', createdAt: 2, kind: 'user', reasoningEffort: 'high', content: [{ type: 'text', text: 'Second' }] },
+        ]
+        const body = buildCodexRequest({
+            model,
+            sessionId: 's1',
+            systemPrompt: 'System instructions',
+            entries,
+            reasoningEffort: 'high',
+        })
+        expect(body).not.toHaveProperty('reasoning')
+        expect(body.input[1]).toEqual({ type: 'configuration_update', reasoning: { effort: 'high-effort' } })
+    })
+
+    it('honors an explicit base across separate requests even when earlier entries have another effort', () => {
+        const model = { ...visionModel, reasoningLevels: [
+            { id: 'low', requestValue: 'LowEffort' },
+            { id: 'high', requestValue: 'HighEffort' },
+        ] }
+        const firstUser: ConversationEntry = {
+            id: 'u1', sessionId: 's1', createdAt: 1, kind: 'user',
+            reasoningEffort: 'low', content: [{ type: 'text', text: 'First' }],
+        }
+        const secondUser: ConversationEntry = {
+            id: 'u2', sessionId: 's1', createdAt: 3, kind: 'user',
+            reasoningEffort: 'high', content: [{ type: 'text', text: 'Second' }],
+        }
+        const assistant: ConversationEntry = {
+            id: 'a1', sessionId: 's1', createdAt: 2, kind: 'assistant',
+            reasoningEffort: 'low', model: model.id, status: 'done', stopReason: 'stop',
+            content: [{ type: 'text', text: 'Answer' }],
+        }
+        const first = buildCodexRequest({
+            model, sessionId: 's1', systemPrompt: 'System', entries: [firstUser], reasoningEffort: 'low',
+        })
+        const second = buildCodexRequest({
+            model, sessionId: 's1', systemPrompt: 'System', entries: [firstUser, assistant, secondUser],
+            reasoningEffort: 'high', baseReasoningEffort: 'high',
+        })
+        expect(first.reasoning?.effort).toBe('LowEffort')
+        expect(second.reasoning?.effort).toBe('HighEffort')
+        expect(second.input[0]).toEqual({
+            type: 'configuration_update', reasoning: { effort: 'LowEffort' },
+        })
+        expect(second.input).toContainEqual({
+            type: 'configuration_update', reasoning: { effort: 'HighEffort' },
+        })
+    })
+
+    it('uses the explicit base without injecting an update before an assistant entry', () => {
+        const entries: ConversationEntry[] = [
+            { id: 'u1', sessionId: 's1', createdAt: 1, kind: 'user', content: [{ type: 'text', text: 'First' }] },
+            { id: 'a1', sessionId: 's1', createdAt: 2, kind: 'assistant', reasoningEffort: 'high', model: visionModel.id, status: 'done', stopReason: 'stop', content: [{ type: 'text', text: 'Answer' }] },
+        ]
+        const body = buildCodexRequest({
+            model: visionModel, sessionId: 's1', systemPrompt: 'System', entries,
+            reasoningEffort: 'off', baseReasoningEffort: 'off',
+        })
+        expect(body.reasoning).toBeUndefined()
+        expect(body.input.map((item) => 'role' in item ? item.role : item.type)).toEqual(['user', 'assistant'])
+    })
+
+    it('keeps the explicit base after truncation when the first retained turn uses a higher effort', () => {
+        const model = { ...visionModel, reasoningLevels: [
+            { id: 'low', requestValue: 'LowEffort' },
+            { id: 'high', requestValue: 'HighEffort' },
+        ] }
+        const entries: ConversationEntry[] = [
+            { id: 'c1', sessionId: 's1', createdAt: 1, kind: 'compaction', summary: 'Earlier turns', firstKeptEntryId: 'u2' },
+            { id: 'u2', sessionId: 's1', createdAt: 2, kind: 'user', reasoningEffort: 'high', content: [{ type: 'text', text: 'Continue' }] },
+        ]
+        const body = buildCodexRequest({
+            model, sessionId: 's1', systemPrompt: 'System', entries,
+            reasoningEffort: 'high', baseReasoningEffort: 'low',
+        })
+
+        expect(body.reasoning).toEqual({ effort: 'LowEffort', summary: 'auto' })
+        expect(body.input[1]).toEqual({ type: 'configuration_update', reasoning: { effort: 'HighEffort' } })
+    })
+
+    it('ignores unsupported efforts from a previous model when pinning and replaying a new model', () => {
+        const model = { ...visionModel, reasoningLevels: [
+            { id: 'low', requestValue: 'low-effort' },
+            { id: 'high', requestValue: 'high-effort' },
+        ] }
+        const entries: ConversationEntry[] = [
+            { id: 'u1', sessionId: 's1', createdAt: 1, kind: 'user', reasoningEffort: 'xhigh', content: [{ type: 'text', text: 'Old model' }] },
+            { id: 'a1', sessionId: 's1', createdAt: 2, kind: 'assistant', model: 'old-model', reasoningEffort: 'xhigh', status: 'done', stopReason: 'stop', content: [{ type: 'text', text: 'Answer' }] },
+            { id: 'u2', sessionId: 's1', createdAt: 3, kind: 'user', reasoningEffort: 'high', content: [{ type: 'text', text: 'New model' }] },
+        ]
+        for (const baseReasoningEffort of [undefined, 'xhigh']) {
+            const body = buildCodexRequest({
+                model, sessionId: 's1', systemPrompt: 'System', entries,
+                reasoningEffort: 'high', baseReasoningEffort,
+            })
+            expect(body.reasoning).toEqual({ effort: 'high-effort', summary: 'auto' })
+            expect(body.input.filter((item) => 'type' in item && item.type === 'configuration_update')).toEqual([])
+            expect(JSON.stringify(body)).not.toContain('xhigh')
+        }
+    })
+
+    it('infers the first supported historical effort after a model switch', () => {
+        const model = { ...visionModel, reasoningLevels: [
+            { id: 'low', requestValue: 'low-effort' },
+            { id: 'high', requestValue: 'high-effort' },
+        ] }
+        const entries: ConversationEntry[] = [
+            { id: 'u1', sessionId: 's1', createdAt: 1, kind: 'user', reasoningEffort: 'xhigh', content: [{ type: 'text', text: 'Old model' }] },
+            { id: 'u2', sessionId: 's1', createdAt: 2, kind: 'user', reasoningEffort: 'low', content: [{ type: 'text', text: 'New model' }] },
+            { id: 'u3', sessionId: 's1', createdAt: 3, kind: 'user', reasoningEffort: 'high', content: [{ type: 'text', text: 'Continue' }] },
+        ]
+        const body = buildCodexRequest({ model, sessionId: 's1', systemPrompt: 'System', entries, reasoningEffort: 'high' })
+        expect(body.reasoning).toEqual({ effort: 'low-effort', summary: 'auto' })
+        expect(body.input).toContainEqual({ type: 'configuration_update', reasoning: { effort: 'high-effort' } })
+        expect(JSON.stringify(body)).not.toContain('xhigh')
+    })
+
+    it('infers baseReasoningEffort from entries history when not explicitly supplied', () => {
+        const reasoningModel: ModelCatalogEntry = {
+            id: 'gpt-6-astra',
+            label: 'GPT-6 Astra',
+            supportsFast: true,
+            reasoningLevels: [
+                { id: 'low', requestValue: 'low' },
+                { id: 'medium', requestValue: 'medium' },
+                { id: 'high', requestValue: 'high' },
+            ],
+            input: ['text', 'image'],
+            contextWindow: 128_000,
+            maxTokens: 16_384,
+        }
+
+        const entries: ConversationEntry[] = [
+            {
+                id: 'u1',
+                sessionId: 's-inferred',
+                createdAt: 1,
+                kind: 'user',
+                reasoningEffort: 'low',
+                content: [{ type: 'text', text: 'First user prompt' }],
+            },
+            {
+                id: 'u2',
+                sessionId: 's-inferred',
+                createdAt: 2,
+                kind: 'user',
+                reasoningEffort: 'high',
+                content: [{ type: 'text', text: 'Second user prompt' }],
+            },
+        ]
+
+        const body = buildCodexRequest({
+            model: reasoningModel,
+            sessionId: 's-inferred',
+            systemPrompt: 'System instructions',
+            entries,
+            reasoningEffort: 'high',
+        })
+
+        // Should automatically infer 'low' from u1
+        expect(body.reasoning?.effort).toBe('low')
     })
 })

@@ -1574,4 +1574,353 @@ describe('convertConversationToCodexInput', () => {
             ) as { output?: string } | undefined)?.output,
         ).toBe('ok-result')
     })
+
+    describe('mid-conversation reasoning effort configuration updates', () => {
+        const reasoningModel: ModelCatalogEntry = {
+            id: 'gpt-6-astra',
+            label: 'GPT-6 Astra',
+            supportsFast: true,
+            reasoningLevels: [
+                { id: 'low', requestValue: 'low' },
+                { id: 'medium', requestValue: 'medium' },
+                { id: 'high', requestValue: 'high' },
+            ],
+            input: ['text', 'image'],
+            contextWindow: 128_000,
+            maxTokens: 16_384,
+        }
+
+        it('does not emit configuration_update when reasoning effort remains constant', () => {
+            const entries: ConversationEntry[] = [
+                {
+                    id: 'u1',
+                    sessionId: 's1',
+                    createdAt: 1,
+                    kind: 'user',
+                    reasoningEffort: 'low',
+                    content: [{ type: 'text', text: 'Hello' }],
+                },
+                {
+                    id: 'a1',
+                    sessionId: 's1',
+                    createdAt: 2,
+                    kind: 'assistant',
+                    reasoningEffort: 'low',
+                    model: 'gpt-6-astra',
+                    stopReason: 'stop',
+                    status: 'done',
+                    content: [{ type: 'text', text: 'Hi there!' }],
+                },
+                {
+                    id: 'u2',
+                    sessionId: 's1',
+                    createdAt: 3,
+                    kind: 'user',
+                    reasoningEffort: 'low',
+                    content: [{ type: 'text', text: 'How are you?' }],
+                },
+            ]
+
+            const input = convertConversationToCodexInput(entries, reasoningModel, {
+                baseReasoningEffort: 'low',
+                targetReasoningEffort: 'low',
+            })
+
+            const configUpdates = input.filter(
+                (item) => (item as { type?: string }).type === 'configuration_update',
+            )
+            expect(configUpdates).toHaveLength(0)
+        })
+
+        it('emits configuration_update before user message when effort changes mid-conversation', () => {
+            const entries: ConversationEntry[] = [
+                {
+                    id: 'u1',
+                    sessionId: 's1',
+                    createdAt: 1,
+                    kind: 'user',
+                    reasoningEffort: 'low',
+                    content: [{ type: 'text', text: 'Turn 1 prompt' }],
+                },
+                {
+                    id: 'a1',
+                    sessionId: 's1',
+                    createdAt: 2,
+                    kind: 'assistant',
+                    reasoningEffort: 'low',
+                    model: 'gpt-6-astra',
+                    stopReason: 'stop',
+                    status: 'done',
+                    content: [{ type: 'text', text: 'Turn 1 answer' }],
+                },
+                {
+                    id: 'u2',
+                    sessionId: 's1',
+                    createdAt: 3,
+                    kind: 'user',
+                    reasoningEffort: 'high',
+                    content: [{ type: 'text', text: 'Turn 2 deep analysis prompt' }],
+                },
+            ]
+
+            const input = convertConversationToCodexInput(entries, reasoningModel, {
+                baseReasoningEffort: 'low',
+                targetReasoningEffort: 'high',
+            })
+
+            // Expected sequence: user(u1) -> assistant(a1) -> configuration_update(high) -> user(u2)
+            expect(input).toHaveLength(4)
+            expect((input[0] as { role?: string }).role).toBe('user')
+            expect((input[1] as { role?: string }).role).toBe('assistant')
+            expect(input[2]).toEqual({
+                type: 'configuration_update',
+                reasoning: { effort: 'high' },
+            })
+            expect((input[3] as { role?: string }).role).toBe('user')
+        })
+
+        it('places a running effort change before the last user even when its recorded effort is stale', () => {
+            const entries: ConversationEntry[] = [
+                { id: 'u1', sessionId: 's1', createdAt: 1, kind: 'user', reasoningEffort: 'low', content: [{ type: 'text', text: 'First' }] },
+                { id: 'u2', sessionId: 's1', createdAt: 2, kind: 'user', reasoningEffort: 'low', content: [{ type: 'text', text: 'Second' }] },
+            ]
+            const input = convertConversationToCodexInput(entries, reasoningModel, {
+                baseReasoningEffort: 'low', targetReasoningEffort: 'high',
+            })
+
+            expect(input).toEqual([
+                expect.objectContaining({ role: 'user' }),
+                { type: 'configuration_update', reasoning: { effort: 'high' } },
+                expect.objectContaining({ role: 'user' }),
+            ])
+        })
+
+        it('does not emit two adjacent configuration_update items and collapses them', () => {
+            const entries: ConversationEntry[] = [
+                {
+                    id: 'u1',
+                    sessionId: 's1',
+                    createdAt: 1,
+                    kind: 'user',
+                    reasoningEffort: 'low',
+                    content: [{ type: 'text', text: 'First prompt' }],
+                },
+                {
+                    id: 'u2',
+                    sessionId: 's1',
+                    createdAt: 2,
+                    kind: 'user',
+                    reasoningEffort: 'high',
+                    content: [{ type: 'text', text: 'Second prompt' }],
+                },
+            ]
+
+            const input = convertConversationToCodexInput(entries, reasoningModel, {
+                baseReasoningEffort: 'low',
+                targetReasoningEffort: 'high',
+            })
+
+            const types = input.map((item) => (item as { type?: string; role?: string }).type ?? (item as { role?: string }).role)
+            for (let i = 0; i < types.length - 1; i++) {
+                if (types[i] === 'configuration_update') {
+                    expect(types[i + 1]).not.toBe('configuration_update')
+                }
+            }
+        })
+
+        it('does not emit configuration_update for models without reasoning support', () => {
+            const entries: ConversationEntry[] = [
+                {
+                    id: 'u1',
+                    sessionId: 's1',
+                    createdAt: 1,
+                    kind: 'user',
+                    reasoningEffort: 'low',
+                    content: [{ type: 'text', text: 'Prompt 1' }],
+                },
+                {
+                    id: 'u2',
+                    sessionId: 's1',
+                    createdAt: 2,
+                    kind: 'user',
+                    reasoningEffort: 'high',
+                    content: [{ type: 'text', text: 'Prompt 2' }],
+                },
+            ]
+
+            const input = convertConversationToCodexInput(entries, textModel, {
+                baseReasoningEffort: 'low',
+                targetReasoningEffort: 'high',
+            })
+
+            const configUpdates = input.filter(
+                (item) => (item as { type?: string }).type === 'configuration_update',
+            )
+            expect(configUpdates).toHaveLength(0)
+        })
+
+        it('supports configuration update across all models as long as reasoning levels are present', () => {
+            const entries: ConversationEntry[] = [
+                { id: 'u1', sessionId: 's1', createdAt: 1, kind: 'user', reasoningEffort: 'low', content: [{ type: 'text', text: 'First' }] },
+                { id: 'u2', sessionId: 's1', createdAt: 2, kind: 'user', reasoningEffort: 'high', content: [{ type: 'text', text: 'Second' }] },
+            ]
+            const input = convertConversationToCodexInput(entries, { ...reasoningModel, id: 'claude-3-7-sonnet' }, {
+                baseReasoningEffort: 'low',
+                targetReasoningEffort: 'high',
+            })
+            expect(input).toContainEqual({
+                type: 'configuration_update',
+                reasoning: { effort: 'high' },
+            })
+        })
+
+        it('tracks off/none explicitly and maps historical level IDs to request values', () => {
+            const model = {
+                ...reasoningModel,
+                reasoningLevels: [
+                    { id: 'off', requestValue: 'none' },
+                    { id: 'high', requestValue: 'high-effort' },
+                ],
+            }
+            const entries: ConversationEntry[] = [
+                { id: 'u1', sessionId: 's1', createdAt: 1, kind: 'user', reasoningEffort: 'off', content: [{ type: 'text', text: 'First' }] },
+                { id: 'u2', sessionId: 's1', createdAt: 2, kind: 'user', reasoningEffort: 'high', content: [{ type: 'text', text: 'Second' }] },
+                { id: 'u3', sessionId: 's1', createdAt: 3, kind: 'user', reasoningEffort: 'off', content: [{ type: 'text', text: 'Third' }] },
+            ]
+            const input = convertConversationToCodexInput(entries, model, {
+                baseReasoningEffort: 'off',
+                targetReasoningEffort: 'off',
+            })
+            expect(input).toEqual([
+                expect.objectContaining({ role: 'user' }),
+                { type: 'configuration_update', reasoning: { effort: 'high-effort' } },
+                expect.objectContaining({ role: 'user' }),
+                { type: 'configuration_update', reasoning: { effort: 'none' } },
+                expect.objectContaining({ role: 'user' }),
+            ])
+        })
+
+        it('does not append a configuration_update during a tool call or after its result', () => {
+            const entries: ConversationEntry[] = [
+                { id: 'u1', sessionId: 's1', createdAt: 1, kind: 'user', reasoningEffort: 'low', content: [{ type: 'text', text: 'First' }] },
+                { id: 'a1', sessionId: 's1', createdAt: 2, kind: 'assistant', reasoningEffort: 'low', model: reasoningModel.id, stopReason: 'tool_use', status: 'done', content: [{ type: 'toolCall', id: 'call_1|fc_1', name: 'read', arguments: {} }] },
+                { id: 't1', sessionId: 's1', createdAt: 3, kind: 'toolResult', toolCallId: 'call_1|fc_1', content: [{ type: 'text', text: 'Result' }], isError: false },
+                { id: 'a2', sessionId: 's1', createdAt: 4, kind: 'assistant', reasoningEffort: 'high', model: reasoningModel.id, stopReason: 'stop', status: 'done', content: [{ type: 'text', text: 'After tool' }] },
+            ]
+            const expectedTypes = [
+                ['user', 'function_call', 'function_call_output'],
+                ['user', 'function_call', 'function_call_output'],
+                ['user', 'function_call', 'function_call_output', 'assistant'],
+            ]
+
+            for (const [offset, types] of expectedTypes.entries()) {
+                const input = convertConversationToCodexInput(entries.slice(0, offset + 2), reasoningModel, {
+                    baseReasoningEffort: 'low', targetReasoningEffort: 'high',
+                })
+                expect(input.map((item) => 'role' in item ? item.role : item.type)).toEqual(types)
+            }
+        })
+
+        it.each([
+            { label: 'regular', pendingStatus: undefined },
+            { label: 'steer', pendingStatus: 'steer' as const },
+            { label: 'queue', pendingStatus: 'queue' as const },
+        ])(
+            'defers an effort change during tool execution until the next $label user message',
+            ({ pendingStatus }) => {
+                const entries: ConversationEntry[] = [
+                    { id: 'u1', sessionId: 's1', createdAt: 1, kind: 'user', reasoningEffort: 'low', content: [{ type: 'text', text: 'First' }] },
+                    { id: 'a1', sessionId: 's1', createdAt: 2, kind: 'assistant', reasoningEffort: 'low', model: reasoningModel.id, stopReason: 'tool_use', status: 'done', content: [{ type: 'toolCall', id: 'call_1|fc_1', name: 'read', arguments: {} }] },
+                    { id: 't1', sessionId: 's1', createdAt: 3, kind: 'toolResult', toolCallId: 'call_1|fc_1', content: [{ type: 'text', text: 'Result' }], isError: false },
+                    { id: 'a2', sessionId: 's1', createdAt: 4, kind: 'assistant', reasoningEffort: 'high', model: reasoningModel.id, stopReason: 'stop', status: 'done', content: [{ type: 'text', text: 'After tool' }] },
+                    { id: 'u2', sessionId: 's1', createdAt: 5, kind: 'user', pendingStatus, reasoningEffort: 'low', content: [{ type: 'text', text: 'Next turn' }] },
+                ]
+
+                for (const history of [[...entries.slice(0, 3), entries[4]!], entries]) {
+                    const input = convertConversationToCodexInput(history, reasoningModel, {
+                        baseReasoningEffort: 'low', targetReasoningEffort: 'high',
+                    })
+                    const types = input.map((item) => 'role' in item ? item.role : item.type)
+                    expect(types).toEqual([
+                        'user', 'function_call', 'function_call_output',
+                        ...(history.length === 5 ? ['assistant'] : []),
+                        'configuration_update', 'user',
+                    ])
+                    expect(input.at(-2)).toEqual({ type: 'configuration_update', reasoning: { effort: 'high' } })
+                    expect(input.at(-1)).toEqual({ role: 'user', content: [{ type: 'input_text', text: 'Next turn' }] })
+                    expect(input.filter((item) => 'type' in item && item.type === 'configuration_update')).toHaveLength(1)
+                }
+            },
+        )
+
+        it('uses the current effort for a stale next user entry without updating the assistant continuation', () => {
+            const entries: ConversationEntry[] = [
+                { id: 'u1', sessionId: 's1', createdAt: 1, kind: 'user', reasoningEffort: 'low', content: [{ type: 'text', text: 'First' }] },
+                { id: 'a1', sessionId: 's1', createdAt: 2, kind: 'assistant', reasoningEffort: 'high', model: reasoningModel.id, stopReason: 'stop', status: 'done', content: [{ type: 'text', text: 'Answer' }] },
+                { id: 'u2', sessionId: 's1', createdAt: 3, kind: 'user', reasoningEffort: 'low', content: [{ type: 'text', text: 'Next turn' }] },
+            ]
+            const input = convertConversationToCodexInput(entries, reasoningModel, {
+                baseReasoningEffort: 'low', targetReasoningEffort: 'high',
+            })
+
+            expect(input.map((item) => 'role' in item ? item.role : item.type)).toEqual([
+                'user', 'assistant', 'configuration_update', 'user',
+            ])
+            expect(input[2]).toEqual({ type: 'configuration_update', reasoning: { effort: 'high' } })
+        })
+
+        it('preserves the catalog requestValue case and avoids duplicate updates at the last user turn', () => {
+            const model = { ...reasoningModel, reasoningLevels: [
+                { id: 'low', requestValue: 'LowEffort' },
+                { id: 'high', requestValue: 'HighEffort' },
+            ] }
+            const entries: ConversationEntry[] = [
+                { id: 'u1', sessionId: 's1', createdAt: 1, kind: 'user', reasoningEffort: 'low', content: [{ type: 'text', text: 'First' }] },
+                { id: 'u2', sessionId: 's1', createdAt: 2, kind: 'user', reasoningEffort: 'high', content: [{ type: 'text', text: 'Second' }] },
+            ]
+            const input = convertConversationToCodexInput(entries, model, {
+                baseReasoningEffort: 'LowEffort', targetReasoningEffort: 'higheffort',
+            })
+            expect(input).toEqual([
+                expect.objectContaining({ role: 'user' }),
+                { type: 'configuration_update', reasoning: { effort: 'HighEffort' } },
+                expect.objectContaining({ role: 'user' }),
+            ])
+        })
+
+        it('re-emits configuration_update after compaction if effort differs from base', () => {
+            const entries: ConversationEntry[] = [
+                {
+                    id: 'c1',
+                    sessionId: 's1',
+                    createdAt: 1,
+                    kind: 'compaction',
+                    summary: 'Compacted history',
+                    firstKeptEntryId: 'u2',
+                },
+                {
+                    id: 'u2',
+                    sessionId: 's1',
+                    createdAt: 2,
+                    kind: 'user',
+                    reasoningEffort: 'high',
+                    content: [{ type: 'text', text: 'Post-compaction prompt' }],
+                },
+            ]
+
+            const input = convertConversationToCodexInput(entries, reasoningModel, {
+                baseReasoningEffort: 'low',
+                targetReasoningEffort: 'high',
+            })
+
+            const configUpdates = input.filter(
+                (item) => (item as { type?: string }).type === 'configuration_update',
+            )
+            expect(configUpdates).toHaveLength(1)
+            expect(configUpdates[0]).toEqual({
+                type: 'configuration_update',
+                reasoning: { effort: 'high' },
+            })
+        })
+    })
 })

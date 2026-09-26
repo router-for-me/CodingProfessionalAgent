@@ -3,7 +3,11 @@
  */
 
 import type { ConversationEntry, ModelCatalogEntry } from '@cpa/plugin-api'
-import { convertConversationToCodexInput } from './codexMessages'
+import {
+    convertConversationToCodexInput,
+    mapEffortToRequestValue,
+    supportsConfigurationUpdate,
+} from './codexMessages'
 import type {
     CodexFunctionTool,
     CodexNativeTool,
@@ -22,8 +26,10 @@ export interface BuildCodexRequestInput {
     tools?: readonly CodexToolDefinition[]
     nativeTools?: readonly { type: 'web_search' }[]
     toolChoice?: 'auto' | 'required' | 'none'
-    /** Original catalog request value (not remapped). */
+    /** Selected reasoning level ID or catalog request value. */
     reasoningEffort?: string
+    /** Base reasoning effort pinned for request-level reasoning.effort to preserve prompt cache. */
+    baseReasoningEffort?: string
     speed?: CodexRequestSpeed
     previousResponseId?: string
     /**
@@ -51,6 +57,24 @@ function shouldIncludeReasoning(effort: string | undefined): effort is string {
     return normalized !== 'off' && normalized !== 'none'
 }
 
+function resolveBaseReasoningEffort(
+    entries: readonly ConversationEntry[],
+    model: ModelCatalogEntry,
+    currentEffort?: string,
+    explicitBaseEffort?: string,
+): string | undefined {
+    const mappedCurrentEffort = mapEffortToRequestValue(currentEffort, model)
+    if (explicitBaseEffort !== undefined) {
+        return mapEffortToRequestValue(explicitBaseEffort, model) ?? mappedCurrentEffort
+    }
+    for (const entry of entries) {
+        if (entry.kind !== 'user' && entry.kind !== 'assistant') continue
+        const mappedEffort = mapEffortToRequestValue(entry.reasoningEffort, model)
+        if (mappedEffort !== undefined) return mappedEffort
+    }
+    return mappedCurrentEffort
+}
+
 /**
  * Construct a WebSocket `response.create` payload.
  *
@@ -60,7 +84,8 @@ function shouldIncludeReasoning(effort: string | undefined): effort is string {
  *   maxOutputTokens is explicitly provided (summary-only)
  * - service_tier only when speed=fast and model.supportsFast
  * - tools / tool_choice / parallel_tool_calls only when tools are present
- * - reasoning uses the raw request value; off/none omits the field
+ * - Models supporting reasoning effort pin the base reasoning effort for prompt caching
+ *   and inject mid-conversation changes before user turns; non-reasoning models omit it
  */
 export function buildCodexRequest(input: BuildCodexRequestInput): CodexResponseCreate {
     const {
@@ -73,12 +98,22 @@ export function buildCodexRequest(input: BuildCodexRequestInput): CodexResponseC
         nativeTools,
         toolChoice,
         reasoningEffort,
+        baseReasoningEffort: explicitBaseEffort,
         speed,
         previousResponseId,
         maxOutputTokens,
     } = input
 
-    const codexInput = convertConversationToCodexInput(entries, model)
+    const canUpdateConfiguration = supportsConfigurationUpdate(model)
+    const resolvedBaseEffort = resolveBaseReasoningEffort(
+        entries, model, reasoningEffort, explicitBaseEffort,
+    )
+    const currentEffort = mapEffortToRequestValue(reasoningEffort, model)
+
+    const codexInput = convertConversationToCodexInput(entries, model, {
+        baseReasoningEffort: resolvedBaseEffort,
+        targetReasoningEffort: currentEffort,
+    })
 
     if (developerPrompt && developerPrompt.trim().length > 0) {
         codexInput.unshift({
@@ -110,9 +145,10 @@ export function buildCodexRequest(input: BuildCodexRequestInput): CodexResponseC
         body.parallel_tool_calls = true
     }
 
-    if (shouldIncludeReasoning(reasoningEffort)) {
+    const requestEffort = canUpdateConfiguration ? resolvedBaseEffort : currentEffort
+    if (shouldIncludeReasoning(requestEffort)) {
         body.reasoning = {
-            effort: reasoningEffort,
+            effort: requestEffort,
             summary: 'auto',
         }
     }

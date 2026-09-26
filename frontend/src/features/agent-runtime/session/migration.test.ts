@@ -167,6 +167,21 @@ describe('migrateLegacyMessages', () => {
         expect(migrateLegacyMessages('s1', canonical)).toEqual(canonical)
     })
 
+    it('preserves and trims per-turn effort on canonical entries after restart', () => {
+        const persisted = [
+            { id: 'u1', kind: 'user', version: 1, content: [{ type: 'text', text: 'Hello' }], reasoningEffort: ' low ' },
+            { id: 'a1', kind: 'assistant', version: 1, status: 'done', stopReason: 'stop', content: [{ type: 'text', text: 'Hi' }], reasoningEffort: ' high ' },
+            { id: 'u2', kind: 'user', version: 1, content: [], reasoningEffort: 42 },
+            { id: 'a2', kind: 'assistant', version: 1, status: 'done', content: [], reasoningEffort: { id: 'low' } },
+        ]
+        const entries = migrateLegacyMessages('s1', persisted)
+        expect(entries[0]).toMatchObject({ kind: 'user', reasoningEffort: 'low' })
+        expect(entries[1]).toMatchObject({ kind: 'assistant', reasoningEffort: 'high' })
+        expect(entries[2]).not.toHaveProperty('reasoningEffort')
+        expect(entries[3]).not.toHaveProperty('reasoningEffort')
+        expect(migrateLegacyMessages('s1', JSON.parse(JSON.stringify(entries)))).toEqual(entries)
+    })
+
     it('converts legacy system messages into prefixed user entries', () => {
         const entries = migrateLegacyMessages('s1', [
             {

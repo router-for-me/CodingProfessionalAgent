@@ -347,6 +347,7 @@ function createSeedAssistant(
     id: string,
     now: number,
     model: ModelCatalogEntry,
+    reasoningEffort?: string,
 ): AssistantEntry {
     return {
         id,
@@ -357,6 +358,7 @@ function createSeedAssistant(
         content: [],
         stopReason: 'pending',
         status: 'streaming',
+        ...(reasoningEffort ? { reasoningEffort } : {}),
     }
 }
 
@@ -1400,6 +1402,7 @@ export class AgentLoop {
                     assistantId,
                     this.now(),
                     model,
+                    reasoningEffort,
                 )
                 return {
                     kind: 'aborted',
@@ -1413,6 +1416,7 @@ export class AgentLoop {
                 assistantId,
                 this.now(),
                 model,
+                reasoningEffort,
             )
 
             // Emit assistant-start (reset on each attempt including retries).

@@ -50,6 +50,8 @@ export interface CodexClientStreamInput {
     nativeTools?: readonly { type: 'web_search' }[]
     toolChoice?: 'auto' | 'required' | 'none'
     reasoningEffort?: string
+    /** Base reasoning effort pinned for request-level reasoning.effort to preserve prompt cache. */
+    baseReasoningEffort?: string
     speed?: CodexRequestSpeed | string
     /** Mutable assistant entry updated by the stream parser. */
     seed: AssistantEntry
@@ -82,7 +84,8 @@ function isCodexInputItem(value: unknown): value is CodexInputItem {
             record.type === 'message' ||
             record.type === 'function_call' ||
             record.type === 'function_call_output' ||
-            record.type === 'reasoning'
+            record.type === 'reasoning' ||
+            record.type === 'configuration_update'
         )
     }
     return false
@@ -147,6 +150,7 @@ export class CodexClient {
             nativeTools: input.nativeTools,
             toolChoice: input.toolChoice,
             reasoningEffort: input.reasoningEffort,
+            baseReasoningEffort: input.baseReasoningEffort,
             speed: input.speed as CodexRequestSpeed | undefined,
             maxOutputTokens: options?.maxOutputTokens,
         }

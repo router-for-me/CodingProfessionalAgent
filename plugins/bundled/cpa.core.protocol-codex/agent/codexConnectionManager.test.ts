@@ -276,6 +276,104 @@ describe('CodexConnectionManager', () => {
         await lease2.release()
     })
 
+    it('preserves continuation and emits delta with configuration_update when reasoning effort changes mid-conversation', async () => {
+        const bridge = new FakeNativeBridge()
+        const manager = new CodexConnectionManager(bridge, {
+            now: () => 1_000,
+            generateRequestId: () => 'op',
+        })
+
+        bridge.queueWebSocket({
+            frames: [{ kind: 'websocket-open' }, ...completedTextFrames('resp_1', 'one')],
+        })
+
+        const firstBody = baseRequest({
+            reasoning: { effort: 'low', summary: 'auto' },
+            input: [{ role: 'user', content: [{ type: 'input_text', text: 'turn 1' }] }],
+        })
+
+        const lease1 = await manager.acquire('session-reasoning-delta', {
+            apiKey: 'k',
+            baseUrl: 'http://127.0.0.1:8317/backend-api/',
+            request: firstBody,
+            signal: new AbortController().signal,
+            mode: 'session',
+            requestId: 'req-1',
+        })
+
+        for await (const _ of lease1.events) {
+            // drain
+        }
+        lease1.commit({
+            fullRequestBody: firstBody,
+            responseId: 'resp_1',
+            responseItems: [assistantMessageItem('one')],
+        })
+        await lease1.release()
+
+        // Turn 2 with reasoning effort changed to 'high':
+        // Top-level reasoning.effort stays 'low' (base), input has configuration_update + turn 2 user message
+        const secondBody = baseRequest({
+            reasoning: { effort: 'low', summary: 'auto' },
+            input: [
+                { role: 'user', content: [{ type: 'input_text', text: 'turn 1' }] },
+                assistantMessageItem('one'),
+                { type: 'configuration_update', reasoning: { effort: 'high' } },
+                { role: 'user', content: [{ type: 'input_text', text: 'turn 2' }] },
+            ],
+        })
+
+        const acquire2 = manager.acquire('session-reasoning-delta', {
+            apiKey: 'k',
+            baseUrl: 'http://127.0.0.1:8317/backend-api/',
+            request: secondBody,
+            signal: new AbortController().signal,
+            mode: 'session',
+            requestId: 'req-2',
+        })
+
+        await vi.waitFor(() => {
+            expect(bridge.calls.filter((c) => c.method === 'sendWebSocket').length).toBe(2)
+        })
+
+        const opId = String(
+            (
+                bridge.calls.find((c) => c.method === 'openWebSocket')?.args[0] as {
+                    operationId: string
+                }
+            ).operationId,
+        )
+        for (const frame of completedTextFrames('resp_2', 'two')) {
+            bridge.emit(opId, frame)
+        }
+        const lease2 = await acquire2
+
+        // Proves socket was reused
+        expect(bridge.calls.filter((c) => c.method === 'openWebSocket')).toHaveLength(1)
+
+        const sendCalls = bridge.calls.filter((c) => c.method === 'sendWebSocket')
+        const secondSend = JSON.parse(
+            String(sendCalls[sendCalls.length - 1]?.args[1]),
+        ) as CodexResponseCreate
+
+        expect(secondSend.previous_response_id).toBe('resp_1')
+        // Delta suffix must be the configuration_update followed by the second user prompt
+        expect(secondSend.input).toEqual([
+            { type: 'configuration_update', reasoning: { effort: 'high' } },
+            { role: 'user', content: [{ type: 'input_text', text: 'turn 2' }] },
+        ])
+
+        for await (const _ of lease2.events) {
+            // drain
+        }
+        lease2.commit({
+            fullRequestBody: secondBody,
+            responseId: 'resp_2',
+            responseItems: [assistantMessageItem('two')],
+        })
+        await lease2.release()
+    })
+
     it('does not treat key-reordered bodies as mismatched for delta', async () => {
         const bridge = new FakeNativeBridge()
         const manager = new CodexConnectionManager(bridge, {

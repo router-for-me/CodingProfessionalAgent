@@ -794,6 +794,7 @@ function sanitizeEntry(value: unknown): ConversationEntry | null {
 
   if (kind === 'user') {
     const pausedMs = asFiniteNumber(value.pausedMs)
+    const reasoningEffort = asString(value.reasoningEffort)
     return {
       id,
       sessionId,
@@ -801,6 +802,7 @@ function sanitizeEntry(value: unknown): ConversationEntry | null {
       kind: 'user',
       version,
       content: sanitizeContentBlocks(value.content),
+      ...(reasoningEffort ? { reasoningEffort } : {}),
       ...(pausedMs !== undefined && pausedMs > 0 ? { pausedMs } : {}),
     }
   }
@@ -826,6 +828,8 @@ function sanitizeEntry(value: unknown): ConversationEntry | null {
     if (api) entry.api = api
     if (provider) entry.provider = provider
     if (model) entry.model = model
+    const reasoningEffort = asString(value.reasoningEffort)
+    if (reasoningEffort) entry.reasoningEffort = reasoningEffort
     if (errorMessage) entry.errorMessage = errorMessage
     if (responseId) entry.responseId = responseId
     const usage = sanitizeUsage(value.usage)

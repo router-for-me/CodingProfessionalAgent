@@ -100,6 +100,8 @@ export interface UserEntry extends EntryBase {
     kind: 'user'
     content: ContentBlock[]
     pendingStatus?: UserPendingStatus
+    /** Dynamic reasoning effort applied for this user turn. */
+    reasoningEffort?: string
 }
 
 export interface AssistantEntry extends EntryBase {
@@ -107,6 +109,8 @@ export interface AssistantEntry extends EntryBase {
     api?: string
     provider?: string
     model?: string
+    /** Effective reasoning effort applied for this assistant generation. */
+    reasoningEffort?: string
     content: ContentBlock[]
     usage?: Usage
     stopReason: StopReason

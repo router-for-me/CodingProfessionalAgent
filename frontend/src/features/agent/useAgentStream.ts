@@ -1574,6 +1574,7 @@ function buildUserEntry(
     sessionId: string,
     text: string,
     images: readonly ComposerImage[],
+    reasoningEffort?: string,
 ): UserEntry {
     const content: ContentBlock[] = []
     const trimmed = text.trim()
@@ -1593,6 +1594,7 @@ function buildUserEntry(
         createdAt: Date.now(),
         kind: 'user',
         content,
+        ...(reasoningEffort ? { reasoningEffort } : {}),
     }
 }
 
@@ -2402,10 +2404,16 @@ export function useAgentStream(
 
                 const trimmed = payload.text.trim()
                 const images = payload.images ? payload.images.slice() : []
+                const effectiveEffort = payload.reasoningEffort ?? targetSession?.reasoningEffort ?? settings.reasoningLevel
+                if (payload.reasoningEffort !== undefined && payload.reasoningEffort !== targetSession?.reasoningEffort) {
+                    useSessionStore.getState().setSessionRuntimeSettings(targetSessionId, {
+                        reasoningEffort: payload.reasoningEffort,
+                    })
+                }
 
                 if (effectiveFollowUpMode === 'steer') {
                     const steerEntry: UserEntry = {
-                        ...buildUserEntry(targetSessionId, trimmed, images),
+                        ...buildUserEntry(targetSessionId, trimmed, images, effectiveEffort),
                         pendingStatus: 'steer',
                     }
                     if (payload.userEntryId) {
@@ -2419,6 +2427,7 @@ export function useAgentStream(
                         useMessageStore.getState().replaceEntry({
                             ...existingEntry,
                             pendingStatus: 'steer',
+                            ...(payload.reasoningEffort !== undefined ? { reasoningEffort: effectiveEffort } : {}),
                         })
                     } else {
                         useMessageStore.getState().appendEntry(steerEntry)
@@ -2454,7 +2463,7 @@ export function useAgentStream(
                     return targetSessionId
                 } else {
                     const queueEntry: UserEntry = {
-                        ...buildUserEntry(targetSessionId, trimmed, images),
+                        ...buildUserEntry(targetSessionId, trimmed, images, effectiveEffort),
                         pendingStatus: 'queue',
                     }
                     if (payload.userEntryId) {
@@ -2468,6 +2477,7 @@ export function useAgentStream(
                         useMessageStore.getState().replaceEntry({
                             ...existingEntry,
                             pendingStatus: 'queue',
+                            ...(payload.reasoningEffort !== undefined ? { reasoningEffort: effectiveEffort } : {}),
                         })
                     } else {
                         useMessageStore.getState().appendEntry(queueEntry)
@@ -2715,6 +2725,9 @@ export function useAgentStream(
                 boundSessionId = sessionId
 
                 // Append user entry immediately so UI displays user message and setup card
+                const effectiveEffort = useSessionStore
+                    .getState()
+                    .sessions.find((s) => s.id === sessionId)?.reasoningEffort ?? settings.reasoningLevel
                 const existingEntries = useMessageStore
                     .getState()
                     .getEntries(sessionId)
@@ -2740,6 +2753,7 @@ export function useAgentStream(
                                 ...target,
                                 pendingStatus: undefined,
                                 createdAt: executionStartTime + idx,
+                                reasoningEffort: effectiveEffort,
                             }
                             useMessageStore.getState().replaceEntry(updated)
                             activatedUserEntries.push(updated)
@@ -2779,7 +2793,10 @@ export function useAgentStream(
                             'agent.preflight.message_gone',
                         )
                     }
-                    userEntry = replaceUserEntryText(target, trimmed)
+                    userEntry = {
+                        ...replaceUserEntryText(target, trimmed),
+                        reasoningEffort: effectiveEffort,
+                    }
                     priorEntries = existingEntries.slice(0, targetIndex)
                     const keptEntries = [...priorEntries, userEntry]
                     useMessageStore
@@ -2803,6 +2820,7 @@ export function useAgentStream(
                     userEntry = {
                         ...target,
                         createdAt: payload.userEntryCreatedAt ?? Date.now(),
+                        reasoningEffort: effectiveEffort,
                     }
                     priorEntries = existingEntries.slice(0, targetIndex)
                     const keptEntries = [...priorEntries, userEntry]
@@ -2812,7 +2830,7 @@ export function useAgentStream(
                     pruneHistoricalSubAgents(service, sessionId, keptEntries)
                 } else {
                     priorEntries = existingEntries
-                    userEntry = buildUserEntry(sessionId, trimmed, images)
+                    userEntry = buildUserEntry(sessionId, trimmed, images, effectiveEffort)
                     if (payload.userEntryId) {
                         userEntry.id = payload.userEntryId
                     }
@@ -3339,6 +3357,9 @@ export function useAgentStream(
                     speed: settings.speed,
                 })
 
+                const effectiveEffort = useSessionStore
+                    .getState()
+                    .sessions.find((s) => s.id === sessionId)?.reasoningEffort ?? settings.reasoningLevel
                 let userEntry: UserEntry
                 if (payload.editMessageId) {
                     const existingEntries = useMessageStore.getState().getEntries(sessionId)
@@ -3347,12 +3368,15 @@ export function useAgentStream(
                     )
                     const target = existingEntries[targetIndex]
                     if (target && target.kind === 'user') {
-                        userEntry = replaceUserEntryText(target, trimmed)
+                        userEntry = {
+                            ...replaceUserEntryText(target, trimmed),
+                            reasoningEffort: effectiveEffort,
+                        }
                         const priorEntries = existingEntries.slice(0, targetIndex)
                         const keptEntries = [...priorEntries, userEntry]
                         useMessageStore.getState().replaceSessionEntries(sessionId, keptEntries, { historyMutation: 'truncate' })
                     } else {
-                        userEntry = buildUserEntry(sessionId, trimmed, images)
+                        userEntry = buildUserEntry(sessionId, trimmed, images, effectiveEffort)
                         useMessageStore.getState().appendEntry(userEntry)
                     }
                 } else if (
@@ -3373,12 +3397,13 @@ export function useAgentStream(
                     userEntry = {
                         ...target,
                         createdAt: payload.userEntryCreatedAt ?? Date.now(),
+                        reasoningEffort: effectiveEffort,
                     }
                     const priorEntries = existingEntries.slice(0, targetIndex)
                     const keptEntries = [...priorEntries, userEntry]
                     useMessageStore.getState().replaceSessionEntries(sessionId, keptEntries, { historyMutation: 'truncate' })
                 } else {
-                    userEntry = buildUserEntry(sessionId, trimmed, images)
+                    userEntry = buildUserEntry(sessionId, trimmed, images, effectiveEffort)
                     if (payload.userEntryId) {
                         userEntry.id = payload.userEntryId
                     }

@@ -81,6 +81,16 @@ export type CodexReasoningItem = {
     content?: CodexReasoningContentPart[]
 }
 
+/**
+ * Mid-conversation configuration update item for dynamic reasoning effort adjustment.
+ */
+export type CodexConfigurationUpdateItem = {
+    type: 'configuration_update'
+    reasoning: {
+        effort: string
+    }
+}
+
 export type CodexInputItem =
     | CodexUserMessageItem
     | CodexAssistantMessageItem
@@ -88,6 +98,7 @@ export type CodexInputItem =
     | CodexFunctionCallItem
     | CodexFunctionCallOutputItem
     | CodexReasoningItem
+    | CodexConfigurationUpdateItem
 
 export type CodexFunctionTool = {
     type: 'function'

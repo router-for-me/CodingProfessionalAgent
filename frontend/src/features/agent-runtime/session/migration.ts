@@ -496,6 +496,9 @@ function normalizeCanonicalEntry(
             createdAt,
             kind: 'user',
             version,
+            ...(typeof item.reasoningEffort === 'string'
+                ? { reasoningEffort: item.reasoningEffort.trim() }
+                : {}),
             // Deep-clone so caller mutation of input cannot touch store data.
             content: deepCloneJson(normalizeContentBlocks(item.content)),
         }
@@ -524,6 +527,9 @@ function normalizeCanonicalEntry(
             content,
             status,
             stopReason,
+            ...(typeof item.reasoningEffort === 'string'
+                ? { reasoningEffort: item.reasoningEffort.trim() }
+                : {}),
         }
         const api = asNonEmptyString(item.api)
         const provider = asNonEmptyString(item.provider)

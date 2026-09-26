@@ -501,11 +501,13 @@ describe('useAgentStream', () => {
     it('resends an edited user entry without any later context', async () => {
         const sessionId = useSessionStore.getState().createSession({ title: 't' })
         useSessionStore.getState().setCurrentSession(sessionId)
+        useSessionStore.getState().setSessionRuntimeSettings(sessionId, { reasoningEffort: 'high' })
         useMessageStore.getState().appendEntry({
             id: 'u1',
             sessionId,
             createdAt: 1,
             kind: 'user',
+            reasoningEffort: 'low',
             content: [{ type: 'text', text: 'first' }],
         })
         useMessageStore.getState().appendEntry({
@@ -549,6 +551,7 @@ describe('useAgentStream', () => {
             expect.objectContaining({
                 id: 'u1',
                 kind: 'user',
+                reasoningEffort: 'high',
                 content: [{ type: 'text', text: 'edited first' }],
             }),
         ])
@@ -924,6 +927,7 @@ describe('useAgentStream', () => {
         const firstRunId = result.current.runId
         expect(firstRunId).toBeTruthy()
 
+        useSessionStore.getState().setSessionRuntimeSettings(firstSessionId!, { reasoningEffort: 'high' })
         let secondSessionId: string | null = null
         await act(async () => {
             secondSessionId = await result.current.send({
@@ -937,9 +941,10 @@ describe('useAgentStream', () => {
         expect(secondSessionId).toBe(firstSessionId)
         let entries = useMessageStore.getState().getEntries(firstSessionId!)
         const steerEntry = entries.find((e) => e.kind === 'user' && (e as any).pendingStatus === 'steer')
-        expect(steerEntry).toBeDefined()
+        expect(steerEntry).toMatchObject({ kind: 'user', reasoningEffort: 'high' })
 
         // Send a second steer message while still running
+        useSessionStore.getState().setSessionRuntimeSettings(firstSessionId!, { reasoningEffort: 'medium' })
         let thirdSessionId: string | null = null
         await act(async () => {
             thirdSessionId = await result.current.send({
@@ -950,8 +955,11 @@ describe('useAgentStream', () => {
         })
         expect(thirdSessionId).toBe(firstSessionId)
         entries = useMessageStore.getState().getEntries(firstSessionId!)
-        const steerEntries = entries.filter((e) => e.kind === 'user' && (e as any).pendingStatus === 'steer')
+        const steerEntries = entries.filter((e): e is import('@cpa/plugin-api').UserEntry =>
+            e.kind === 'user' && e.pendingStatus === 'steer',
+        )
         expect(steerEntries).toHaveLength(2)
+        expect(steerEntries.map((entry) => entry.reasoningEffort)).toEqual(['high', 'medium'])
 
         // Verify consumeSteerEntries passes all steer entries
         const firstStreamCall = service.streamCalls[0] as AgentStreamChatInput
@@ -962,6 +970,45 @@ describe('useAgentStream', () => {
         expect(consumed![1].id).toBe(steerEntries[1].id)
         expect(consumed![0].pendingStatus).toBeUndefined()
         expect(consumed![1].pendingStatus).toBeUndefined()
+        expect(consumed!.map((entry) => entry.reasoningEffort)).toEqual(['high', 'medium'])
+
+        releaseHold()
+        await waitFor(() => expect(result.current.isStreaming).toBe(false))
+    })
+
+    it('uses an explicit reasoning effort for a steer and updates the active session', async () => {
+        let releaseHold: () => void = () => {}
+        service.streamHold = new Promise<void>((resolve) => {
+            releaseHold = resolve
+        })
+
+        const { result } = renderHook(() => useAgentStream(), {
+            wrapper: wrapperFor(service),
+        })
+        let sessionId: string | null = null
+        await act(async () => {
+            sessionId = await result.current.send('first prompt')
+        })
+        expect(result.current.isStreaming).toBe(true)
+        useSessionStore.getState().setSessionRuntimeSettings(sessionId!, { reasoningEffort: 'high' })
+
+        await act(async () => {
+            await result.current.send({
+                text: 'steer with explicit effort',
+                sessionId: sessionId!,
+                followUpMode: 'steer',
+                reasoningEffort: 'low',
+            })
+        })
+
+        const session = useSessionStore.getState().sessions.find((s) => s.id === sessionId)
+        expect(session?.reasoningEffort).toBe('low')
+        const activeRun = service.streamCalls[0] as AgentStreamChatInput
+        expect(activeRun.getRuntimeSettings?.()?.reasoningEffort).toBe('low')
+        const steerEntry = useMessageStore.getState().getEntries(sessionId!)
+            .find((entry) => entry.kind === 'user' && entry.pendingStatus === 'steer')
+        expect(steerEntry).toMatchObject({ kind: 'user', reasoningEffort: 'low' })
+        expect(activeRun.consumeSteerEntries?.()).toMatchObject([{ reasoningEffort: 'low' }])
 
         releaseHold()
         await waitFor(() => expect(result.current.isStreaming).toBe(false))
@@ -1011,7 +1058,46 @@ describe('useAgentStream', () => {
         await waitFor(() => expect(result.current.isStreaming).toBe(false))
     })
 
-    it('auto-executes queued message with refreshed createdAt when turn completes', async () => {
+    it('uses an explicit reasoning effort for a queued follow-up and its execution', async () => {
+        let releaseHold: () => void = () => {}
+        service.streamHold = new Promise<void>((resolve) => {
+            releaseHold = resolve
+        })
+
+        const { result } = renderHook(() => useAgentStream(), {
+            wrapper: wrapperFor(service),
+        })
+        let sessionId: string | null = null
+        await act(async () => {
+            sessionId = await result.current.send('first prompt')
+        })
+        expect(result.current.isStreaming).toBe(true)
+        useSessionStore.getState().setSessionRuntimeSettings(sessionId!, { reasoningEffort: 'high' })
+
+        await act(async () => {
+            await result.current.send({
+                text: 'queue with explicit effort',
+                sessionId: sessionId!,
+                followUpMode: 'queue',
+                reasoningEffort: 'low',
+            })
+        })
+
+        expect(useSessionStore.getState().sessions.find((s) => s.id === sessionId)?.reasoningEffort).toBe('low')
+        const queuedEntry = useMessageStore.getState().getEntries(sessionId!)
+            .find((entry) => entry.kind === 'user' && entry.pendingStatus === 'queue')
+        expect(queuedEntry).toMatchObject({ kind: 'user', reasoningEffort: 'low' })
+
+        service.streamHold = null
+        releaseHold()
+        await waitFor(() => expect(service.streamCalls).toHaveLength(2))
+        const queuedRun = service.streamCalls[1] as AgentStreamChatInput
+        expect(queuedRun.userEntry).toMatchObject({ id: queuedEntry?.id, reasoningEffort: 'low' })
+        expect(queuedRun.getRuntimeSettings?.()?.reasoningEffort).toBe('low')
+        await waitFor(() => expect(result.current.isStreaming).toBe(false))
+    })
+
+    it('auto-executes queued message with execution-time createdAt and reasoning effort', async () => {
         let releaseFirstHold: () => void = () => {}
         service.streamHold = new Promise<void>((resolve) => {
             releaseFirstHold = resolve
@@ -1029,6 +1115,7 @@ describe('useAgentStream', () => {
         expect(result.current.isStreaming).toBe(true)
 
         // Queue a second message with an older timestamp
+        useSessionStore.getState().setSessionRuntimeSettings(sessionId!, { reasoningEffort: 'high' })
         const oldQueuedTime = Date.now() - 50_000
         await act(async () => {
             await result.current.send({
@@ -1041,19 +1128,27 @@ describe('useAgentStream', () => {
 
         let entries = useMessageStore.getState().getEntries(sessionId!)
         const queuedBefore = entries.find((e) => e.kind === 'user' && (e as any).pendingStatus === 'queue')
-        expect(queuedBefore).toBeDefined()
+        expect(queuedBefore).toMatchObject({ kind: 'user', reasoningEffort: 'high' })
 
-        // Complete first turn
+        // Complete first turn after changing the session's effort.
+        useSessionStore.getState().setSessionRuntimeSettings(sessionId!, { reasoningEffort: 'medium' })
         service.streamHold = null
         releaseFirstHold()
 
-        // Wait for queued run to be triggered
+        // Wait for queued run to be triggered.
         await waitFor(() => {
             const currentEntries = useMessageStore.getState().getEntries(sessionId!)
-            const target = currentEntries.find((e) => (e as any).id === queuedBefore!.id) as any
-            expect(target?.pendingStatus).toBeUndefined()
-            // createdAt must be updated to recent execution time, NOT the 50s old timestamp!
+            const target = currentEntries.find((e) => e.id === queuedBefore!.id)
+            expect(target).toMatchObject({ kind: 'user', pendingStatus: undefined, reasoningEffort: 'medium' })
+            // Execution time must replace the 50s old queued timestamp.
             expect(target?.createdAt).toBeGreaterThan(oldQueuedTime + 40_000)
+        })
+        await waitFor(() => expect(service.streamCalls).toHaveLength(2))
+        const queuedRun = service.streamCalls[1] as AgentStreamChatInput
+        expect(queuedRun.userEntry?.reasoningEffort).toBe('medium')
+        expect(queuedRun.entries.find((entry) => entry.id === queuedBefore!.id)).toMatchObject({
+            kind: 'user',
+            reasoningEffort: queuedRun.getRuntimeSettings?.()?.reasoningEffort,
         })
     })
 
@@ -2096,15 +2191,17 @@ describe('useAgentStream', () => {
         release1()
     })
 
-    it('refreshes userEntry createdAt to now when retrying via userEntryId', async () => {
+    it('refreshes userEntry createdAt and reasoning effort when retrying via userEntryId', async () => {
         const sessionId = useSessionStore.getState().createSession({ title: 'Worktree retry test' })
         useSessionStore.getState().setCurrentSession(sessionId)
+        useSessionStore.getState().setSessionRuntimeSettings(sessionId, { reasoningEffort: 'high' })
         const oldTimestamp = 1000000
         useMessageStore.getState().appendEntry({
             id: 'u-initial',
             sessionId,
             createdAt: oldTimestamp,
             kind: 'user',
+            reasoningEffort: 'low',
             content: [{ type: 'text', text: 'initial prompt before worktree setup' }],
         })
 
@@ -2127,6 +2224,7 @@ describe('useAgentStream', () => {
         expect(userEntry).toBeDefined()
         expect(userEntry?.createdAt).toBeGreaterThanOrEqual(beforeTime)
         expect(userEntry?.createdAt).not.toBe(oldTimestamp)
+        expect(userEntry).toMatchObject({ kind: 'user', reasoningEffort: 'high' })
     })
 
     it('preserves an explicit user entry start time across worktree retry setup', async () => {

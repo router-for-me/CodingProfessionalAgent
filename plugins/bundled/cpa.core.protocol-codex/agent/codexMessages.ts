@@ -606,6 +606,49 @@ function hashId(value: string): string {
     return (hash >>> 0).toString(16).padStart(8, '0')
 }
 
+export interface ConvertConversationOptions {
+    baseReasoningEffort?: string
+    targetReasoningEffort?: string
+}
+
+export function supportsConfigurationUpdate(model: ModelCatalogEntry): boolean {
+    return Array.isArray(model.reasoningLevels) && model.reasoningLevels.length > 0
+}
+
+export function mapEffortToRequestValue(
+    effort: string | undefined,
+    model: ModelCatalogEntry,
+): string | undefined {
+    const value = effort?.trim()
+    if (!value) return undefined
+    const levels = model.reasoningLevels
+    const normalized = value.toLowerCase()
+    if (!levels?.length) return value
+    return (levels.find((level) => level.id === value || level.requestValue === value) ??
+        levels.find((level) =>
+            level.id.toLowerCase() === normalized || level.requestValue.toLowerCase() === normalized,
+        ))?.requestValue
+}
+
+function normalizeReasoningEffort(effort: string | undefined): string | undefined {
+    return effort?.trim().toLowerCase() || undefined
+}
+
+function appendConfigurationUpdate(
+    input: CodexInputItem[],
+    effort: string,
+): void {
+    const lastItem = input[input.length - 1]
+    if (lastItem && 'type' in lastItem && lastItem.type === 'configuration_update') {
+        lastItem.reasoning.effort = effort
+        return
+    }
+    input.push({
+        type: 'configuration_update',
+        reasoning: { effort },
+    })
+}
+
 /**
  * Convert canonical conversation history into Codex Responses `input` items.
  * System prompts must never appear as system-role input items.
@@ -613,9 +656,42 @@ function hashId(value: string): string {
 export function convertConversationToCodexInput(
     entries: readonly ConversationEntry[],
     model: ModelCatalogEntry,
+    options?: ConvertConversationOptions,
 ): CodexInputItem[] {
     const input: CodexInputItem[] = []
     const plan = buildConversionPlan(entries)
+
+    const canUpdateConfiguration = supportsConfigurationUpdate(model)
+    const normalizedBaseEffort = normalizeReasoningEffort(
+        mapEffortToRequestValue(options?.baseReasoningEffort, model),
+    )
+    const targetEffort = mapEffortToRequestValue(options?.targetReasoningEffort, model)
+
+    let currentEffectiveEffort: string | undefined = normalizedBaseEffort
+    let needsCompactionRefresh = false
+
+    // If base effort is still unknown, infer it from the first recorded turn.
+    if (!currentEffectiveEffort && canUpdateConfiguration) {
+        for (const e of entries) {
+            if (e.kind !== 'user' && e.kind !== 'assistant') continue
+            const entryEffort = normalizeReasoningEffort(
+                mapEffortToRequestValue(e.reasoningEffort, model),
+            )
+            if (entryEffort) {
+                currentEffectiveEffort = entryEffort
+                break
+            }
+        }
+    }
+
+    // Find the index of the last user entry in the list
+    let lastUserIndex = -1
+    for (let i = entries.length - 1; i >= 0; i -= 1) {
+        if (entries[i]?.kind === 'user') {
+            lastUserIndex = i
+            break
+        }
+    }
 
     for (let index = 0; index < entries.length; index += 1) {
         const entry = entries[index]
@@ -623,7 +699,25 @@ export function convertConversationToCodexInput(
 
         if (entry.kind === 'user') {
             const item = convertUserEntry(entry, model)
-            if (item) input.push(item)
+            if (!item) continue
+
+            if (canUpdateConfiguration) {
+                const turnEffort = (index === lastUserIndex && index === entries.length - 1 ? targetEffort : undefined) ??
+                    mapEffortToRequestValue(entry.reasoningEffort, model)
+                const normalizedTurnEffort = normalizeReasoningEffort(turnEffort)
+
+                if (turnEffort && normalizedTurnEffort) {
+                    if (currentEffectiveEffort === undefined) {
+                        currentEffectiveEffort = normalizedTurnEffort
+                    } else if (normalizedTurnEffort !== currentEffectiveEffort || needsCompactionRefresh) {
+                        appendConfigurationUpdate(input, turnEffort)
+                        currentEffectiveEffort = normalizedTurnEffort
+                        needsCompactionRefresh = false
+                    }
+                }
+            }
+
+            input.push(item)
             continue
         }
 
@@ -651,6 +745,16 @@ export function convertConversationToCodexInput(
 
         if (entry.kind === 'compaction') {
             input.push(convertCompactionEntry(entry))
+            if (
+                canUpdateConfiguration &&
+                currentEffectiveEffort !== undefined &&
+                normalizedBaseEffort !== undefined &&
+                currentEffectiveEffort !== normalizedBaseEffort
+            ) {
+                // OpenAI Responses API specifies that after explicit compaction,
+                // a fresh configuration_update must be added for the subsequent user turn.
+                needsCompactionRefresh = true
+            }
         }
     }
 

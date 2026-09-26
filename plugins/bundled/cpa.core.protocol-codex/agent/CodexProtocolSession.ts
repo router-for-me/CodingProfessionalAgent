@@ -46,6 +46,7 @@ export class CodexProtocolSession implements ProtocolSession {
     private readonly searchConfig: { baseUrl: string; apiKey: string; transport?: GeminiSearchTransport }
     private activeController: AbortController | null = null
     private disposed = false
+    private baseReasoningEffort?: string
 
     constructor(options: CodexProtocolSessionOptions) {
         this.id = options.sessionId
@@ -118,8 +119,24 @@ export class CodexProtocolSession implements ProtocolSession {
               }
             : undefined
 
+        if (options?.connectionMode !== 'isolated') {
+            if (this.baseReasoningEffort === undefined) {
+                for (const entry of input.entries) {
+                    if ((entry.kind === 'user' || entry.kind === 'assistant') && entry.reasoningEffort) {
+                        this.baseReasoningEffort = entry.reasoningEffort
+                        break
+                    }
+                }
+                this.baseReasoningEffort ??= input.reasoningEffort
+            }
+        }
+
         const clientInput = {
             ...input,
+            baseReasoningEffort:
+                options?.connectionMode !== 'isolated'
+                    ? this.baseReasoningEffort
+                    : undefined,
             speed: input.speed as CodexRequestSpeed | undefined,
         }
 

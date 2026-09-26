@@ -129,6 +129,18 @@ describe('persist pure helpers', () => {
     expectTypeOf<ElectronBridgeApi['SessionSet']>().returns.toEqualTypeOf<Promise<string>>()
   })
 
+  it('sanitizes per-turn reasoning effort on user and assistant entries', () => {
+    const entries = [
+      { id: 'u1', sessionId: 's1', createdAt: 1, kind: 'user', content: [], reasoningEffort: 'off' },
+      { ...(assistant('a1', 's1', 'done', 'Answer') as AssistantEntry), reasoningEffort: 'high' },
+      { id: 'u2', sessionId: 's1', createdAt: 3, kind: 'user', content: [], reasoningEffort: 123 },
+      { ...(assistant('a2', 's1', 'done', 'Answer') as AssistantEntry), reasoningEffort: '' },
+    ] as ConversationEntry[]
+
+    const sanitized = sanitizeConversationEntries({ s1: entries }).s1
+    expect(sanitized.map((entry) => entry.kind === 'user' || entry.kind === 'assistant' ? entry.reasoningEffort : undefined)).toEqual(['off', 'high', undefined, undefined])
+  })
+
   it('deduplicates hydration and merges a stream started during an idle reload', async () => {
     const sessionId = 'reload-stream-race'
     const prefix = assistant('prefix', sessionId, 'done', 'prefix')
@@ -1815,6 +1827,22 @@ describe('persist pure helpers', () => {
       await deleteSessionEntries('session-custom')
       expect(mockBridge.SessionDelete).toHaveBeenCalledWith('session-custom')
       setHostBridge(null)
+    })
+
+    it('round-trips per-turn reasoning effort through session storage', async () => {
+      let saved: unknown = null
+      setHostBridge({
+        SessionSet: vi.fn(async (_id: string, data: unknown) => { saved = data }),
+        SessionGet: vi.fn(async () => saved),
+      } as any)
+      const entries: ConversationEntry[] = [
+        { id: 'u1', sessionId: 's1', createdAt: 1, kind: 'user', reasoningEffort: 'low', content: [{ type: 'text', text: 'First' }] },
+        { ...(assistant('a1', 's1', 'done', 'Answer') as AssistantEntry), reasoningEffort: 'high' },
+      ]
+
+      await saveSessionEntries('s1', entries)
+      expect((saved as { entries: ConversationEntry[] }).entries.map((entry) => entry.kind === 'user' || entry.kind === 'assistant' ? entry.reasoningEffort : undefined)).toEqual(['low', 'high'])
+      expect((await loadSessionEntries('s1'))?.map((entry) => entry.kind === 'user' || entry.kind === 'assistant' ? entry.reasoningEffort : undefined)).toEqual(['low', 'high'])
     })
 
     it('persists only changed session payloads without cloning every cached conversation', async () => {
