@@ -25,6 +25,7 @@ import {
     useHostServices,
     useSkillUsageCounts,
     useTranslation,
+    useWorkspaceVisible,
     type SkillSuggestion,
 } from '@cpa/plugin-ui'
 import { useNavigate } from '@tanstack/react-router'
@@ -117,6 +118,7 @@ function DrawerSelectRow<T extends string>({
     options: SelectOption<T>[]
     onChange: (val: T) => void
 }) {
+    const workspaceVisible = useWorkspaceVisible()
     const [open, setOpen] = useState(false)
     const [position, setPosition] = useState<DrawerMenuPosition | null>(null)
     const triggerRef = useRef<HTMLButtonElement>(null)
@@ -130,12 +132,12 @@ function DrawerSelectRow<T extends string>({
     }, [])
 
     useLayoutEffect(() => {
-        if (!open) return
+        if (!open || !workspaceVisible) return
         updatePosition()
-    }, [open, updatePosition, options.length])
+    }, [open, workspaceVisible, updatePosition, options.length])
 
     useEffect(() => {
-        if (!open) return
+        if (!open || !workspaceVisible) return
 
         const handleClickOutside = (e: MouseEvent) => {
             const target = e.target as Node | null
@@ -173,7 +175,7 @@ function DrawerSelectRow<T extends string>({
             window.removeEventListener('resize', handleReposition)
             window.removeEventListener('scroll', handleReposition, true)
         }
-    }, [open, updatePosition])
+    }, [open, workspaceVisible, updatePosition])
 
     const handleToggle = () => {
         if (!open && triggerRef.current) {
@@ -199,13 +201,13 @@ function DrawerSelectRow<T extends string>({
                         'hover:text-[var(--text-primary)] transition-colors cursor-pointer select-none font-[inherit]',
                     )}
                     aria-haspopup="listbox"
-                    aria-expanded={open}
+                    aria-expanded={open && workspaceVisible}
                 >
                     <span>{selectedOption?.label}</span>
                     <ChevronDown className="size-3.5 opacity-60 stroke-[2]" />
                 </button>
 
-                {open && position && typeof document !== 'undefined'
+                {open && workspaceVisible && position && typeof document !== 'undefined'
                     ? createPortal(
                         <div
                             ref={menuRef}

@@ -26,6 +26,7 @@ import {
     useProjects,
     useSessions,
     useTranslation,
+    useWorkspaceVisible,
     AlertCircle,
     Archive,
     Check,
@@ -82,6 +83,7 @@ async function writeClipboard(text: string, uiService?: UiService | null): Promi
 /** Single sidebar session entry with navigation and a native-style context menu. */
 export function SessionRow({ session }: SessionRowProps) {
     const { t } = useTranslation()
+    const workspaceVisible = useWorkspaceVisible()
     const isMobile = useIsMobileBrowser()
     const sessionService = useHostService(SessionServiceToken)
     const chatMessageService = useHostService(ChatMessageServiceToken)
@@ -280,7 +282,7 @@ export function SessionRow({ session }: SessionRowProps) {
             hoverCard.removeEventListener('mouseenter', handleMouseEnter)
             hoverCard.removeEventListener('mouseleave', handleMouseLeave)
         }
-    }, [hoverCardOpen])
+    }, [hoverCardOpen, workspaceVisible])
 
     useEffect(() => {
         if (!editingTitle) return
@@ -289,7 +291,7 @@ export function SessionRow({ session }: SessionRowProps) {
     }, [editingTitle])
 
     useEffect(() => {
-        if (!hoverCardOpen) return
+        if (!hoverCardOpen || !workspaceVisible) return
 
         const closeOnViewportChange = () => closeHoverCard()
         window.addEventListener('resize', closeOnViewportChange)
@@ -298,10 +300,10 @@ export function SessionRow({ session }: SessionRowProps) {
             window.removeEventListener('resize', closeOnViewportChange)
             window.removeEventListener('scroll', closeOnViewportChange, true)
         }
-    }, [hoverCardOpen])
+    }, [hoverCardOpen, workspaceVisible])
 
     useEffect(() => {
-        if (!menuOpen) return
+        if (!menuOpen || !workspaceVisible) return
 
         const onPointerDown = (event: PointerEvent) => {
             const target = event.target as Node
@@ -322,7 +324,7 @@ export function SessionRow({ session }: SessionRowProps) {
             window.removeEventListener('resize', onViewportChange)
             window.removeEventListener('scroll', onViewportChange, true)
         }
-    }, [menuOpen])
+    }, [menuOpen, workspaceVisible])
 
     const handleSelect = (e?: ReactMouseEvent<HTMLAnchorElement>) => {
         e?.preventDefault?.()
@@ -706,7 +708,7 @@ export function SessionRow({ session }: SessionRowProps) {
                 </button>
             </div>
 
-            {!isMobile && hoverCardOpen && typeof document !== 'undefined'
+            {!isMobile && hoverCardOpen && workspaceVisible && typeof document !== 'undefined'
                 ? createPortal(
                       <div
                           ref={hoverCardRef}
@@ -775,7 +777,7 @@ export function SessionRow({ session }: SessionRowProps) {
                   )
                 : null}
 
-            {menuOpen && typeof document !== 'undefined'
+            {menuOpen && workspaceVisible && typeof document !== 'undefined'
                 ? createPortal(
                       <div
                           ref={menuRef}

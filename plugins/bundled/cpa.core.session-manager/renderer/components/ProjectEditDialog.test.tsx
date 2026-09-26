@@ -7,6 +7,7 @@ import { useSessionStore } from '@/stores/sessionStore'
 import { useUiStore } from '@/stores/uiStore'
 import type { Project } from '@/types/models'
 import { getHostServices } from '@/application/services/createHostServices'
+import { WorkspaceVisibilityProvider } from '@cpa/plugin-ui'
 import { ProjectEditDialog } from './ProjectEditDialog'
 
 const { pickProjectDirectoryMock } = vi.hoisted(() => ({
@@ -124,6 +125,31 @@ describe('ProjectEditDialog', () => {
         expect(useProjectStore.getState().projects).toEqual([])
         expect(useSessionStore.getState().sessions[0]?.projectId).toBeUndefined()
         expect(onClose).toHaveBeenCalledOnce()
+    })
+
+    it('preserves an open directory browser draft while settings is visible', async () => {
+        Object.defineProperty(navigator, 'userAgent', {
+            value: 'Mozilla/5.0 Chrome/120.0.0.0 Safari/537.36',
+            configurable: true,
+        })
+        const user = userEvent.setup()
+        const renderWorkspace = (visible: boolean) => (
+            <WorkspaceVisibilityProvider visible={visible}>
+                <ProjectEditDialog project={project} onClose={() => undefined} />
+            </WorkspaceVisibilityProvider>
+        )
+        const { rerender } = render(renderWorkspace(true))
+        await user.click(screen.getByRole('button', { name: 'Add folder' }))
+        await user.click(await screen.findByRole('button', { name: /New folder/i }))
+        const folderName = screen.getByPlaceholderText(/Folder name/i)
+        await user.type(folderName, 'Unsent folder')
+
+        rerender(renderWorkspace(false))
+        expect(screen.queryByTestId('directory-browser-modal')).not.toBeInTheDocument()
+        expect(screen.getByRole('dialog', { hidden: true, name: 'Edit project' })).not.toBeVisible()
+
+        rerender(renderWorkspace(true))
+        expect(screen.getByPlaceholderText(/Folder name/i)).toHaveValue('Unsent folder')
     })
 
     it('opens DirectoryBrowserModal in browser environment when adding folder', async () => {

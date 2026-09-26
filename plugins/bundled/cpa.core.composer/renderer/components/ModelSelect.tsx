@@ -8,6 +8,7 @@ import {
     useSessions,
     useSettings,
     useTranslation,
+    useWorkspaceVisible,
 } from '@cpa/plugin-ui'
 import type { ModelCatalogEntry, ModelReasoningOption, Speed } from '@cpa/plugin-api'
 import { AdvancedMenu, type ActiveSubmenu } from './AdvancedMenu.js'
@@ -36,6 +37,7 @@ export function ModelSelect({
     isRunning = false,
 }: ModelSelectProps) {
     const { t } = useTranslation()
+    const workspaceVisible = useWorkspaceVisible()
     const reactId = useId()
     const idSuffix = sanitizeAriaId(reactId)
     const modelMenuId = `model-menu-${idSuffix}`
@@ -103,7 +105,7 @@ export function ModelSelect({
     }, [])
 
     useLayoutEffect(() => {
-        if (!open) return
+        if (!open || !workspaceVisible) return
         updatePosition()
 
         let rafId: number | null = null
@@ -131,7 +133,7 @@ export function ModelSelect({
             window.removeEventListener('resize', handleReposition)
             window.removeEventListener('scroll', handleReposition, true)
         }
-    }, [open, updatePosition])
+    }, [open, workspaceVisible, updatePosition])
 
     const activeRun = useActiveRun(sessionId ?? undefined)
     const isRemoteRunning = Boolean(sessionId && activeRun && activeRun.status !== 'idle')
@@ -259,7 +261,7 @@ export function ModelSelect({
     }, [open])
 
     useEffect(() => {
-        if (!open) return
+        if (!open || !workspaceVisible) return
         const onPointerDown = (event: MouseEvent) => {
             const target = event.target
             const clickedPortal =
@@ -278,7 +280,7 @@ export function ModelSelect({
             document.removeEventListener('mousedown', onPointerDown)
             document.removeEventListener('keydown', onKeyDown)
         }
-    }, [open])
+    }, [open, workspaceVisible])
 
     const handleModelChange = (nextModelId: string) => {
         const nextModel =
@@ -347,8 +349,8 @@ export function ModelSelect({
                 aria-label={t('composer.model', { defaultValue: 'Model' })}
                 aria-describedby={triggerDescriptionId}
                 aria-haspopup="menu"
-                aria-expanded={open}
-                aria-controls={open ? modelMenuId : undefined}
+                aria-expanded={open && workspaceVisible}
+                aria-controls={open && workspaceVisible ? modelMenuId : undefined}
                 onClick={() => {
                     if (isTriggerDisabled) return
                     if (!open && triggerRef.current) {
@@ -384,7 +386,7 @@ export function ModelSelect({
                 <ChevronDown className="size-3 shrink-0 opacity-70" aria-hidden />
             </span>
 
-            {open && current && typeof document !== 'undefined'
+            {open && workspaceVisible && current && typeof document !== 'undefined'
                 ? createPortal(
                       <div
                           data-model-menu-portal

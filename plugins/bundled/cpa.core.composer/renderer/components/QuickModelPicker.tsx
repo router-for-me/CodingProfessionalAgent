@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, type MouseEvent } from 'react'
-import { Check, cn, useTranslation } from '@cpa/plugin-ui'
+import { Check, cn, useTranslation, useWorkspaceVisible } from '@cpa/plugin-ui'
 import type { ModelCatalogEntry } from '@cpa/plugin-api'
 import { sortModelsByName } from '../utils/modelMenuOptions.js'
 
@@ -31,6 +31,7 @@ export function QuickModelPicker({
     className,
 }: QuickModelPickerProps) {
     const { t } = useTranslation()
+    const workspaceVisible = useWorkspaceVisible()
     const listRef = useRef<HTMLDivElement>(null)
 
     const sortedModels = useMemo(() => sortModelsByName(models), [models])
@@ -42,17 +43,18 @@ export function QuickModelPicker({
 
     // Auto scroll active item into view
     useEffect(() => {
-        if (!listRef.current || sortedModels.length === 0) return
+        if (!workspaceVisible || !listRef.current || sortedModels.length === 0) return
         const activeElem = listRef.current.querySelector(
             `[data-model-index="${safeIndex}"]`,
         ) as HTMLElement | null
         if (activeElem && typeof activeElem.scrollIntoView === 'function') {
             activeElem.scrollIntoView({ block: 'nearest' })
         }
-    }, [safeIndex, sortedModels.length])
+    }, [safeIndex, sortedModels.length, workspaceVisible])
 
     // Close when clicking outside of composer
     useEffect(() => {
+        if (!workspaceVisible) return
         const onPointerDown = (event: PointerEvent) => {
             const target = event.target as HTMLElement | null
             if (
@@ -67,7 +69,7 @@ export function QuickModelPicker({
         return () => {
             document.removeEventListener('pointerdown', onPointerDown)
         }
-    }, [onClose])
+    }, [onClose, workspaceVisible])
 
     return (
         <div

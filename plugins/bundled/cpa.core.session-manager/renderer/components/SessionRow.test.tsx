@@ -8,6 +8,7 @@ import { useSessionRunStore } from '@/stores/sessionRunStore'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useUiStore } from '@/stores/uiStore'
 import { getHostServices } from '@/application/services/createHostServices'
+import { WorkspaceVisibilityProvider } from '@cpa/plugin-ui'
 import { SessionRow } from './SessionRow'
 
 const { navigateMock } = vi.hoisted(() => ({
@@ -135,6 +136,26 @@ describe('SessionRow', () => {
         value: 1280,
         configurable: true,
       })
+    })
+
+    it('hides a portaled session menu while the workspace is inactive and restores it afterward', () => {
+      const renderWorkspace = (visible: boolean) => (
+        <WorkspaceVisibilityProvider visible={visible}>
+          <SessionRow session={testSession} />
+        </WorkspaceVisibilityProvider>
+      )
+      const { rerender } = render(renderWorkspace(true))
+      fireEvent.contextMenu(screen.getByTitle('CPA Directory Query'), {
+        clientX: 100,
+        clientY: 100,
+      })
+      expect(screen.getByRole('menuitem', { name: 'Mark as read' })).toBeVisible()
+
+      rerender(renderWorkspace(false))
+      expect(screen.queryByRole('menuitem', { name: 'Mark as read' })).not.toBeInTheDocument()
+
+      rerender(renderWorkspace(true))
+      expect(screen.getByRole('menuitem', { name: 'Mark as read' })).toBeVisible()
     })
 
     it('shows hover details card on mouse enter and allows clicking', async () => {

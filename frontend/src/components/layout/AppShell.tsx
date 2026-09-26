@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { Outlet, useNavigate, useRouterState } from '@tanstack/react-router'
+import { WorkspaceVisibilityProvider } from '@cpa/plugin-ui'
 import { ExtensionSlot } from '@/plugins/registry/ExtensionSlot'
 import { FloatingOverlayHost } from '@/plugins/registry/FloatingOverlayHost'
 import { SettingsPanel } from '@/components/settings/SettingsPanel'
@@ -36,6 +37,7 @@ export function AppShell() {
             return match?.[1] ?? null
         },
     })
+    const settingsOpen = useUiStore((s) => s.settingsOpen)
     const sidebarCollapsed = useUiStore((s) => s.sidebarCollapsed)
     const rightSidebarCollapsed = useUiStore((s) => s.rightSidebarCollapsed)
     const rightSidebarMaximized = useUiStore((s) => s.rightSidebarMaximized)
@@ -88,52 +90,56 @@ export function AppShell() {
 
     return (
         <div className="app-background-surface relative flex h-full w-full bg-[var(--bg-app)] text-[var(--text-primary)]">
-            <Sidebar />
-            <main
-                className={cn(
-                    'relative flex flex-col overflow-hidden',
-                    isRightMaximized
-                        ? 'w-0 flex-none opacity-0 pointer-events-none'
-                        : 'min-w-0 flex-1 opacity-100',
-                    'transition-[width,flex,opacity] duration-200 ease-out motion-reduce:transition-none'
-                )}
-                style={{
-                    flex: isRightMaximized ? '0 0 0px' : '1 1 0%',
-                    width: isRightMaximized ? 0 : undefined,
-                }}
-                aria-hidden={isRightMaximized}
-                inert={isRightMaximized}
-            >
-                <MainTitleBar
-                    leftSidebarCollapsed={sidebarCollapsed}
-                    showPinnedSummaryToggle={hasActiveSession && rightSidebarVisible}
-                    reserveWindowToolbar={!rightSidebarVisible && layout.reserveWindowToolbar}
-                    sessionTitle={sessionTitle}
-                />
-                <div className="relative min-h-0 flex-1 overflow-hidden">
-                    {hasActiveSession && pinnedSummaryVisible ? (
-                        <div className="pointer-events-none absolute top-2 right-3 z-10">
-                            <PinnedSummary sessionId={chatSessionId} />
+            <WorkspaceVisibilityProvider visible={!settingsOpen}>
+                <div className="contents" style={settingsOpen ? { display: 'none' } : undefined} inert={settingsOpen} aria-hidden={settingsOpen}>
+                    <Sidebar />
+                    <main
+                        className={cn(
+                            'relative flex flex-col overflow-hidden',
+                            isRightMaximized
+                                ? 'w-0 flex-none opacity-0 pointer-events-none'
+                                : 'min-w-0 flex-1 opacity-100',
+                            'transition-[width,flex,opacity] duration-200 ease-out motion-reduce:transition-none'
+                        )}
+                        style={{
+                            flex: isRightMaximized ? '0 0 0px' : '1 1 0%',
+                            width: isRightMaximized ? 0 : undefined,
+                        }}
+                        aria-hidden={isRightMaximized}
+                        inert={isRightMaximized}
+                    >
+                        <MainTitleBar
+                            leftSidebarCollapsed={sidebarCollapsed}
+                            showPinnedSummaryToggle={hasActiveSession && rightSidebarVisible}
+                            reserveWindowToolbar={!rightSidebarVisible && layout.reserveWindowToolbar}
+                            sessionTitle={sessionTitle}
+                        />
+                        <div className="relative min-h-0 flex-1 overflow-hidden">
+                            {hasActiveSession && pinnedSummaryVisible ? (
+                                <div className="pointer-events-none absolute top-2 right-3 z-10">
+                                    <PinnedSummary sessionId={chatSessionId} />
+                                </div>
+                            ) : null}
+                            <ExtensionSlot
+                                name="workspace.main"
+                                fallback={<Outlet />}
+                            />
+                            {layout.showComposer ? (
+                                <ExtensionSlot name="workspace.composer" />
+                            ) : null}
                         </div>
-                    ) : null}
-                    <ExtensionSlot
-                        name="workspace.main"
-                        fallback={<Outlet />}
-                    />
-                    {layout.showComposer ? (
-                        <ExtensionSlot name="workspace.composer" />
-                    ) : null}
+                        <BottomPanel />
+                    </main>
+                    {layout.rightPanelMode === 'hidden' ? null : (
+                        <SubAgentPanel sessionId={chatSessionId} />
+                    )}
+                    <WindowToolbar includePinnedSummary={hasActiveSession && !rightSidebarVisible} />
+                    <FloatingOverlayHost context={{ sessionId: chatSessionId }} />
+                    <ExtensionSlot name="workspace.overlay" />
+                    <ChatSearchModal />
                 </div>
-                <BottomPanel />
-            </main>
-            {layout.rightPanelMode === 'hidden' ? null : (
-                <SubAgentPanel sessionId={chatSessionId} />
-            )}
-            <WindowToolbar includePinnedSummary={hasActiveSession && !rightSidebarVisible} />
-            <FloatingOverlayHost context={{ sessionId: chatSessionId }} />
-            <ExtensionSlot name="workspace.overlay" />
+            </WorkspaceVisibilityProvider>
             <SettingsPanel />
-            <ChatSearchModal />
             <ToastHost />
             <StartupSplashOverlay />
         </div>

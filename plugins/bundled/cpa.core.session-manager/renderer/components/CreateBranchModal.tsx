@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Loader2, X, cn, useSettings, useTranslation } from '@cpa/plugin-ui'
+import { Loader2, X, cn, useSettings, useTranslation, useWorkspaceVisible } from '@cpa/plugin-ui'
 import { isValidGitBranchName } from '../utils/gitBranches.js'
 
 export interface CreateBranchModalProps {
@@ -24,6 +24,7 @@ export function CreateBranchModal({
     branchPrefix: customBranchPrefix,
 }: CreateBranchModalProps) {
     const { t } = useTranslation()
+    const workspaceVisible = useWorkspaceVisible()
     const settings = useSettings()
     const titleId = useId()
     const inputId = useId()
@@ -68,7 +69,7 @@ export function CreateBranchModal({
 
     // Handle Escape key to close modal
     useEffect(() => {
-        if (!isOpen) return
+        if (!isOpen || !workspaceVisible) return
         const handleKeyDown = (event: KeyboardEvent) => {
             if (event.key === 'Escape' && !isSubmitting) {
                 onClose()
@@ -76,7 +77,7 @@ export function CreateBranchModal({
         }
         document.addEventListener('keydown', handleKeyDown)
         return () => document.removeEventListener('keydown', handleKeyDown)
-    }, [isOpen, isSubmitting, onClose])
+    }, [isOpen, workspaceVisible, isSubmitting, onClose])
 
     if (!isOpen || typeof document === 'undefined') {
         return null
@@ -119,6 +120,9 @@ export function CreateBranchModal({
     return createPortal(
         <div
             className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
+            style={workspaceVisible ? undefined : { display: 'none' }}
+            inert={!workspaceVisible}
+            aria-hidden={!workspaceVisible}
             role="presentation"
             onMouseDown={(e) => {
                 if (e.target === e.currentTarget && !isSubmitting) {

@@ -13,6 +13,7 @@ import {
     useHostServices,
     useProjects,
     useTranslation,
+    useWorkspaceVisible,
 } from '@cpa/plugin-ui'
 import type { Project, SessionItem } from '@cpa/plugin-api'
 import { getProjectPaths } from '../utils/projectPaths.js'
@@ -44,6 +45,7 @@ export function ContinueInWorktreeModal({
 }: ContinueInWorktreeModalProps) {
     const titleId = useId()
     const { t } = useTranslation()
+    const workspaceVisible = useWorkspaceVisible()
     const services = useHostServices()
     const storeProjects = useProjects()
     const projects = customProjects ?? (storeProjects as Project[])
@@ -160,7 +162,7 @@ export function ContinueInWorktreeModal({
     }, [projects, readFileBridge, services?.fileSystem])
 
     useEffect(() => {
-        if (!isOpen) return
+        if (!isOpen || !workspaceVisible) return
 
         const onKeyDown = (event: KeyboardEvent) => {
             if (event.key === 'Escape' && !isSubmitting) {
@@ -171,7 +173,7 @@ export function ContinueInWorktreeModal({
         return () => {
             document.removeEventListener('keydown', onKeyDown)
         }
-    }, [isOpen, isSubmitting, onClose])
+    }, [isOpen, workspaceVisible, isSubmitting, onClose])
 
     const handleSetupProject = () => {
         onClose()
@@ -200,6 +202,9 @@ export function ContinueInWorktreeModal({
     return createPortal(
         <div
             className="fixed inset-0 z-[60] flex items-center justify-center bg-black/55 p-5"
+            style={workspaceVisible ? undefined : { display: 'none' }}
+            inert={!workspaceVisible}
+            aria-hidden={!workspaceVisible}
             role="presentation"
             onMouseDown={(event) => {
                 if (event.target === event.currentTarget && !isSubmitting) {

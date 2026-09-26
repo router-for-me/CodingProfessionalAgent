@@ -12,6 +12,7 @@ import {
 import { createPortal } from 'react-dom'
 import { Check, ChevronDown, Search } from 'lucide-react'
 import { cn } from './cn.js'
+import { useWorkspaceVisible } from './WorkspaceVisibility.js'
 
 export interface CustomSelectOption<T extends string> {
     value: T
@@ -62,6 +63,7 @@ export function CustomSelect<T extends string>({
     searchable = false,
     searchPlaceholder,
 }: CustomSelectProps<T>) {
+    const workspaceVisible = useWorkspaceVisible()
     const reactId = useId()
     const idSuffix = toAriaId(reactId)
     const listboxId = `custom-select-${idSuffix}`
@@ -114,25 +116,25 @@ export function CustomSelect<T extends string>({
     }, [disabled, selectedIndex, updatePosition])
 
     useEffect(() => {
-        if (open && searchable) {
+        if (open && workspaceVisible && searchable) {
             const timer = setTimeout(() => {
                 searchInputRef.current?.focus()
             }, 0)
             return () => clearTimeout(timer)
         }
-    }, [open, searchable])
+    }, [open, workspaceVisible, searchable])
 
     useEffect(() => {
         if (disabled) setOpen(false)
     }, [disabled])
 
     useLayoutEffect(() => {
-        if (!open) return
+        if (!open || !workspaceVisible) return
         updatePosition()
-    }, [open, updatePosition, options.length])
+    }, [open, workspaceVisible, updatePosition, options.length])
 
     useEffect(() => {
-        if (!open) return
+        if (!open || !workspaceVisible) return
 
         const onPointerDown = (event: Event) => {
             const target = event.target
@@ -163,14 +165,14 @@ export function CustomSelect<T extends string>({
             window.removeEventListener('resize', onReposition)
             window.removeEventListener('scroll', onReposition, true)
         }
-    }, [open, updatePosition])
+    }, [open, workspaceVisible, updatePosition])
 
     useEffect(() => {
-        if (!open) return
+        if (!open || !workspaceVisible) return
         const optionId = optionIds[activeIndex]
         if (!optionId) return
         document.getElementById(optionId)?.scrollIntoView?.({ block: 'nearest' })
-    }, [activeIndex, open, optionIds])
+    }, [activeIndex, open, workspaceVisible, optionIds])
 
     const selectOption = (optValue: T) => {
         onChange(optValue)
@@ -259,9 +261,9 @@ export function CustomSelect<T extends string>({
                 role="combobox"
                 aria-label={ariaLabel}
                 aria-haspopup="listbox"
-                aria-expanded={open}
-                aria-controls={open ? listboxId : undefined}
-                aria-activedescendant={open ? optionIds[activeIndex] : undefined}
+                aria-expanded={open && workspaceVisible}
+                aria-controls={open && workspaceVisible ? listboxId : undefined}
+                aria-activedescendant={open && workspaceVisible ? optionIds[activeIndex] : undefined}
                 aria-autocomplete="none"
                 disabled={disabled}
                 className={cn(
@@ -292,7 +294,7 @@ export function CustomSelect<T extends string>({
                 />
             </button>
 
-            {open && position && typeof document !== 'undefined'
+            {open && workspaceVisible && position && typeof document !== 'undefined'
                 ? createPortal(
                     <div
                         ref={menuRef}

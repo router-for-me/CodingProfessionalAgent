@@ -26,6 +26,7 @@ import {
     useSessions,
     useTranslation,
     useUiState,
+    useWorkspaceVisible,
     Folder,
     FolderOpen,
     FolderSearch,
@@ -349,6 +350,7 @@ function ProjectGroup({
     onRemove?: () => void
 }) {
     const { t } = useTranslation()
+    const workspaceVisible = useWorkspaceVisible()
     const isMobile = useIsMobileBrowser()
     const menuId = useId()
     const uiService = useHostService(UiServiceToken)
@@ -410,7 +412,7 @@ function ProjectGroup({
     }
 
     useEffect(() => {
-        if (!menuOpen) return
+        if (!menuOpen || !workspaceVisible) return
 
         const handlePointerDown = (event: PointerEvent) => {
             const target = event.target as Node
@@ -436,7 +438,7 @@ function ProjectGroup({
             window.removeEventListener('resize', handleViewportChange)
             window.removeEventListener('scroll', handleViewportChange, true)
         }
-    }, [menuOpen])
+    }, [menuOpen, workspaceVisible])
 
     return (
         <div className="mb-1.5" data-group={groupKey}>
@@ -520,7 +522,7 @@ function ProjectGroup({
                 )
             ) : null}
 
-            {menuOpen && project && typeof document !== 'undefined'
+            {menuOpen && workspaceVisible && project && typeof document !== 'undefined'
                 ? createPortal(
                     <div
                         ref={menuRef}

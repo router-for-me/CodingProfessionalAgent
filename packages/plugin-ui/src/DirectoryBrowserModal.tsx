@@ -20,6 +20,7 @@ import {
 } from '@cpa/plugin-api'
 import { cn } from './cn.js'
 import { useHostService } from './HostServicesContext.js'
+import { useWorkspaceVisible } from './WorkspaceVisibility.js'
 import {
     getBaseName,
     getParentPath,
@@ -61,6 +62,7 @@ export function DirectoryBrowserModal({
     mkdirAll,
 }: DirectoryBrowserModalProps) {
     const { t } = useTranslation()
+    const workspaceVisible = useWorkspaceVisible()
     const titleId = useId()
     const filterInputRef = useRef<HTMLInputElement>(null)
     const pathInputRef = useRef<HTMLInputElement>(null)
@@ -180,7 +182,7 @@ export function DirectoryBrowserModal({
 
     // Handle global key events (Escape to close)
     useEffect(() => {
-        if (!isOpen) return
+        if (!isOpen || !workspaceVisible) return
         const handleKeyDown = (event: KeyboardEvent) => {
             if (event.key === 'Escape') {
                 if (newFolderOpen) {
@@ -195,7 +197,7 @@ export function DirectoryBrowserModal({
         }
         document.addEventListener('keydown', handleKeyDown)
         return () => document.removeEventListener('keydown', handleKeyDown)
-    }, [isOpen, newFolderOpen, isEditingPath, currentPath, onClose])
+    }, [isOpen, workspaceVisible, newFolderOpen, isEditingPath, currentPath, onClose])
 
     // Focus path input when editing starts
     useEffect(() => {
@@ -308,7 +310,7 @@ export function DirectoryBrowserModal({
         return getPathSegments(currentPath)
     }, [currentPath])
 
-    if (!isOpen || typeof document === 'undefined') return null
+    if (!isOpen || !workspaceVisible || typeof document === 'undefined') return null
 
     return createPortal(
         <div

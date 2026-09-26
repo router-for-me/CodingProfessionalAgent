@@ -37,6 +37,7 @@ import {
     useSkillUsageCounts,
     useTranslation,
     useUiState,
+    useWorkspaceVisible,
     X,
     type SkillSuggestion,
 } from '@cpa/plugin-ui'
@@ -215,6 +216,7 @@ const BaseComposer = memo(function BaseComposer({
     const skillListboxId = `skill-menu-${ariaSuffix}`
 
     const hostServices = useHostServices()
+    const workspaceVisible = useWorkspaceVisible()
     const settings = useSettings()
     const sessions = useSessions()
     const projects = useProjects()
@@ -424,7 +426,7 @@ const BaseComposer = memo(function BaseComposer({
 
     useEffect(() => {
         const unsub = rendererEventBus.on('composer:toggle-model-selector', () => {
-            if (isRunningRef.current) return
+            if (isRunningRef.current || !workspaceVisible) return
             setModelPickerQuery('')
             setModelPickerCursor(0)
             setQuickModelPickerOpen((prev) => {
@@ -442,7 +444,7 @@ const BaseComposer = memo(function BaseComposer({
         return () => {
             unsub()
         }
-    }, [])
+    }, [workspaceVisible])
 
     useEffect(() => {
         if (isRunning && quickModelPickerOpen) {
@@ -469,6 +471,7 @@ const BaseComposer = memo(function BaseComposer({
     }, [])
 
     const focusInput = useCallback(() => {
+        if (!workspaceVisible) return
         const el = textareaRef.current
         if (!el) return
         el.focus()
@@ -482,7 +485,7 @@ const BaseComposer = memo(function BaseComposer({
                 selection.addRange(range)
             }
         } catch {}
-    }, [])
+    }, [workspaceVisible])
 
     useEffect(() => {
         const handleFocus = () => {
@@ -1530,7 +1533,7 @@ const BaseComposer = memo(function BaseComposer({
                         />
                     ) : null}
 
-                    {attachMenuOpen ? (
+                    {attachMenuOpen && workspaceVisible ? (
                         <AttachMenu
                             anchorRef={composerCardRef}
                             activeIndex={attachMenuActiveIndex}

@@ -1,5 +1,5 @@
 import type { MouseEventHandler, ReactNode } from 'react'
-import { act, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import '@/i18n'
 import { rendererRegistry } from '@/plugins/platform/rendererRegistry'
@@ -668,6 +668,59 @@ describe('AppShell host slot skeleton', () => {
 
         expect(event2.defaultPrevented).toBe(true)
         expect(useUiStore.getState().settingsOpen).toBe(false)
+    })
+
+    it('hides the composer and quick model picker while settings is open without losing their state', () => {
+        render(<AppShell />)
+
+        const input = screen.getByTestId('composer-input')
+        const modelShortcut = new KeyboardEvent('keydown', {
+            key: 'm', code: 'KeyM', ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true,
+        })
+        act(() => window.dispatchEvent(modelShortcut))
+
+        const picker = document.getElementById('composer-quick-model-picker')
+        expect(modelShortcut.defaultPrevented).toBe(true)
+        expect(picker).toBeVisible()
+
+        const settingsShortcut = () => new KeyboardEvent('keydown', {
+            key: ',', code: 'Comma', metaKey: true, bubbles: true, cancelable: true,
+        })
+        act(() => window.dispatchEvent(settingsShortcut()))
+
+        expect(screen.getByRole('dialog', { name: /设置|settings/i })).toBeVisible()
+        expect(input).not.toBeVisible()
+        expect(picker).not.toBeVisible()
+        expect(input.closest('[inert]')).toHaveAttribute('aria-hidden', 'true')
+        fireEvent.pointerDown(screen.getByRole('dialog', { name: /设置|settings/i }))
+
+        act(() => window.dispatchEvent(settingsShortcut()))
+
+        expect(screen.queryByRole('dialog', { name: /设置|settings/i })).not.toBeInTheDocument()
+        expect(input).toBeVisible()
+        expect(picker).toBeVisible()
+    })
+
+    it('hides a portaled composer model menu until settings closes', () => {
+        useModelCatalogStore.setState({
+            models: [{
+                id: 'model-shell', label: 'Shell Model', supportsFast: false,
+                reasoningLevels: [], input: ['text'], contextWindow: 128000, maxTokens: 4096,
+            }],
+            status: 'ready',
+            error: null,
+        })
+        render(<AppShell />)
+
+        const modelButton = screen.getByRole('button', { name: /模型|Model/ })
+        act(() => modelButton.click())
+        expect(document.querySelector('[data-model-menu-portal]')).toBeInTheDocument()
+
+        act(() => useUiStore.getState().setSettingsOpen(true))
+        expect(document.querySelector('[data-model-menu-portal]')).not.toBeInTheDocument()
+
+        act(() => useUiStore.getState().setSettingsOpen(false))
+        expect(document.querySelector('[data-model-menu-portal]')).toBeInTheDocument()
     })
 
     it('triggers cycle-reasoning-effort shortcut (Shift+Tab) to cycle reasoning level', () => {

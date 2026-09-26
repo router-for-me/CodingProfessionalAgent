@@ -7,6 +7,7 @@ import {
     useHostService,
     useSessions,
     useTranslation,
+    useWorkspaceVisible,
     Folder,
     FolderPlus,
     X,
@@ -39,6 +40,7 @@ export function ProjectEditDialog({
     directoryPicker,
 }: ProjectEditDialogProps) {
     const { t } = useTranslation()
+    const workspaceVisible = useWorkspaceVisible()
     const titleId = useId()
     const nameInputRef = useRef<HTMLInputElement>(null)
     const projectService = useHostService(ProjectServiceToken)
@@ -52,6 +54,7 @@ export function ProjectEditDialog({
     const [directoryBrowserOpen, setDirectoryBrowserOpen] = useState(false)
 
     useEffect(() => {
+        if (!workspaceVisible) return
         nameInputRef.current?.focus()
         nameInputRef.current?.select()
 
@@ -60,7 +63,7 @@ export function ProjectEditDialog({
         }
         document.addEventListener('keydown', handleKeyDown)
         return () => document.removeEventListener('keydown', handleKeyDown)
-    }, [onClose])
+    }, [onClose, workspaceVisible])
 
     const isCustomPicker = directoryPicker !== undefined
 
@@ -133,6 +136,9 @@ export function ProjectEditDialog({
     return createPortal(
         <div
             className="fixed inset-0 z-[60] flex items-center justify-center bg-black/55 p-5"
+            style={workspaceVisible ? undefined : { display: 'none' }}
+            inert={!workspaceVisible}
+            aria-hidden={!workspaceVisible}
             role="presentation"
             onMouseDown={(event) => {
                 if (event.target === event.currentTarget) onClose()

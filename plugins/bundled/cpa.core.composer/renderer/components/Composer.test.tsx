@@ -9,7 +9,7 @@ import {
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '@/i18n'
-import { setDefaultHostServices } from '@cpa/plugin-ui'
+import { setDefaultHostServices, WorkspaceVisibilityProvider } from '@cpa/plugin-ui'
 import type { AppSettings, ModelCatalogEntry, Project, SessionItem } from '@cpa/plugin-api'
 import { rendererPluginRuntime } from '@/plugins/platform/RendererPluginRuntimeHost'
 import manifest from '../../manifest.json'
@@ -794,6 +794,32 @@ describe('Composer $ skill picker', () => {
         expect(screen.getByText('Alpha')).toBeInTheDocument()
         expect(screen.getByText('Beta')).toBeInTheDocument()
         expect(screen.getByText('Gh Issue')).toBeInTheDocument()
+    })
+
+    it('temporarily hides an open skill menu with the workspace and restores it afterward', async () => {
+        const user = userEvent.setup()
+        const renderWorkspace = (visible: boolean) => (
+            <WorkspaceVisibilityProvider visible={visible}>
+                <div style={{ display: visible ? undefined : 'none' }} inert={!visible}>
+                    <Composer onSend={() => undefined} skills={testSkills as any} />
+                </div>
+            </WorkspaceVisibilityProvider>
+        )
+        const { rerender } = render(renderWorkspace(true))
+
+        const input = screen.getByTestId('composer-input')
+        await user.type(input, '$')
+        const menu = screen.getByRole('listbox', { name: 'Skills' })
+        expect(menu).toBeVisible()
+
+        rerender(renderWorkspace(false))
+        expect(input).not.toBeVisible()
+        expect(menu).not.toBeVisible()
+        expect(input).toHaveAttribute('data-value', '$')
+
+        rerender(renderWorkspace(true))
+        expect(input).toBeVisible()
+        expect(menu).toBeVisible()
     })
 
     it('filters the list as the user continues typing after $', async () => {
