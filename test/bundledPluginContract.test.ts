@@ -601,7 +601,7 @@ describe('bundledPluginContract baseline', () => {
             'pinned-summary-subagents',
         ])
         expect(manifest.contributes['panel']).toEqual(['subagent'])
-        expect(manifest.contributes['settings']).toEqual(['subagents'])
+        expect(manifest.contributes['settings']).toEqual(['subagents', 'skills'])
         expect(manifest.contributes['action']).toEqual(
             expect.arrayContaining(['toggle-activity-view', 'show-pet']),
         )

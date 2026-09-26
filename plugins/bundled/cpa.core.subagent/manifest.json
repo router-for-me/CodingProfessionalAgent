@@ -29,7 +29,8 @@
             "subagent"
         ],
         "settings": [
-            "subagents"
+            "subagents",
+            "skills"
         ],
         "action": [
             "toggle-activity-view",

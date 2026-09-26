@@ -284,6 +284,19 @@ export interface SubagentsSettings {
   roles?: SubagentRole[]
 }
 
+export type SkillMode = 'auto' | 'explicit' | 'disabled'
+export type SkillItemMode = 'default' | 'auto' | 'explicit' | 'disabled'
+
+export interface SkillsSettings {
+  defaultMode: SkillMode
+  skills?: Record<string, SkillItemMode>
+}
+
+export const DEFAULT_SKILLS_SETTINGS: SkillsSettings = Object.freeze({
+  defaultMode: 'auto',
+  skills: Object.freeze({}),
+})
+
 export type EditorSendShortcut = 'enter' | 'cmdEnter'
 export type EditorFollowUpMode = 'queue' | 'steer'
 
@@ -334,6 +347,7 @@ export interface AppSettings {
   git?: GitSettings
   worktrees?: WorktreeSettings
   subagents?: SubagentsSettings
+  skills?: SkillsSettings
   editor?: EditorSettings
 }
 
@@ -662,6 +676,7 @@ export interface SettingsService {
     setGitSettings?(partial: Partial<GitSettings>): void
     setWorktreeSettings?(partial: Partial<WorktreeSettings>): void
     setSubagentSettings?(partial: Partial<SubagentsSettings>): void
+    setSkillsSettings?(partial: Partial<SkillsSettings>): void
     setEditorSettings?(partial: Partial<EditorSettings>): void
     setAppearance?(partial: Partial<AppSettings>): void
     hydrate?(partial: Partial<AppSettings>): void

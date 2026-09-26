@@ -614,6 +614,9 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
         setSubagentSettings(partial) {
             useSettingsStore.getState().setSubagentSettings(partial)
         },
+        setSkillsSettings(partial) {
+            useSettingsStore.getState().setSkillsSettings(partial)
+        },
         setEditorSettings(partial) {
             useSettingsStore.getState().setEditorSettings(partial)
         },

@@ -37,7 +37,7 @@ describe('subagentRendererEntry', () => {
                 contributes: {
                     slot: ['subagent-content', 'subagent-pills-slot', 'pinned-summary-subagents'],
                     panel: ['subagent'],
-                    settings: ['subagents'],
+                    settings: ['subagents', 'skills'],
                     action: ['toggle-activity-view', 'show-pet'],
                     'chat-renderer': ['subagent-pills'],
                     'tool-factory': ['spawn_agent', 'send_message', 'stop_agent'],
@@ -95,10 +95,15 @@ describe('subagentRendererEntry', () => {
         expect(chatRenderers[0].value.matches?.({ type: 'tool_call', name: 'other' })).toBe(false)
 
         const settings = harness.getRegistered<SettingsSectionContribution>('settings')
-        expect(settings).toHaveLength(1)
+        expect(settings).toHaveLength(2)
         expect(settings[0].id).toBe('subagents')
         expect(settings[0].value.groupId).toBe('code')
         expect(settings[0].value.order).toBe(25)
         expect(settings[0].value.labelKey).toBe('settings.nav.subagents')
+
+        expect(settings[1].id).toBe('skills')
+        expect(settings[1].value.groupId).toBe('code')
+        expect(settings[1].value.order).toBe(26)
+        expect(settings[1].value.labelKey).toBe('settings.nav.skills')
     })
 })

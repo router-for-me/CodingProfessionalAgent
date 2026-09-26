@@ -4,7 +4,7 @@
  */
 
 import type { ModelCatalogEntry } from '@/features/models/types'
-import type { GitSettings, ModelSettingsConfig, PersonalityTone, Speed, SubagentsSettings } from '@/types/models'
+import type { GitSettings, ModelSettingsConfig, PersonalityTone, SkillsSettings, Speed, SubagentsSettings } from '@/types/models'
 import type { CompactionSettings } from '@/features/agent-runtime/context/tokenEstimate'
 import type { AgentRunEvent, AgentTool } from '@/features/agent-runtime/agent/types'
 import type { WorktreeRunPolicy } from '@/features/agent-runtime/context/worktreeMode'
@@ -93,6 +93,8 @@ export interface AgentPrepareInput {
     model?: ModelCatalogEntry
     /** Optional Subagents execution settings. */
     subagentsSettings?: SubagentsSettings
+    /** Optional Skills settings containing default mode and per-skill modes. */
+    skillsSettings?: Partial<SkillsSettings>
     /** Optional Git settings. */
     gitSettings?: Partial<GitSettings>
     /** Optional model and cache warming settings. */
@@ -135,6 +137,7 @@ export interface PreparedAgentRun {
     readonly worktreePolicy?: WorktreeRunPolicy
     readonly subagentsSettings?: SubagentsSettings
     readonly gitSettings?: Partial<GitSettings>
+    readonly skillsSettings?: Partial<SkillsSettings>
     readonly modelSettings?: ModelSettingsConfig
     /** Frozen snapshot of providers, tools, resources, hooks, middleware, and lease for this run. */
     readonly generationSnapshot?: AgentGenerationSnapshot

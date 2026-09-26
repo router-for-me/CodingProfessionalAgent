@@ -1797,6 +1797,7 @@ async function prepareExecutionRun(
                 scheduleId: params.scheduleId ?? null,
                 sessionId: params.sessionId,
                 subagentsSettings: params.settings.subagents,
+                skillsSettings: params.settings.skills,
                 gitSettings: params.settings.git,
                 modelSettings: params.settings.modelSettings,
                 getEntries: async (sid: string) => {
@@ -1927,6 +1928,7 @@ async function prepareExecutionRun(
             scheduleId: params.scheduleId ?? null,
             sessionId: params.sessionId,
             subagentsSettings: params.settings.subagents,
+            skillsSettings: params.settings.skills,
             gitSettings: params.settings.git,
             modelSettings: params.settings.modelSettings,
             getEntries: async (sid: string) => {
@@ -2608,6 +2610,7 @@ export function useAgentStream(
                         scheduleId: payload.scheduleId ?? targetSession?.scheduleId ?? null,
                         sessionId: targetSessionId ?? null,
                         subagentsSettings: settings.subagents,
+                        skillsSettings: settings.skills,
                         gitSettings: settings.git,
                         modelSettings: settings.modelSettings,
                         getEntries: async (sid: string) => {

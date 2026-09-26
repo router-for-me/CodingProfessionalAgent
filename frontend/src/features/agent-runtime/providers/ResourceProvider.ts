@@ -10,6 +10,7 @@ import type {
     ResourceKind,
     ResourceProvider,
     ResourceProviderInput,
+    SkillsSettings,
     SubagentsSettings,
 } from '@cpa/plugin-api'
 import type { PersonalityTone } from '@/types/models'
@@ -33,6 +34,7 @@ import {
     formatGitSettingsForPrompt,
     formatSkillsForPrompt,
     formatSubagentRolesForPrompt,
+    getEffectiveSkillMode,
     isAbsolutePath,
 } from '@cpa/plugin-sdk'
 import {
@@ -109,6 +111,8 @@ export interface LoadResourceSnapshotInput {
     sessionId?: string
     /** Optional subagents settings containing pre-configured roles. */
     subagentsSettings?: SubagentsSettings
+    /** Optional skills settings containing default mode and per-skill invocation modes. */
+    skillsSettings?: Partial<SkillsSettings>
     /** Optional Git settings containing instructions, merge method, force push, draft PR. */
     gitSettings?: Partial<GitSettings>
 }
@@ -342,7 +346,16 @@ export async function loadResourcesFromProviders(
         }
     }
 
-    const skills = Array.from(skillMap.values()).map(cloneSkill)
+    const allSkills = Array.from(skillMap.values()).map(cloneSkill)
+    const activeSkills = allSkills.filter((skill) => {
+        const mode = getEffectiveSkillMode(skill.name, input.skillsSettings)
+        return mode !== 'disabled'
+    })
+    const autoRegisteredSkills = activeSkills.filter((skill) => {
+        const mode = getEffectiveSkillMode(skill.name, input.skillsSettings)
+        return mode === 'auto'
+    })
+    const skills = activeSkills
     const prompts = Array.from(promptMap.values()).map(clonePrompt)
 
     const effectivePromptGuidelines = [
@@ -373,7 +386,7 @@ export async function loadResourcesFromProviders(
         personality: input.personality,
     })
 
-    const skillsSection = formatSkillsForPrompt(skills, hasReadTool)
+    const skillsSection = formatSkillsForPrompt(autoRegisteredSkills, hasReadTool)
     const hasSpawnAgentTool = tools.some((tool) => tool.name === 'spawn_agent')
     const subagentRoles =
         hasSpawnAgentTool && input.subagentsSettings?.enabled !== false

@@ -451,7 +451,8 @@ export const bundledManifests: Readonly<Record<string, PluginManifest>> = Object
                         "subagent"
                 ],
                 "settings": [
-                        "subagents"
+                        "subagents",
+                        "skills"
                 ],
                 "action": [
                         "toggle-activity-view",

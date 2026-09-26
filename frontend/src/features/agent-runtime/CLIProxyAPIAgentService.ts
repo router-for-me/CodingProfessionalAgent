@@ -44,7 +44,9 @@ import {
 } from '@/plugins/platform/AgentPluginRuntimeHost'
 import type { ProtocolClient, ProtocolSession, ConversationEntry, ModelSettingsConfig } from '@cpa/plugin-api'
 import {
+    DEFAULT_SKILLS_SETTINGS,
     DEFAULT_SUBAGENT_SETTINGS,
+    type SkillsSettings,
     type SubagentsSettings,
 } from '@/types/models'
 import {
@@ -1248,6 +1250,18 @@ export class CLIProxyAPIAgentService implements AgentService {
                 this.latestSnapshot?.subagentsSettings ??
                 DEFAULT_SUBAGENT_SETTINGS
 
+            const skillsSettings: SkillsSettings = {
+                defaultMode:
+                    input.skillsSettings?.defaultMode ??
+                    this.latestSnapshot?.skillsSettings?.defaultMode ??
+                    DEFAULT_SKILLS_SETTINGS.defaultMode,
+                skills: {
+                    ...(DEFAULT_SKILLS_SETTINGS.skills ?? {}),
+                    ...(this.latestSnapshot?.skillsSettings?.skills ?? {}),
+                    ...(input.skillsSettings?.skills ?? {}),
+                },
+            }
+
             const gitSettings =
                 input.gitSettings ??
                 this.latestSnapshot?.gitSettings
@@ -1277,6 +1291,7 @@ export class CLIProxyAPIAgentService implements AgentService {
                     extensionRegistry: this.extensionRegistry,
                     worktreePolicy,
                     subagentsSettings,
+                    skillsSettings,
                     gitSettings,
                 }),
                 signal,
@@ -1341,6 +1356,7 @@ export class CLIProxyAPIAgentService implements AgentService {
                 personality: input.personality,
                 protocolProviderId: input.protocolProviderId,
                 subagentsSettings,
+                skillsSettings,
                 gitSettings,
                 modelSettings: input.modelSettings
                     ? (deepFreezeData(deepCloneData(input.modelSettings)) as ModelSettingsConfig)

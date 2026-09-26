@@ -64,5 +64,6 @@ describe('cpa.core.subagent runtime integration', () => {
 
         const settingsSections = registry.getSettingsSections()
         expect(settingsSections.some((s: any) => s.id === 'subagents')).toBe(true)
+        expect(settingsSections.some((s: any) => s.id === 'skills')).toBe(true)
     })
 })

@@ -7,6 +7,7 @@ import {
   DEFAULT_GIT_SETTINGS,
   DEFAULT_WORKTREE_SETTINGS,
   DEFAULT_SUBAGENT_SETTINGS,
+  DEFAULT_SKILLS_SETTINGS,
   DEFAULT_EDITOR_SETTINGS,
   normalizeCompactionThresholdPercent,
   type AppSettings,
@@ -18,6 +19,7 @@ import {
   type ModelSettingsConfig,
   type PersonalityTone,
   type ReasoningLevel,
+  type SkillsSettings,
   type Speed,
   type SubagentsSettings,
   type TerminalPosition,
@@ -76,6 +78,7 @@ interface SettingsState {
   setGitSettings: (partial: Partial<GitSettings>) => void
   setWorktreeSettings: (partial: Partial<WorktreeSettings>) => void
   setSubagentSettings: (partial: Partial<SubagentsSettings>) => void
+  setSkillsSettings: (partial: Partial<SkillsSettings>) => void
   setEditorSettings: (partial: Partial<EditorSettings>) => void
   setAppearance: (partial: Partial<AppSettings>) => void
   hydrate: (partial: Partial<AppSettings>) => void
@@ -417,6 +420,17 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       },
     })),
 
+  setSkillsSettings: (partial) =>
+    set((state) => ({
+      settings: {
+        ...state.settings,
+        skills: {
+          ...(state.settings.skills ?? DEFAULT_SKILLS_SETTINGS),
+          ...partial,
+        },
+      },
+    })),
+
   setEditorSettings: (partial) =>
     set((state) => ({
       settings: {
@@ -549,6 +563,20 @@ export const useSettingsStore = create<SettingsState>((set) => ({
           roles: Array.isArray(partial.subagents.roles)
             ? partial.subagents.roles
             : (state.settings.subagents?.roles ?? DEFAULT_SUBAGENT_SETTINGS.roles ?? []),
+        }
+      }
+      if (partial.skills) {
+        settings.skills = {
+          defaultMode:
+            partial.skills.defaultMode === 'explicit' ||
+            partial.skills.defaultMode === 'disabled' ||
+            partial.skills.defaultMode === 'auto'
+              ? partial.skills.defaultMode
+              : (state.settings.skills?.defaultMode ?? DEFAULT_SKILLS_SETTINGS.defaultMode),
+          skills:
+            typeof partial.skills.skills === 'object' && partial.skills.skills !== null
+              ? { ...(state.settings.skills?.skills ?? {}), ...partial.skills.skills }
+              : (state.settings.skills?.skills ?? DEFAULT_SKILLS_SETTINGS.skills ?? {}),
         }
       }
       if (partial.editor) {

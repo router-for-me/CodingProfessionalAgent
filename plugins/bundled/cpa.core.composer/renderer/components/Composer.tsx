@@ -41,6 +41,8 @@ import {
     X,
     type SkillSuggestion,
 } from '@cpa/plugin-ui'
+import { getEffectiveSkillMode } from '@cpa/plugin-sdk'
+import { DEFAULT_SKILLS_SETTINGS, type SkillsSettings } from '@cpa/plugin-api'
 import type {
     ComposerAttachment,
     ComposerImage,
@@ -232,6 +234,26 @@ const BaseComposer = memo(function BaseComposer({
     const setPendingSessionContext = (ctx: any) => {
         hostServices?.ui?.setPendingSessionContext?.(ctx)
     }
+
+    const [skillsSettings, setSkillsSettings] = useState<SkillsSettings>(() => {
+        return hostServices?.settings?.getSnapshot?.()?.skills ?? DEFAULT_SKILLS_SETTINGS
+    })
+
+    useEffect(() => {
+        if (!hostServices?.settings?.subscribe) return
+        return hostServices.settings.subscribe((appSettings: any) => {
+            if (appSettings?.skills) {
+                setSkillsSettings(appSettings.skills)
+            }
+        })
+    }, [hostServices?.settings])
+
+    const activeSkills = useMemo(() => {
+        return skills.filter((skill) => {
+            const mode = getEffectiveSkillMode(skill.name, skillsSettings)
+            return mode !== 'disabled'
+        })
+    }, [skills, skillsSettings])
 
     const pushToast = (message: string, type?: any) => {
         hostServices?.ui?.pushToast?.(message, type)
@@ -613,7 +635,7 @@ const BaseComposer = memo(function BaseComposer({
     const modelName = t('slash.model.name', { defaultValue: 'model' })
     const modelDescription = t('slash.model.description', { defaultValue: 'Open model selector' })
 
-    const previewResources = slashFrozenRef.current ?? { skills, prompts }
+    const previewResources = slashFrozenRef.current ?? { skills: activeSkills, prompts }
     const previewBuild =
         slashQuery === null
             ? { suggestions: [] as SlashSuggestion[], diagnostics: [] as string[] }
@@ -633,7 +655,7 @@ const BaseComposer = memo(function BaseComposer({
     if (menuActuallyOpen) {
         if (!slashFrozenRef.current) {
             slashFrozenRef.current = {
-                skills: skills.slice() as Skill[],
+                skills: activeSkills.slice() as Skill[],
                 prompts: prompts.slice() as PromptTemplate[],
             }
         }
@@ -641,7 +663,7 @@ const BaseComposer = memo(function BaseComposer({
         slashFrozenRef.current = null
     }
 
-    const finalResources = slashFrozenRef.current ?? { skills, prompts }
+    const finalResources = slashFrozenRef.current ?? { skills: activeSkills, prompts }
     const slashBuild =
         slashQuery === null
             ? { suggestions: [] as SlashSuggestion[], diagnostics: [] as string[] }
@@ -679,7 +701,7 @@ const BaseComposer = memo(function BaseComposer({
         : undefined
 
     const skillQuery = showSlashMenu ? null : getSkillQuery(draft, draftCursor)
-    const previewSkillResources = skillFrozenRef.current ?? skills
+    const previewSkillResources = skillFrozenRef.current ?? activeSkills
     const storeUsageCounts = useSkillUsageCounts()
     const effectiveUsageCounts = skillUsageCountsProp ?? storeUsageCounts
 
@@ -697,13 +719,13 @@ const BaseComposer = memo(function BaseComposer({
 
     if (skillMenuActuallyOpen) {
         if (!skillFrozenRef.current) {
-            skillFrozenRef.current = skills.slice() as Skill[]
+            skillFrozenRef.current = activeSkills.slice() as Skill[]
         }
     } else if (skillFrozenRef.current) {
         skillFrozenRef.current = null
     }
 
-    const finalSkillResources = skillFrozenRef.current ?? skills
+    const finalSkillResources = skillFrozenRef.current ?? activeSkills
     const skillBuild =
         skillQuery === null
             ? ([] as SkillSuggestion[])
@@ -1742,7 +1764,7 @@ const BaseComposer = memo(function BaseComposer({
                             editorRef={textareaRef}
                             value={quickModelPickerOpen ? modelPickerQuery : draft}
                             cursor={quickModelPickerOpen ? modelPickerCursor : draftCursor}
-                            skills={skills}
+                            skills={activeSkills}
                             disabled={sending || isWorktreeBlocked}
                             maxHeight={TEXTAREA_MAX_HEIGHT}
                             placeholder={

@@ -502,4 +502,99 @@ describe('ResourceProvider', () => {
         expect(snapshotPartial.systemPrompt).not.toContain('pull requests as draft')
         expect(snapshotPartial.systemPrompt).not.toContain('Pull request instructions')
     })
+
+    it('respects skillsSettings: auto in prompt & snapshot, explicit in snapshot only, disabled omitted from both', async () => {
+        const bridge = new FakeNativeBridge()
+        bridge.setFile(
+            `${AGENT}/skills/alpha/SKILL.md`,
+            '---\nname: alpha\ndescription: Alpha skill\n---\nAlpha body\n',
+        )
+        bridge.setFile(
+            `${AGENT}/skills/beta/SKILL.md`,
+            '---\nname: beta\ndescription: Beta skill\n---\nBeta body\n',
+        )
+        bridge.setFile(
+            `${AGENT}/skills/gamma/SKILL.md`,
+            '---\nname: gamma\ndescription: Gamma skill\n---\nGamma body\n',
+        )
+
+        const snapshot = await loadResourcesFromProviders({
+            cwd: REPO,
+            agentDir: AGENT,
+            bridge,
+            agentTarget: 'main',
+            extensionRegistry: registry,
+            tools: [{ name: 'read', description: 'Read files' }],
+            skillsSettings: {
+                defaultMode: 'auto',
+                skills: {
+                    beta: 'explicit',
+                    gamma: 'disabled',
+                },
+            },
+        })
+
+        // Alpha is auto: in system prompt and in snapshot
+        expect(snapshot.systemPrompt).toContain('<name>alpha</name>')
+        expect(snapshot.skills.some((s) => s.name === 'alpha')).toBe(true)
+
+        // Beta is explicit: NOT in system prompt, but preserved in snapshot for $ invocation
+        expect(snapshot.systemPrompt).not.toContain('<name>beta</name>')
+        expect(snapshot.skills.some((s) => s.name === 'beta')).toBe(true)
+
+        // Gamma is disabled: NOT in system prompt, and completely removed from snapshot
+        expect(snapshot.systemPrompt).not.toContain('<name>gamma</name>')
+        expect(snapshot.skills.some((s) => s.name === 'gamma')).toBe(false)
+    })
+
+    it('applies defaultMode when individual skills have default or no explicit mode', async () => {
+        const bridge = new FakeNativeBridge()
+        bridge.setFile(
+            `${AGENT}/skills/s1/SKILL.md`,
+            '---\nname: s1\ndescription: Skill One\n---\nBody One\n',
+        )
+        bridge.setFile(
+            `${AGENT}/skills/s2/SKILL.md`,
+            '---\nname: s2\ndescription: Skill Two\n---\nBody Two\n',
+        )
+
+        // When defaultMode is 'explicit', s1 and s2 follow default: snapshot only, omitted from prompt
+        const snapshotExplicit = await loadResourcesFromProviders({
+            cwd: REPO,
+            agentDir: AGENT,
+            bridge,
+            agentTarget: 'main',
+            extensionRegistry: registry,
+            tools: [{ name: 'read', description: 'Read files' }],
+            skillsSettings: {
+                defaultMode: 'explicit',
+                skills: {
+                    s2: 'default',
+                },
+            },
+        })
+
+        expect(snapshotExplicit.systemPrompt).not.toContain('<name>s1</name>')
+        expect(snapshotExplicit.systemPrompt).not.toContain('<name>s2</name>')
+        expect(snapshotExplicit.skills.map((s) => s.name)).toEqual(['s1', 's2'])
+
+        // When defaultMode is 'disabled', s1 is disabled unless overridden to auto
+        const snapshotDisabled = await loadResourcesFromProviders({
+            cwd: REPO,
+            agentDir: AGENT,
+            bridge,
+            agentTarget: 'main',
+            extensionRegistry: registry,
+            tools: [{ name: 'read', description: 'Read files' }],
+            skillsSettings: {
+                defaultMode: 'disabled',
+                skills: {
+                    s1: 'auto',
+                },
+            },
+        })
+
+        expect(snapshotDisabled.systemPrompt).toContain('<name>s1</name>')
+        expect(snapshotDisabled.skills.map((s) => s.name)).toEqual(['s1'])
+    })
 })

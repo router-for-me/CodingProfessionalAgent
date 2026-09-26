@@ -7,7 +7,7 @@ import type {
   UserProfileSettings,
   WorktreeSettings,
 } from '@cpa/plugin-api'
-import { getAppConfigDirName, DEFAULT_SUBAGENT_ROLES } from '@cpa/plugin-api'
+import { getAppConfigDirName, DEFAULT_SUBAGENT_ROLES, DEFAULT_SKILLS_SETTINGS } from '@cpa/plugin-api'
 
 export type {
   ActionPlatform,
@@ -58,6 +58,9 @@ export type {
   ShortcutKeyBinding,
   ShortcutsConfig,
   ShortcutsMap,
+  SkillItemMode,
+  SkillMode,
+  SkillsSettings,
   Speed,
   SubagentRole,
   SubagentsSettings,
@@ -162,7 +165,7 @@ export const DEFAULT_SUBAGENT_SETTINGS: SubagentsSettings = {
   roles: [...DEFAULT_SUBAGENT_ROLES],
 }
 
-export { DEFAULT_SUBAGENT_ROLES }
+export { DEFAULT_SUBAGENT_ROLES, DEFAULT_SKILLS_SETTINGS }
 
 export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   showContextUsage: true,
@@ -215,6 +218,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   git: DEFAULT_GIT_SETTINGS,
   worktrees: DEFAULT_WORKTREE_SETTINGS,
   subagents: DEFAULT_SUBAGENT_SETTINGS,
+  skills: DEFAULT_SKILLS_SETTINGS,
   editor: DEFAULT_EDITOR_SETTINGS,
 }
 

@@ -12,6 +12,7 @@ import {
     Bot,
     Cat,
     ExtensionSlot,
+    Wrench,
     getDefaultHostServices,
 } from '@cpa/plugin-ui'
 import {
@@ -27,6 +28,7 @@ import {
     getDefaultSubagentRoles,
     type SubagentRole,
 } from './components/SubagentRolesSection.js'
+import { SkillsSection } from './components/SkillsSection.js'
 
 export {
     SubAgentPanelContent,
@@ -35,6 +37,7 @@ export {
     PinnedSubAgentsSection,
     SubagentsSection,
     SubagentRolesSection,
+    SkillsSection,
     getDefaultSubagentRoles,
 }
 export type { SubAgentPanelContentProps, SubagentRole }
@@ -224,6 +227,34 @@ export const subagentRendererEntry = definePluginEntry({
                         labelKey: 'settings.subagents.roles.title',
                         descriptionKey: 'settings.subagents.roles.subtitle',
                         keywords: ['role', 'roles', 'character', 'model', 'reasoning'],
+                    },
+                ],
+            },
+        })
+
+        // 7. Settings Section: Skills
+        context.register<SettingsSectionContribution>({
+            kind: 'settings',
+            id: 'skills',
+            value: {
+                id: 'skills',
+                groupId: 'code',
+                order: 26,
+                labelKey: 'settings.nav.skills',
+                icon: Wrench,
+                component: SkillsSection,
+                keywords: ['skills', 'skill', 'tools', 'subagents', 'automation'],
+                items: [
+                    {
+                        id: 'skillDefaultMode',
+                        labelKey: 'settings.skills.defaultMode',
+                        descriptionKey: 'settings.skills.defaultModeDesc',
+                        keywords: ['skill default mode', 'mode'],
+                    },
+                    {
+                        id: 'skillList',
+                        labelKey: 'settings.skills.listSection',
+                        keywords: ['skill list', 'skills'],
                     },
                 ],
             },

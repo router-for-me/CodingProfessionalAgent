@@ -7,7 +7,7 @@ import ignore from 'ignore'
 import type { NativeBridge, NativeDirEntry } from '../agentAdapter.js'
 import { dirnamePath, isAbsolutePath, normalizeDirectoryCacheKey, resolveToCwd } from '../path.js'
 import { FrontmatterError, parseFrontmatter } from '../frontmatter.js'
-import { getAppConfigDirName } from '@cpa/plugin-api'
+import { getAppConfigDirName, type SkillMode, type SkillItemMode, type SkillsSettings, DEFAULT_SKILLS_SETTINGS } from '@cpa/plugin-api'
 
 const MAX_NAME_LENGTH = 64
 const MAX_DESCRIPTION_LENGTH = 1024
@@ -24,6 +24,17 @@ export interface Skill {
     baseDir: string
     disableModelInvocation: boolean
     body: string
+}
+
+export function getEffectiveSkillMode(
+    skillName: string,
+    settings?: Partial<SkillsSettings> | null,
+): SkillMode {
+    const configured = settings?.skills?.[skillName]
+    if (configured && configured !== 'default') {
+        return configured
+    }
+    return settings?.defaultMode ?? 'auto'
 }
 
 export interface SkillCollision {

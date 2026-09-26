@@ -50,8 +50,9 @@ describe('bootstrapApplication', () => {
         expect(rendererRegistry.getSlotContributions('chat.message.header')).toHaveLength(1)
         expect(rendererRegistry.getSlotContributions('layout.bottom_panel.content')).toHaveLength(1)
         expect(rendererRegistry.getSlotContributions('layout.right_panel.content')).toHaveLength(1)
-        expect(rendererRegistry.getSettingsSections()).toHaveLength(15)
+        expect(rendererRegistry.getSettingsSections()).toHaveLength(16)
         expect(rendererRegistry.getSettingsSections().some((s) => s.id === 'subagents')).toBe(true)
+        expect(rendererRegistry.getSettingsSections().some((s) => s.id === 'skills')).toBe(true)
     })
 
     it('keeps background active runs ending in a tool result out of LRU eviction', async () => {

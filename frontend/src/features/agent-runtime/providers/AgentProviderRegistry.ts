@@ -306,6 +306,7 @@ export class AgentProviderRegistry {
                     extensionRegistry: this.extensionRegistry,
                     worktreePolicy: options.worktreePolicy,
                     subagentsSettings: input.subagentsSettings,
+                    skillsSettings: input.skillsSettings,
                 })
             } else if (bridge) {
                 resources = await loadResourcesFromProviders({
@@ -321,6 +322,7 @@ export class AgentProviderRegistry {
                     worktreePolicy: options.worktreePolicy,
                     sessionId: input.sessionId ?? undefined,
                     subagentsSettings: input.subagentsSettings,
+                    skillsSettings: input.skillsSettings,
                 })
             } else {
                 resources = Object.freeze({

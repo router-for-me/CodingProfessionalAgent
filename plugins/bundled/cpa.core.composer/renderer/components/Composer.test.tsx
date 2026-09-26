@@ -9,7 +9,7 @@ import {
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '@/i18n'
-import { setDefaultHostServices, WorkspaceVisibilityProvider } from '@cpa/plugin-ui'
+import { HostServicesProvider, setDefaultHostServices, WorkspaceVisibilityProvider } from '@cpa/plugin-ui'
 import type { AppSettings, ModelCatalogEntry, Project, SessionItem } from '@cpa/plugin-api'
 import { rendererPluginRuntime } from '@/plugins/platform/RendererPluginRuntimeHost'
 import manifest from '../../manifest.json'
@@ -1137,6 +1137,32 @@ describe('Composer $ skill picker', () => {
             expect.stringContaining('Zeta'),
             expect.stringContaining('Alpha'),
         ])
+    })
+
+    it('excludes skills with disabled mode from $ menu suggestions', async () => {
+        const user = userEvent.setup()
+        settingsState = {
+            ...settingsState,
+            skills: {
+                defaultMode: 'auto',
+                skills: {
+                    beta: 'disabled',
+                },
+            },
+        }
+
+        render(<Composer onSend={() => undefined} skills={testSkills as any} />)
+
+        const textarea = screen.getByTestId('composer-input')
+        await user.type(textarea, '$')
+
+        const listbox = screen.getByRole('listbox', { name: 'Skills' })
+        expect(listbox).toBeInTheDocument()
+
+        // Alpha and gh-issue should be present, beta should be omitted
+        expect(screen.getByText('Alpha')).toBeInTheDocument()
+        expect(screen.getByText('Gh Issue')).toBeInTheDocument()
+        expect(screen.queryByText('Beta')).not.toBeInTheDocument()
     })
 })
 
