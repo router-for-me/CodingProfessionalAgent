@@ -468,6 +468,8 @@ export interface ScheduledTaskItem {
     unread?: boolean
     createdAt: number
     lastRunAt?: number | null
+    lastAttemptAt?: number | null
+    lastRunError?: string | null
     runIn?: string
     chatSessionId?: string | null
     chatTitle?: string
@@ -483,6 +485,9 @@ export interface ScheduledTaskItem {
 export interface ScheduleService {
     list(): Promise<readonly ScheduledTaskItem[]>
     save(tasks: readonly ScheduledTaskItem[]): Promise<void>
+    claimRun?(taskId: string, schedule: string, period: number): Promise<string | null>
+    settleRun?(taskId: string, period: number, claim: string, acceptedAt: number | null): Promise<void>
+    recoverRun?(taskId: string): Promise<boolean>
 }
 
 export interface SkillUsageService {

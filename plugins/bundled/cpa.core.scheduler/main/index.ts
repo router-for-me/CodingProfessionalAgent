@@ -69,6 +69,31 @@ export const schedulerMainEntry = definePluginEntry({
                 capability: 'schedule.manage',
                 invoke: async (rpcCtx, args) => coordinationService.trigger(args[0] as string, rpcCtx),
             },
+            {
+                method: 'schedule:claimRun',
+                aliases: ['ScheduleClaimRun'],
+                ipcChannel: 'schedule:claimRun',
+                capability: 'schedule.manage',
+                invoke: async (_rpcCtx, args) => coordinationService.claimRun(
+                    args[0] as string, args[1] as string, args[2] as number,
+                ),
+            },
+            {
+                method: 'schedule:settleRun',
+                aliases: ['ScheduleSettleRun'],
+                ipcChannel: 'schedule:settleRun',
+                capability: 'schedule.manage',
+                invoke: async (_rpcCtx, args) => coordinationService.settleRun(
+                    args[0] as string, args[1] as number, args[2] as string, args[3] as number | null,
+                ),
+            },
+            {
+                method: 'schedule:recoverRun',
+                aliases: ['ScheduleRecoverRun'],
+                ipcChannel: 'schedule:recoverRun',
+                capability: 'schedule.manage',
+                invoke: async (_rpcCtx, args) => coordinationService.recoverRun(args[0] as string),
+            },
         ]
 
         for (const descriptor of rpcList) {

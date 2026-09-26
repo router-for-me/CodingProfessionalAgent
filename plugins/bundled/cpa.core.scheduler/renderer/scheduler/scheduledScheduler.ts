@@ -1,4 +1,4 @@
-import type { HostServices } from '@cpa/plugin-api'
+import type { ChatSendPayload, HostServices } from '@cpa/plugin-api'
 import {
     useScheduledTasksStore,
     type ScheduledTask,
@@ -7,6 +7,7 @@ import {
     findScheduledTaskProject,
     getPrimaryProjectPath,
 } from './scheduledTaskProject.js'
+import { STALLED_RUN_CLAIM } from '../../shared/runClaim.js'
 
 export type ScheduleType =
     | 'daily'
@@ -118,6 +119,28 @@ export function parseScheduleRule(scheduleStr: string): ParsedSchedule {
     return { type: 'daily', hour, minute, second }
 }
 
+function scheduledTimeForPeriod(rule: ParsedSchedule, now: Date): number {
+    return rule.type === 'hourly'
+        ? new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours(), rule.minute, rule.second).getTime()
+        : new Date(now.getFullYear(), now.getMonth(), now.getDate(), rule.hour, rule.minute, rule.second).getTime()
+}
+
+function runPeriod(task: ScheduledTask, now: Date): number {
+    const rule = parseScheduleRule(task.schedule)
+    return rule.type === 'interval'
+        ? Math.max(task.lastRunAt ?? 0, task.createdAt) + (rule.intervalMs ?? 0)
+        : scheduledTimeForPeriod(rule, now)
+}
+
+type DispatchContext = Pick<ChatSendPayload, 'projectId' | 'branch' | 'workLocation' | 'environmentId'>
+
+interface PendingSession {
+    schedule: string
+    period: number
+    sessionId: string
+    context: DispatchContext
+}
+
 export function isTaskDueToRun(task: ScheduledTask, now: Date = new Date()): boolean {
     if (!task.enabled || task.status === 'paused' || task.status === 'completed') {
         return false
@@ -127,48 +150,28 @@ export function isTaskDueToRun(task: ScheduledTask, now: Date = new Date()): boo
     const nowMs = now.getTime()
     const lastRun = task.lastRunAt ?? 0
 
-    if (rule.type === 'interval') {
-        if (!rule.intervalMs || rule.intervalMs <= 0) return false
-        return nowMs - lastRun >= rule.intervalMs
-    }
-
-    const currentHour = now.getHours()
-    const currentMinute = now.getMinutes()
-    const currentSecond = now.getSeconds()
-    const currentDayOfWeek = now.getDay()
-
-    // 1. Day of week constraint
-    if (rule.type === 'weekdays') {
-        if (currentDayOfWeek === 0 || currentDayOfWeek === 6) {
-            return false
-        }
-    } else if (rule.type === 'weekly') {
-        if (rule.dayOfWeek !== undefined && currentDayOfWeek !== rule.dayOfWeek) {
-            return false
-        }
-    }
-
-    // 2. Time constraint
-    if (rule.type === 'hourly') {
-        if (currentMinute !== rule.minute || currentSecond !== rule.second) {
-            return false
-        }
-    } else {
-        if (
-            currentHour !== rule.hour ||
-            currentMinute !== rule.minute ||
-            currentSecond !== rule.second
-        ) {
-            return false
-        }
-    }
-
-    // 3. Prevent duplicate run in the same window (55s cooldown)
-    if (nowMs - lastRun < 55_000) {
+    // Retry failed dispatches without creating a new session on every tick.
+    if (task.lastRunError && task.lastAttemptAt && nowMs - task.lastAttemptAt < 60_000) {
         return false
     }
 
-    return true
+    if (rule.type === 'interval') {
+        if (!rule.intervalMs || rule.intervalMs <= 0) return false
+        return nowMs - Math.max(lastRun, task.createdAt) >= rule.intervalMs
+    }
+
+    const dayOfWeek = now.getDay()
+    if (rule.type === 'weekdays' && (dayOfWeek === 0 || dayOfWeek === 6)) {
+        return false
+    }
+    if (rule.type === 'weekly' && dayOfWeek !== rule.dayOfWeek) {
+        return false
+    }
+
+    // Catch up within the current day/hour, but never replay earlier periods.
+    const scheduledAt = scheduledTimeForPeriod(rule, now)
+
+    return task.createdAt <= scheduledAt && nowMs >= scheduledAt && lastRun < scheduledAt
 }
 
 export type TaskExecutor = (task: ScheduledTask, runTime?: Date) => Promise<string | void>
@@ -178,6 +181,8 @@ export class ScheduledTaskScheduler {
     private isTicking = false
     private customExecutor: TaskExecutor | null = null
     private services: HostServices | null = null
+    private pendingSessions = new Map<string, PendingSession>()
+    private completedRuns = new Map<string, { schedule: string; createdAt: number; acceptedAt: number }>()
 
     setServices(services: HostServices | null): void {
         this.services = services
@@ -202,6 +207,8 @@ export class ScheduledTaskScheduler {
             clearInterval(this.timerId)
             this.timerId = null
         }
+        this.pendingSessions.clear()
+        this.completedRuns.clear()
     }
 
     isRunning(): boolean {
@@ -217,8 +224,13 @@ export class ScheduledTaskScheduler {
             const dueTasks: ScheduledTask[] = []
 
             for (const task of tasks) {
-                if (isTaskDueToRun(task, now)) {
-                    dueTasks.push(task)
+                const completed = this.completedRuns.get(task.id)
+                const effectiveTask = completed?.schedule === task.schedule &&
+                    completed.createdAt === task.createdAt && completed.acceptedAt > (task.lastRunAt ?? 0)
+                    ? { ...task, lastRunAt: completed.acceptedAt, lastRunError: null }
+                    : task
+                if (isTaskDueToRun(effectiveTask, now)) {
+                    dueTasks.push(effectiveTask)
                 }
             }
 
@@ -233,92 +245,137 @@ export class ScheduledTaskScheduler {
     }
 
     private async executeTask(task: ScheduledTask, runTime: Date): Promise<void> {
-        const projects = this.services?.projects?.getSnapshot?.() ?? []
-        const pendingContext = this.services?.ui?.getPendingSessionContext?.() ?? {
-            projectId: null,
-            branch: null,
-            workLocation: 'local',
-            environmentId: null,
-        }
-
-        const resolvedProject = findScheduledTaskProject(task, projects)
-        const resolvedProjectPath = getPrimaryProjectPath(resolvedProject)
-        const targetProjectId =
-            resolvedProject?.id ?? task.projectId ?? pendingContext.projectId
-
-        useScheduledTasksStore.getState().updateTask(task.id, {
-            lastRunAt: runTime.getTime(),
-            unread: true,
-            ...(resolvedProject
-                ? {
-                      projectId: resolvedProject.id,
-                      projectName: resolvedProject.name,
-                      ...(resolvedProjectPath ? { projectPath: resolvedProjectPath } : {}),
-                  }
-                : {}),
-        })
-
-        if (this.customExecutor) {
-            try {
-                await this.customExecutor(task)
-            } catch (err) {
-                console.error(`Scheduled task [${task.id}] custom executor failed:`, err)
-            }
-            return
-        }
+        const period = runPeriod(task, runTime)
+        let claimToken: string | null = null
+        let attemptRecorded = false
 
         try {
-            let sessionId: string | null = null
-            const isExistingChat =
-                task.runIn === 'existing-chat' &&
-                task.chatSessionId &&
-                task.chatSessionId !== 'new-chat'
+            const claimRun = this.services?.schedule?.claimRun
+            if (claimRun) {
+                if (!this.services?.schedule?.settleRun) {
+                    throw new Error('Schedule settlement service is unavailable')
+                }
+                claimToken = await claimRun(task.id, task.schedule, period)
+                if (!claimToken) return
+            }
 
-            const currentSessions = this.services?.sessions?.getSnapshot?.() ?? []
-            const foregroundSessionId =
-                this.services?.sessions?.getCurrentSessionId?.() ?? null
-            const existingSession = isExistingChat
-                ? currentSessions.find((s) => s.id === task.chatSessionId)
-                : null
+            const projects = this.services?.projects?.getSnapshot?.() ?? []
+            const pendingContext = this.services?.ui?.getPendingSessionContext?.() ?? {
+                projectId: null,
+                branch: null,
+                workLocation: 'local',
+                environmentId: null,
+            }
+            const resolvedProject = findScheduledTaskProject(task, projects)
+            const resolvedProjectPath = getPrimaryProjectPath(resolvedProject)
+            const targetProjectId =
+                resolvedProject?.id ?? task.projectId ?? pendingContext.projectId
 
-            const isUsingExistingSession = Boolean(existingSession)
-            if (existingSession) {
-                sessionId = existingSession.id
-            } else if (this.services?.sessions?.create) {
-                const createdId = await this.services.sessions.create({
-                    title: task.title,
+            useScheduledTasksStore.getState().updateTask(task.id, {
+                lastAttemptAt: runTime.getTime(),
+                ...(resolvedProject
+                    ? {
+                          projectId: resolvedProject.id,
+                          projectName: resolvedProject.name,
+                          ...(resolvedProjectPath ? { projectPath: resolvedProjectPath } : {}),
+                      }
+                    : {}),
+            })
+            attemptRecorded = true
+
+            if (this.customExecutor) {
+                await this.customExecutor(task)
+            } else {
+                const sendFn = this.services?.agentRun?.send ?? this.services?.chatMessages?.send
+                if (!sendFn) throw new Error('Agent send service is unavailable')
+
+                const isExistingChat =
+                    task.runIn === 'existing-chat' &&
+                    task.chatSessionId &&
+                    task.chatSessionId !== 'new-chat'
+                const currentSessions = this.services?.sessions?.getSnapshot?.() ?? []
+                const foregroundSessionId =
+                    this.services?.sessions?.getCurrentSessionId?.() ?? null
+                const existingSession = isExistingChat
+                    ? currentSessions.find((session) => session.id === task.chatSessionId)
+                    : null
+                let sessionId = existingSession?.id ?? null
+                let context: DispatchContext = {
                     projectId: targetProjectId ?? undefined,
-                    scheduleId: task.id,
-                    branch: pendingContext.branch ?? undefined,
-                    workLocation: pendingContext.workLocation ?? 'local',
-                    environmentId: pendingContext.environmentId ?? null,
-                    modelId: task.modelId,
-                    reasoningEffort: task.reasoningLevel,
-                })
-                sessionId = typeof createdId === 'string' ? createdId : String(createdId)
-                if (
-                    this.services.sessions.getCurrentSessionId?.() === sessionId
-                ) {
-                    this.services.sessions.setCurrentSessionId?.(foregroundSessionId)
+                    branch: existingSession ? undefined : (pendingContext.branch ?? undefined),
+                    workLocation: existingSession ? undefined : (pendingContext.workLocation ?? 'local'),
+                    environmentId: existingSession ? undefined : (pendingContext.environmentId ?? null),
+                }
+
+                if (!sessionId) {
+                    const pending = this.pendingSessions.get(task.id)
+                    if (pending?.schedule === task.schedule && pending.period === period &&
+                        currentSessions.some((session) => session.id === pending.sessionId)) {
+                        sessionId = pending.sessionId
+                        context = pending.context
+                    } else {
+                        if (!this.services?.sessions?.create) {
+                            throw new Error('Session creation service is unavailable')
+                        }
+                        sessionId = await this.services.sessions.create({
+                            title: task.title,
+                            projectId: targetProjectId ?? undefined,
+                            scheduleId: task.id,
+                            branch: context.branch ?? undefined,
+                            workLocation: context.workLocation,
+                            environmentId: context.environmentId,
+                            modelId: task.modelId,
+                            reasoningEffort: task.reasoningLevel,
+                        })
+                        if (!sessionId) throw new Error('Scheduled session could not be created')
+                        this.pendingSessions.set(task.id, { schedule: task.schedule, period, sessionId, context })
+                        if (this.services.sessions.getCurrentSessionId?.() === sessionId) {
+                            this.services.sessions.setCurrentSessionId?.(foregroundSessionId)
+                        }
+                    }
+                }
+
+                const acceptedSessionId = await sendFn({ text: task.prompt, sessionId, ...context })
+                if (!acceptedSessionId) throw new Error('Agent did not accept the scheduled task')
+            }
+
+            this.completedRuns.set(task.id, {
+                schedule: task.schedule,
+                createdAt: task.createdAt,
+                acceptedAt: runTime.getTime(),
+            })
+            this.pendingSessions.delete(task.id)
+            useScheduledTasksStore.getState().updateTask(task.id, {
+                lastRunAt: runTime.getTime(),
+                lastRunError: null,
+                unread: true,
+            })
+            if (claimToken) {
+                try {
+                    await this.services?.schedule?.settleRun?.(task.id, period, claimToken, runTime.getTime())
+                } catch (err) {
+                    console.error(`Failed to persist scheduled task [${task.id}] completion:`, err)
                 }
             }
-
             this.services?.ui?.pushToast?.(`Scheduled task [${task.title}] started as planned`)
-
-            const sendFn = this.services?.agentRun?.send ?? this.services?.chatMessages?.send
-
-            if (sendFn && sessionId) {
-                await sendFn({
-                    text: task.prompt,
-                    projectId: targetProjectId ?? undefined,
-                    branch: isUsingExistingSession ? undefined : (pendingContext.branch ?? undefined),
-                    workLocation: isUsingExistingSession ? undefined : (pendingContext.workLocation ?? 'local'),
-                    environmentId: isUsingExistingSession ? undefined : (pendingContext.environmentId ?? null),
-                    sessionId,
-                })
-            }
         } catch (err) {
+            if (claimToken) {
+                try {
+                    await this.services?.schedule?.settleRun?.(task.id, period, claimToken, null)
+                } catch (settleError) {
+                    console.error(`Failed to release scheduled task [${task.id}] claim:`, settleError)
+                }
+            }
             console.error(`Failed to dispatch scheduled task [${task.id}]:`, err)
+            const rawMessage = err instanceof Error ? err.message : String(err)
+            const message = rawMessage.includes(STALLED_RUN_CLAIM) ? STALLED_RUN_CLAIM : rawMessage
+            if (!attemptRecorded) {
+                useScheduledTasksStore.getState().updateTask(task.id, { lastAttemptAt: runTime.getTime() })
+            }
+            useScheduledTasksStore.getState().updateTask(task.id, { lastRunError: message })
+            if (task.lastRunError !== message) {
+                this.services?.ui?.pushToast?.(`Scheduled task [${task.title}] failed to start: ${message}`, 'error')
+            }
         }
     }
 }

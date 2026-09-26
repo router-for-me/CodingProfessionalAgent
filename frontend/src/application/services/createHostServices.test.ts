@@ -355,6 +355,9 @@ describe('createHostServices', () => {
             invoke: vi.fn().mockImplementation((method: string) => {
                 if (method === 'schedule:list') return Promise.resolve([{ id: 'task-1', title: 'Task 1' }])
                 if (method === 'schedule:save') return Promise.resolve()
+                if (method === 'schedule:claimRun') return Promise.resolve('claim-1')
+                if (method === 'schedule:settleRun') return Promise.resolve()
+                if (method === 'schedule:recoverRun') return Promise.resolve(true)
                 return Promise.resolve()
             }),
         }
@@ -366,6 +369,12 @@ describe('createHostServices', () => {
 
         await services.schedule.save(tasks)
         expect(capabilityClient.invoke).toHaveBeenCalledWith('schedule:save', [tasks])
+        expect(await services.schedule.claimRun?.('task-1', 'Daily 09:00:00', 1000)).toBe('claim-1')
+        expect(capabilityClient.invoke).toHaveBeenCalledWith('schedule:claimRun', ['task-1', 'Daily 09:00:00', 1000])
+        await services.schedule.settleRun?.('task-1', 1000, 'claim-1', 2000)
+        expect(capabilityClient.invoke).toHaveBeenCalledWith('schedule:settleRun', ['task-1', 1000, 'claim-1', 2000])
+        expect(await services.schedule.recoverRun?.('task-1')).toBe(true)
+        expect(capabilityClient.invoke).toHaveBeenCalledWith('schedule:recoverRun', ['task-1'])
     })
 
     it('delegates skillUsage operations through SkillUsageService', async () => {

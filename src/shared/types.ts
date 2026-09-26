@@ -647,6 +647,9 @@ export interface ElectronBridgeApi {
   ScheduleList(): Promise<unknown>
   ScheduleSave(tasks: unknown): Promise<void>
   ScheduleTrigger(taskId: string): Promise<void>
+  ScheduleClaimRun(taskId: string, schedule: string, period: number): Promise<string | null>
+  ScheduleSettleRun(taskId: string, period: number, claim: string, acceptedAt: number | null): Promise<void>
+  ScheduleRecoverRun(taskId: string): Promise<boolean>
 
   // Sessions
   SessionGet(sessionId: string): Promise<unknown>

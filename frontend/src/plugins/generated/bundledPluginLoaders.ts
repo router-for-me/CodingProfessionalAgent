@@ -198,7 +198,10 @@ export const bundledManifests: Readonly<Record<string, PluginManifest>> = Object
                 "rpc": [
                         "schedule:list",
                         "schedule:save",
-                        "schedule:trigger"
+                        "schedule:trigger",
+                        "schedule:claimRun",
+                        "schedule:settleRun",
+                        "schedule:recoverRun"
                 ],
                 "view": [
                         "scheduled"

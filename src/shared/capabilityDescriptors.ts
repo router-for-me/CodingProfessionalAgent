@@ -70,6 +70,9 @@ export const RENDERER_CAPABILITY_DESCRIPTORS: readonly RendererCapabilityDescrip
     { name: 'ScheduleList', method: 'schedule:list', capability: 'schedule.read' },
     { name: 'ScheduleSave', method: 'schedule:save', capability: 'schedule.write' },
     { name: 'ScheduleTrigger', method: 'schedule:trigger', capability: 'schedule.manage' },
+    { name: 'ScheduleClaimRun', method: 'schedule:claimRun', capability: 'schedule.manage' },
+    { name: 'ScheduleSettleRun', method: 'schedule:settleRun', capability: 'schedule.manage' },
+    { name: 'ScheduleRecoverRun', method: 'schedule:recoverRun', capability: 'schedule.manage' },
 
     // Sessions
     { name: 'SessionGet', method: 'session:get', capability: 'sessions.read' },

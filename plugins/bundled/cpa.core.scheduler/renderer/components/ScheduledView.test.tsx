@@ -7,6 +7,7 @@ import { ScheduledView } from './ScheduledView.js'
 import { useScheduledTasksStore } from '../stores/scheduledTasksStore.js'
 import { HostServicesProvider } from '@cpa/plugin-ui'
 import type { HostServices } from '@cpa/plugin-api'
+import { STALLED_RUN_CLAIM } from '../../shared/runClaim.js'
 
 const navigateMock = vi.fn()
 const sendMock = vi.fn().mockResolvedValue('mock-session-123')
@@ -206,6 +207,60 @@ describe('ScheduledView', () => {
         fireEvent.click(screen.getByText('Paused'))
         expect(screen.queryByText('hello')).not.toBeInTheDocument()
         expect(screen.getByText('Weekend Maintenance')).toBeInTheDocument()
+    })
+
+    it('shows the retrying state after a failed scheduled dispatch', () => {
+        useScheduledTasksStore.setState({
+            tasks: [{
+                id: 'task-failed',
+                title: 'Morning task',
+                schedule: 'Daily 09:00:00',
+                prompt: 'Check status',
+                enabled: true,
+                status: 'active',
+                createdAt: 1000,
+                lastAttemptAt: Date.now(),
+                lastRunError: 'Agent did not accept the scheduled task',
+            }],
+        })
+
+        render(
+            <HostServicesProvider services={mockServices}>
+                <ScheduledView />
+            </HostServicesProvider>,
+        )
+
+        expect(screen.getByText(/Failed to start, retrying/)).toBeInTheDocument()
+    })
+
+    it('requires confirmation before recovering a stalled run claim', async () => {
+        const recoverRun = vi.fn().mockResolvedValue(true)
+        mockServices.schedule = { recoverRun } as any
+        useScheduledTasksStore.setState({ tasks: [{
+            id: 'task-stalled',
+            title: 'Stalled task',
+            schedule: 'Daily 09:00:00',
+            prompt: 'Check status',
+            enabled: true,
+            status: 'active',
+            createdAt: 1000,
+            lastAttemptAt: Date.now() - 600_000,
+            lastRunError: STALLED_RUN_CLAIM,
+        }] })
+
+        render(
+            <HostServicesProvider services={mockServices}>
+                <ScheduledView />
+            </HostServicesProvider>,
+        )
+
+        expect(screen.getByText(/Run stalled, recovery required/)).toBeInTheDocument()
+        fireEvent.click(screen.getByRole('button', { name: 'Recover stalled task' }))
+        expect(screen.getByText(/previous client is closed/)).toBeInTheDocument()
+        expect(recoverRun).not.toHaveBeenCalled()
+        fireEvent.click(screen.getByRole('button', { name: 'Release and retry' }))
+        await waitFor(() => expect(recoverRun).toHaveBeenCalledWith('task-stalled'))
+        expect(useScheduledTasksStore.getState().tasks[0]?.lastRunError).toBeNull()
     })
 
     it('marks all tasks as read when clicking "Mark all as read"', () => {

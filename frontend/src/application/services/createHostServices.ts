@@ -1045,6 +1045,38 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
                 }
             }
         },
+
+        async claimRun(taskId, rule, period) {
+            if (capabilityClient) {
+                const claim = await capabilityClient.invoke('schedule:claimRun', [taskId, rule, period])
+                return typeof claim === 'string' ? claim : null
+            }
+            const bridge = getHostBridge()
+            if (bridge?.ScheduleClaimRun) return bridge.ScheduleClaimRun(taskId, rule, period)
+            throw new Error('Schedule claim service is unavailable')
+        },
+
+        async settleRun(taskId, period, claim, acceptedAt) {
+            if (capabilityClient) {
+                await capabilityClient.invoke('schedule:settleRun', [taskId, period, claim, acceptedAt])
+                return
+            }
+            const bridge = getHostBridge()
+            if (bridge?.ScheduleSettleRun) {
+                await bridge.ScheduleSettleRun(taskId, period, claim, acceptedAt)
+                return
+            }
+            throw new Error('Schedule settlement service is unavailable')
+        },
+
+        async recoverRun(taskId) {
+            if (capabilityClient) {
+                return (await capabilityClient.invoke('schedule:recoverRun', [taskId])) === true
+            }
+            const bridge = getHostBridge()
+            if (bridge?.ScheduleRecoverRun) return bridge.ScheduleRecoverRun(taskId)
+            throw new Error('Schedule recovery service is unavailable')
+        },
     }
 
     let availableComposerSkills: readonly any[] | null = null

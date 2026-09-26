@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
     Bell,
     ChevronLeft,
@@ -9,6 +10,7 @@ import {
     PauseCircle,
     Pencil,
     Play,
+    RotateCcw,
     Search,
     Trash2,
     X,
@@ -21,6 +23,7 @@ import {
     type ScheduledTask,
 } from '../stores/scheduledTasksStore.js'
 import { getPrimaryProjectPath } from '../scheduler/scheduledTaskProject.js'
+import { STALLED_RUN_CLAIM } from '../../shared/runClaim.js'
 
 interface SuggestionItem {
     id: string
@@ -149,6 +152,12 @@ function formatTaskSubtitle(task: ScheduledTask, t: any): string {
     if (task.enabled === false || task.status === 'paused') {
         return `${displaySchedule} · ${t('scheduled.pausedStatus', 'Paused')}`
     }
+    if (task.lastRunError === STALLED_RUN_CLAIM) {
+        return `${displaySchedule} · ${t('scheduled.recoveryRequired', 'Run stalled, recovery required')}`
+    }
+    if (task.lastRunError && (task.lastAttemptAt ?? 0) > (task.lastRunAt ?? 0)) {
+        return `${displaySchedule} · ${t('scheduled.retryingStatus', 'Failed to start, retrying')}`
+    }
 
     const fullSchedule = displaySchedule
 
@@ -219,6 +228,7 @@ export function ScheduledView() {
     const [searchQuery, setSearchQuery] = useState('')
     const [statusFilter, setStatusFilter] = useState<FilterStatus>('all')
     const [currentPage, setCurrentPage] = useState(1)
+    const [recoveryTask, setRecoveryTask] = useState<ScheduledTask | null>(null)
 
     const tasks = useScheduledTasksStore((s) => s.tasks)
     const modalOpen = useScheduledTasksStore((s) => s.modalOpen)
@@ -295,6 +305,27 @@ export function ScheduledView() {
     const handleMarkAllAsRead = () => {
         markAllAsRead()
         pushToast?.(t('scheduled.allMarkedAsRead', 'All tasks marked as read'))
+    }
+
+    const handleRecover = async () => {
+        if (!recoveryTask) return
+        const taskId = recoveryTask.id
+        setRecoveryTask(null)
+        try {
+            const recovered = await hostServices?.schedule?.recoverRun?.(taskId)
+            if (recovered) {
+                useScheduledTasksStore.getState().updateTask(taskId, {
+                    lastAttemptAt: null,
+                    lastRunError: null,
+                })
+                pushToast?.(t('scheduled.recoveryStarted', 'Task recovery started'))
+            } else {
+                pushToast?.(t('scheduled.recoveryUnavailable', 'Task is no longer stalled'), 'warning')
+            }
+        } catch (err) {
+            console.error('[ScheduledView] Failed to recover scheduled task:', err)
+            pushToast?.(t('scheduled.recoveryFailed', 'Could not recover the task'), 'error')
+        }
     }
 
     const filteredSuggestions = SUGGESTIONS.filter((item) => {
@@ -489,6 +520,20 @@ export function ScheduledView() {
                                             </div>
 
                                             <div className="flex items-center gap-1">
+                                                {task.lastRunError === STALLED_RUN_CLAIM ? (
+                                                    <button
+                                                        type="button"
+                                                        onClick={(event) => {
+                                                            event.stopPropagation()
+                                                            setRecoveryTask(task)
+                                                        }}
+                                                        className="flex size-7 items-center justify-center rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-sidebar-hover)] hover:text-[var(--text-primary)] transition-colors cursor-pointer"
+                                                        title={t('scheduled.recover', 'Recover stalled task')}
+                                                        aria-label={t('scheduled.recover', 'Recover stalled task')}
+                                                    >
+                                                        <RotateCcw className="size-4" />
+                                                    </button>
+                                                ) : null}
                                                 <button
                                                     type="button"
                                                     onClick={(e) => {
@@ -647,6 +692,40 @@ export function ScheduledView() {
                     </div>
                 </div>
             </div>
+            {recoveryTask ? createPortal(
+                <div className="fixed inset-0 z-[70] flex items-center justify-center bg-[var(--bg-app)]/80 px-4">
+                    <div
+                        role="dialog"
+                        aria-modal="true"
+                        aria-label={t('scheduled.recover', 'Recover stalled task')}
+                        className="w-full max-w-md rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-5 shadow-xl font-[inherit]"
+                    >
+                        <h2 className="text-base text-[var(--text-primary)] font-[inherit]">
+                            {t('scheduled.recover', 'Recover stalled task')}
+                        </h2>
+                        <p className="mt-3 text-sm leading-relaxed text-[var(--text-secondary)] font-[inherit]">
+                            {t('scheduled.recoveryWarning', 'Confirm the previous client is closed before releasing this run. If it resumes, the task may run twice.')}
+                        </p>
+                        <div className="mt-5 flex justify-end gap-2">
+                            <button
+                                type="button"
+                                onClick={() => setRecoveryTask(null)}
+                                className="rounded-lg border border-[var(--border-subtle)] px-3 py-1.5 text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-sidebar-hover)] font-[inherit]"
+                            >
+                                {t('common.cancel', 'Cancel')}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => { void handleRecover() }}
+                                className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-1.5 text-sm text-[var(--text-primary)] hover:bg-[var(--bg-sidebar-hover)] font-[inherit]"
+                            >
+                                {t('scheduled.confirmRecovery', 'Release and retry')}
+                            </button>
+                        </div>
+                    </div>
+                </div>,
+                document.body,
+            ) : null}
         </div>
     )
 }
