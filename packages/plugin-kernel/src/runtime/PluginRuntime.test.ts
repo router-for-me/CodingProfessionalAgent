@@ -201,6 +201,43 @@ describe('PluginRuntime', () => {
         expect(runtime.getPluginSummary('tooling').status).toBe('inactive')
     })
 
+    it('commits a disabled generation without waiting for a session lease to end', async () => {
+        const pkg = createPkg('session-tool', { contributes: { tool: ['session-action'] } })
+        const catalog = new PluginCatalog({
+            cpaVersion: '1.0.0',
+            packages: [pkg],
+            enabledPluginIds: ['session-tool'],
+        })
+        const registry = new ContributionRegistry()
+        const loader = new TestModuleLoader()
+        const deactivate = vi.fn()
+        loader.registerModule('session-tool', {
+            runtime: 'renderer',
+            activate(ctx) {
+                ctx.register({ kind: 'tool', id: 'session-action', value: { execute: () => 'ok' } })
+            },
+            deactivate,
+        })
+
+        const runtime = new PluginRuntime({ catalog, registry, loader, entryKind: 'renderer' })
+        await runtime.activateAll()
+        const lease = runtime.acquireGeneration(['session-tool'])
+        const disabled = await runtime.prepareGeneration([], runtime.getGeneration() + 1)
+        await disabled.commit()
+
+        expect(runtime.getPluginSummary('session-tool').status).toBe('inactive')
+        expect(registry.list('tool')).toHaveLength(0)
+        expect(deactivate).toHaveBeenCalledTimes(1)
+
+        // The old session is still alive, but a new generation can commit.
+        const enabled = await runtime.prepareGeneration([pkg], runtime.getGeneration() + 1)
+        await enabled.commit()
+        expect(runtime.isPluginActive('session-tool')).toBe(true)
+
+        lease.release()
+        expect(deactivate).toHaveBeenCalledTimes(1)
+    })
+
     it('rolls back every staged contribution when activation throws', async () => {
         const pkgBroken = createPkg('broken', { criticality: 'optional' })
         const catalog = new PluginCatalog({

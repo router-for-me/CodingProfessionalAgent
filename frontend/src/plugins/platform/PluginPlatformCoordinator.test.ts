@@ -148,6 +148,73 @@ describe('PluginPlatformCoordinator', () => {
         expect(coordinator.isReady()).toBe(true)
     })
 
+    it('disables an agent tool plugin while an earlier session still holds its generation', async () => {
+        const pkg = createAuthoritativePkg('test.session-tool', {
+            criticality: 'optional',
+            entries: { agent: './agent.js' },
+            contributes: { 'tool-factory': ['session-tool'] },
+        })
+        const deactivate = vi.fn()
+        const agentHost = new AgentPluginRuntimeHost({
+            bundledPackages: [pkg],
+            defaultDefinitions: {
+                'test.session-tool': {
+                    runtime: 'agent',
+                    activate(ctx) {
+                        ctx.register({
+                            kind: 'tool-factory',
+                            id: 'session-tool',
+                            value: {
+                                id: 'session-tool',
+                                create: () => ({
+                                    name: 'session-tool',
+                                    label: 'Session tool',
+                                    description: 'Session tool',
+                                    parameters: {},
+                                    validate: () => ({}),
+                                    execute: async () => ({ content: [{ type: 'text', text: 'ok' }] }),
+                                }),
+                            },
+                        })
+                    },
+                    deactivate,
+                },
+            },
+        })
+        const coordinator = new PluginPlatformCoordinator({
+            rendererHost: new RendererPluginRuntimeHost({ bundledPackages: [pkg] }),
+            agentHost,
+        })
+        await coordinator.activate(createGraphDTO([pkg]))
+        const lease = agentHost.acquireGeneration(['test.session-tool'])
+        const tool = await agentHost.registry.getToolFactory('session-tool')!.create({
+            platform: 'darwin',
+            services: {} as any,
+        })
+        expect(tool).toBeDefined()
+
+        await coordinator.activate(createGraphDTO([pkg]))
+        const newerTool = await agentHost.registry.getToolFactory('session-tool')!.create({
+            platform: 'darwin',
+            services: {} as any,
+        })
+        await coordinator.activate(createGraphDTO([]))
+        expect(agentHost.isPluginActive('test.session-tool')).toBe(false)
+        expect(agentHost.registry.getToolFactory('session-tool')).toBeUndefined()
+        expect(deactivate).toHaveBeenCalledTimes(2)
+        expect(await tool!.execute('call-1', {}, {})).toMatchObject({
+            isError: true,
+            content: [{ type: 'text', text: expect.stringMatching(/disabled or uninstalled by the user/) }],
+        })
+
+        await coordinator.activate(createGraphDTO([pkg]))
+        expect((await tool!.execute('call-2', {}, {})).isError).toBe(true)
+        expect((await newerTool!.execute('call-3', {}, {})).isError).toBe(true)
+
+        lease.release()
+        expect(deactivate).toHaveBeenCalledTimes(2)
+    })
+
     it('rolls back both renderer and agent runtimes when a required agent entry fails', async () => {
         const pkg = createAuthoritativePkg('cpa.core.failing', {
             criticality: 'required',

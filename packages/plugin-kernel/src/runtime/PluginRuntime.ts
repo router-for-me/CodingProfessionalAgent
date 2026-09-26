@@ -569,7 +569,8 @@ export class PluginRuntime {
                         }
                         this.generation = nextGeneration
 
-                        // 6. Safe lifecycle teardown of previous generation
+                        // 6. Stop old instances during the swap. A session lease must not
+                        // hold a user-requested disable transaction open indefinitely.
                         for (const oldState of oldActiveStates) {
                             if (oldState.definition && typeof oldState.definition.deactivate === 'function') {
                                 await safeInvoke(
@@ -590,14 +591,10 @@ export class PluginRuntime {
                             }
                             this.eventBus.revokeOwner(oldState.ownerToken)
                             this.registry.revokeOwner(oldState.ownerToken)
-
-                            if (!this.activePlugins.has(oldState.manifest.id)) {
-                                await this.leaseManager.waitForRelease(oldState.manifest.id)
-                                oldState.status = 'inactive'
-                            }
+                            oldState.status = 'inactive'
                         }
 
-                        // 8. Flush queued emits from the new generation after old generation listeners are revoked
+                        // 7. Flush queued emits from the new generation after old generation listeners are revoked
                         for (const entry of stagedEntries) {
                             await entry.stagedEventBus.flushEmits()
                         }

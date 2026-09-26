@@ -13,6 +13,7 @@ import type {
     HookContribution,
     HookEventName,
     ModelCatalogProviderContribution,
+    OwnedContribution,
     PanelContribution,
     PanelTabContribution,
     PluginIdentity,
@@ -34,6 +35,13 @@ const DIRECT_OWNER: PluginIdentity = Object.freeze({
     id: 'cpa.runtime.direct',
     version: '1.0.0',
 })
+
+function unavailablePluginToolResult(pluginId: string, toolName: string) {
+    return {
+        content: [{ type: 'text' as const, text: `Tool "${toolName}" is unavailable: plugin "${pluginId}" was disabled or uninstalled by the user.` }],
+        isError: true,
+    }
+}
 
 const NON_SLOT_EXACT_KEYS = new Set<string>([
     'slot',
@@ -95,6 +103,7 @@ export class RendererRegistry {
     private directDisposers = new Map<string, () => void>()
     private listeners = new Map<string, Set<() => void>>()
     private unsubs: Array<() => void> = []
+    private readonly toolFactoryLifetimes = new Map<string, { revoked: boolean; ownerToken: symbol }>()
 
     // Snapshot reference caches for React useSyncExternalStore stability
     private cachedSlots = new Map<string, readonly SlotContribution<any>[]>()
@@ -122,6 +131,44 @@ export class RendererRegistry {
         this.setupKernelSubscriptions()
     }
 
+    private toolFactoryKey(item: OwnedContribution<unknown>): string {
+        return JSON.stringify([item.owner.id, item.id])
+    }
+
+    private getToolFactoryLifetime(item: OwnedContribution<unknown>): { revoked: boolean; ownerToken: symbol } {
+        const key = this.toolFactoryKey(item)
+        let lifetime = this.toolFactoryLifetimes.get(key)
+        if (!lifetime) {
+            lifetime = { revoked: false, ownerToken: item.ownerToken }
+            this.toolFactoryLifetimes.set(key, lifetime)
+        }
+        return lifetime
+    }
+
+    private trackRemovedToolFactories(): void {
+        const current = this.kernelRegistry.list('tool-factory')
+        for (const [key, lifetime] of this.toolFactoryLifetimes) {
+            const stillProvided = current.some((item) =>
+                this.toolFactoryKey(item) === key &&
+                (item.owner.id !== DIRECT_OWNER.id || item.ownerToken === lifetime.ownerToken),
+            )
+            if (!stillProvided) {
+                lifetime.revoked = true
+                this.toolFactoryLifetimes.delete(key)
+            }
+        }
+    }
+
+    private isToolFactoryAvailable(
+        item: OwnedContribution<unknown>,
+        lifetime: { revoked: boolean },
+    ): boolean {
+        return !lifetime.revoked &&
+            this.kernelRegistry.list('tool-factory').some((current) =>
+                current.id === item.id && current.owner.id === item.owner.id,
+            )
+    }
+
     private setupKernelSubscriptions(): void {
         const kinds: ContributionKind[] = [
             'slot',
@@ -144,6 +191,7 @@ export class RendererRegistry {
         ]
         for (const kind of kinds) {
             const un = this.kernelRegistry.subscribe(kind, () => {
+                if (kind === 'tool-factory') this.trackRemovedToolFactories()
                 this.invalidateCaches(kind)
                 this.notifyKind(kind)
             })
@@ -596,6 +644,7 @@ export class RendererRegistry {
         for (const item of items) {
             const val = item.value as any
             if (typeof val?.create === 'function') {
+                const lifetime = this.getToolFactoryLifetime(item)
                 factories.push({
                     id: val.id ?? item.id,
                     name: val.name ?? val.descriptor?.name ?? val.id ?? item.id,
@@ -612,7 +661,19 @@ export class RendererRegistry {
                     requiresScheduledSession:
                         val.requiresScheduledSession ?? val.descriptor?.requiresScheduledSession,
                     aliases: val.aliases,
-                    create: val.create,
+                    create: async (context) => {
+                        const tool = await val.create(context)
+                        if (!tool) return tool
+                        return {
+                            ...tool,
+                            execute: (toolCallId, args, executionContext) => {
+                                if (!this.isToolFactoryAvailable(item, lifetime)) {
+                                    return Promise.resolve(unavailablePluginToolResult(item.owner.id, tool.name))
+                                }
+                                return tool.execute(toolCallId, args, executionContext)
+                            },
+                        }
+                    },
                 })
             }
         }
@@ -654,6 +715,7 @@ export class RendererRegistry {
         const tools: AgentToolContribution[] = []
         for (const item of items) {
             const raw = item.value as any
+            const lifetime = this.getToolFactoryLifetime(item)
             if (typeof raw?.create === 'function') {
                 let name = raw.name ?? raw.descriptor?.name ?? item.id
                 let description = raw.description ?? raw.descriptor?.description ?? ''
@@ -695,10 +757,16 @@ export class RendererRegistry {
                     requiresScheduledSession:
                         raw.requiresScheduledSession ?? raw.descriptor?.requiresScheduledSession,
                     execute: async (args: Record<string, unknown>, context: unknown) => {
+                        if (!this.isToolFactoryAvailable(item, lifetime)) {
+                            return unavailablePluginToolResult(item.owner.id, name)
+                        }
                         const created = await raw.create(
                             (context ?? { platform: 'darwin', services: {} }) as any,
                         )
                         if (created && typeof created.execute === 'function') {
+                            if (!this.isToolFactoryAvailable(item, lifetime)) {
+                                return unavailablePluginToolResult(item.owner.id, name)
+                            }
                             const res = await created.execute('call', args, (context ?? {}) as any)
                             if (res && typeof res === 'object' && Array.isArray((res as any).content)) {
                                 const textBlock = (res as any).content.find((b: any) => b.type === 'text')
@@ -712,7 +780,15 @@ export class RendererRegistry {
                     },
                 })
             } else if (raw && typeof raw?.execute === 'function') {
-                tools.push(raw as AgentToolContribution)
+                tools.push({
+                    ...raw,
+                    execute: (args: Record<string, unknown>, context: unknown) => {
+                        if (!this.isToolFactoryAvailable(item, lifetime)) {
+                            return Promise.resolve(unavailablePluginToolResult(item.owner.id, raw.name ?? item.id))
+                        }
+                        return raw.execute(args, context)
+                    },
+                } as AgentToolContribution)
             }
         }
 

@@ -369,6 +369,105 @@ describe('ToolFactoryProvider', () => {
         expect(ToolFactoryProvider.isMutatingToolName('bash')).toBe(true)
     })
 
+    it('tells the model when a previously provided plugin tool was disabled by the user', async () => {
+        const bridge = new FakeNativeBridge()
+        await bridge.mkdirAll('/repo')
+        const registry = new RendererRegistry()
+        const execute = vi.fn(async () => ({ content: [{ type: 'text' as const, text: 'executed' }] }))
+        const transaction = registry.kernelRegistry.beginActivation({
+            id: 'codex-computer-use',
+            version: '1.0.0',
+        })
+        transaction.register('tool-factory', 'computer_use', {
+            id: 'computer_use',
+            name: 'computer_use',
+            description: 'Computer use',
+            parameters: { type: 'object', properties: {} },
+            create: () => ({
+                name: 'computer_use',
+                label: 'Computer use',
+                description: 'Computer use',
+                parameters: { type: 'object', properties: {} },
+                validate: (value: unknown) => value as Record<string, unknown>,
+                execute,
+            }),
+        } satisfies ToolFactoryContribution)
+        const disposers = transaction.commit()
+
+        const tools = await createToolsFromProviders({
+            cwd: '/repo',
+            bridge,
+            platform: 'darwin',
+            services: createMockHostServices(),
+            extensionRegistry: registry,
+        })
+        const tool = tools.find((item) => item.name === 'computer_use')!
+        const context = { sessionId: 'existing-session' }
+        expect((await tool.execute('call-1', {}, context)).isError).toBeFalsy()
+        expect(execute).toHaveBeenCalledTimes(1)
+
+        for (const dispose of disposers) dispose()
+
+        const result = await tool.execute('call-2', {}, context)
+        expect(result).toMatchObject({
+            isError: true,
+            content: [{ type: 'text', text: expect.stringMatching(/codex-computer-use.*disabled or uninstalled by the user/) }],
+        })
+        expect(execute).toHaveBeenCalledTimes(1)
+
+        const replacement = registry.kernelRegistry.beginActivation({
+            id: 'codex-computer-use',
+            version: '1.0.0',
+        })
+        replacement.register('tool-factory', 'computer_use', {
+            id: 'computer_use',
+            create: () => ({
+                name: 'computer_use',
+                label: 'Computer use',
+                description: 'New version',
+                parameters: {},
+                validate: () => ({}),
+                execute: async () => ({ content: [] }),
+            }),
+        } satisfies ToolFactoryContribution)
+        replacement.commit()
+
+        expect((await tool.execute('call-3', {}, context)).isError).toBe(true)
+        expect(execute).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not execute a legacy factory tool if the plugin is disabled while create is pending', async () => {
+        const registry = new RendererRegistry()
+        let resolveCreate!: (tool: AgentTool) => void
+        const create = vi.fn(() => new Promise<AgentTool>((resolve) => { resolveCreate = resolve }))
+        const execute = vi.fn(async () => ({ content: [{ type: 'text' as const, text: 'executed' }] }))
+        const transaction = registry.kernelRegistry.beginActivation({ id: 'test.plugin', version: '1.0.0' })
+        transaction.register('tool-factory', 'legacy-tool', {
+            id: 'legacy-tool',
+            name: 'legacy-tool',
+            description: 'Legacy tool',
+            parameters: {},
+            create,
+        } satisfies ToolFactoryContribution)
+        const disposers = transaction.commit()
+        const legacyTool = registry.getAgentTools().find((tool) => tool.name === 'legacy-tool')!
+
+        const pending = legacyTool.execute({}, {})
+        expect(create).toHaveBeenCalledTimes(1)
+        for (const dispose of disposers) dispose()
+        resolveCreate({
+            name: 'legacy-tool',
+            label: 'Legacy tool',
+            description: 'Legacy tool',
+            parameters: {},
+            validate: () => ({}),
+            execute,
+        })
+
+        expect(await pending).toMatchObject({ isError: true })
+        expect(execute).not.toHaveBeenCalled()
+    })
+
     it('does not inject requiresScheduledSession tools into non-scheduled sessions', async () => {
         const bridge = new FakeNativeBridge()
         bridge.setRuntimeInfo({ platform: 'darwin' })
