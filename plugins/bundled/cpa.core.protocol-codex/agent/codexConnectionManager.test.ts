@@ -374,6 +374,57 @@ describe('CodexConnectionManager', () => {
         await lease2.release()
     })
 
+    it('sends an effort change after tool output in the next WebSocket delta', async () => {
+        const bridge = new FakeNativeBridge()
+        const manager = new CodexConnectionManager(bridge, {
+            now: () => 1_000,
+            generateRequestId: () => 'op',
+        })
+        bridge.queueWebSocket({
+            frames: [{ kind: 'websocket-open' }, ...completedTextFrames('resp_1', 'calling tool')],
+        })
+        const firstBody = baseRequest({ reasoning: { effort: 'low', summary: 'auto' } })
+        const lease1 = await manager.acquire('session-tool-effort', {
+            apiKey: 'k', baseUrl: 'http://127.0.0.1:8317/backend-api/',
+            request: firstBody, signal: new AbortController().signal, mode: 'session',
+        })
+        for await (const _ of lease1.events) {
+            // drain
+        }
+        const call = { type: 'function_call' as const, call_id: 'call_1', id: 'fc_1', name: 'read', arguments: '{}' }
+        lease1.commit({ fullRequestBody: firstBody, responseId: 'resp_1', responseItems: [call] })
+        await lease1.release()
+
+        const toolResult = { type: 'function_call_output' as const, call_id: 'call_1', output: 'Result' }
+        const update = { type: 'configuration_update' as const, reasoning: { effort: 'high' } }
+        const secondBody = baseRequest({
+            reasoning: { effort: 'low', summary: 'auto' },
+            input: [...firstBody.input, call, toolResult, update],
+        })
+        const acquiring = manager.acquire('session-tool-effort', {
+            apiKey: 'k', baseUrl: 'http://127.0.0.1:8317/backend-api/',
+            request: secondBody, signal: new AbortController().signal, mode: 'session',
+        })
+        await vi.waitFor(() => {
+            expect(bridge.calls.filter((call) => call.method === 'sendWebSocket')).toHaveLength(2)
+        })
+        const operationId = String((bridge.calls.find((call) => call.method === 'openWebSocket')?.args[0] as { operationId: string }).operationId)
+        for (const frame of completedTextFrames('resp_2', 'done')) {
+            bridge.emit(operationId, frame)
+        }
+        const lease2 = await acquiring
+        const sends = bridge.calls.filter((call) => call.method === 'sendWebSocket')
+        const sent = JSON.parse(String(sends[1]?.args[1])) as CodexResponseCreate
+        expect(bridge.calls.filter((call) => call.method === 'openWebSocket')).toHaveLength(1)
+        expect(sent.previous_response_id).toBe('resp_1')
+        expect(sent.reasoning?.effort).toBe('low')
+        expect(sent.input).toEqual([toolResult, update])
+        for await (const _ of lease2.events) {
+            // drain
+        }
+        await lease2.release({ keep: false })
+    })
+
     it('does not treat key-reordered bodies as mismatched for delta', async () => {
         const bridge = new FakeNativeBridge()
         const manager = new CodexConnectionManager(bridge, {

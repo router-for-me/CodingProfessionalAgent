@@ -85,7 +85,7 @@ function resolveBaseReasoningEffort(
  * - service_tier only when speed=fast and model.supportsFast
  * - tools / tool_choice / parallel_tool_calls only when tools are present
  * - Models supporting reasoning effort pin the base reasoning effort for prompt caching
- *   and inject mid-conversation changes before user turns; non-reasoning models omit it
+ *   and inject mid-conversation changes at the next model request; non-reasoning models omit it
  */
 export function buildCodexRequest(input: BuildCodexRequestInput): CodexResponseCreate {
     const {

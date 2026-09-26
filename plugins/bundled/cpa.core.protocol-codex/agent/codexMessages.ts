@@ -684,12 +684,39 @@ export function convertConversationToCodexInput(
         }
     }
 
-    // Find the index of the last user entry in the list
-    let lastUserIndex = -1
-    for (let i = entries.length - 1; i >= 0; i -= 1) {
-        if (entries[i]?.kind === 'user') {
-            lastUserIndex = i
-            break
+    let hasPriorResponse = false
+    const effortForUser = (entry: UserEntry, index: number): string | undefined => {
+        const recordedEffort = mapEffortToRequestValue(entry.reasoningEffort, model)
+        let hasLaterUser = false
+        for (let nextIndex = index + 1; nextIndex < entries.length; nextIndex += 1) {
+            const next = entries[nextIndex]
+            if (!next || next.kind === 'toolResult') continue
+            if (next.kind === 'user') {
+                hasLaterUser = true
+                continue
+            }
+            if (next.kind === 'compaction') return recordedEffort
+            if (isReplayableAssistant(next) && (hasPriorResponse || !hasLaterUser)) {
+                // The response records the effort actually sent for this user batch.
+                return mapEffortToRequestValue(next.reasoningEffort, model) ?? recordedEffort
+            }
+            return recordedEffort
+        }
+        return hasPriorResponse || index === entries.length - 1
+            ? targetEffort ?? recordedEffort
+            : recordedEffort
+    }
+
+    const applyReasoningEffort = (effort: string | undefined): void => {
+        if (!canUpdateConfiguration || !effort) return
+        const normalizedEffort = normalizeReasoningEffort(effort)
+        if (!normalizedEffort) return
+        if (currentEffectiveEffort === undefined) {
+            currentEffectiveEffort = normalizedEffort
+        } else if (normalizedEffort !== currentEffectiveEffort || needsCompactionRefresh) {
+            appendConfigurationUpdate(input, effort)
+            currentEffectiveEffort = normalizedEffort
+            needsCompactionRefresh = false
         }
     }
 
@@ -701,31 +728,22 @@ export function convertConversationToCodexInput(
             const item = convertUserEntry(entry, model)
             if (!item) continue
 
-            if (canUpdateConfiguration) {
-                const turnEffort = (index === lastUserIndex && index === entries.length - 1 ? targetEffort : undefined) ??
-                    mapEffortToRequestValue(entry.reasoningEffort, model)
-                const normalizedTurnEffort = normalizeReasoningEffort(turnEffort)
-
-                if (turnEffort && normalizedTurnEffort) {
-                    if (currentEffectiveEffort === undefined) {
-                        currentEffectiveEffort = normalizedTurnEffort
-                    } else if (normalizedTurnEffort !== currentEffectiveEffort || needsCompactionRefresh) {
-                        appendConfigurationUpdate(input, turnEffort)
-                        currentEffectiveEffort = normalizedTurnEffort
-                        needsCompactionRefresh = false
-                    }
-                }
-            }
-
+            applyReasoningEffort(effortForUser(entry, index))
             input.push(item)
             continue
         }
 
         if (entry.kind === 'assistant') {
+            hasPriorResponse = true
             if (!isReplayableAssistant(entry)) {
                 continue
             }
-            input.push(...convertAssistantEntry(entry, index, model, plan))
+            const items = convertAssistantEntry(entry, index, model, plan)
+            if (items.length > 0) {
+                // Rebuild the update sent at the boundary before this response.
+                applyReasoningEffort(mapEffortToRequestValue(entry.reasoningEffort, model))
+                input.push(...items)
+            }
             continue
         }
 
@@ -744,6 +762,7 @@ export function convertConversationToCodexInput(
         }
 
         if (entry.kind === 'compaction') {
+            hasPriorResponse = true
             input.push(convertCompactionEntry(entry))
             if (
                 canUpdateConfiguration &&
@@ -758,5 +777,7 @@ export function convertConversationToCodexInput(
         }
     }
 
+    // The active setting takes effect on this request, even without a new user turn.
+    applyReasoningEffort(targetEffort)
     return input
 }

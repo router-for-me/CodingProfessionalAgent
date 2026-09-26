@@ -380,6 +380,42 @@ describe('buildCodexRequest', () => {
         })
     })
 
+    it('switches on the next tool request and keeps the reconstructed prefix stable across further tool calls', () => {
+        const model = { ...visionModel, id: 'gpt-6-astra', reasoningLevels: [
+            { id: 'low', requestValue: 'low' },
+            { id: 'high', requestValue: 'high' },
+        ] }
+        const entries: ConversationEntry[] = [
+            { id: 'u1', sessionId: 's1', createdAt: 1, kind: 'user', reasoningEffort: 'low', content: [{ type: 'text', text: 'First' }] },
+            { id: 'a1', sessionId: 's1', createdAt: 2, kind: 'assistant', reasoningEffort: 'low', model: model.id, status: 'done', stopReason: 'toolUse', content: [{ type: 'toolCall', id: 'call_1|fc_1', name: 'read', arguments: {} }] },
+            { id: 't1', sessionId: 's1', createdAt: 3, kind: 'toolResult', toolCallId: 'call_1|fc_1', toolName: 'read', content: [{ type: 'text', text: 'Result 1' }], isError: false },
+            { id: 'a2', sessionId: 's1', createdAt: 4, kind: 'assistant', reasoningEffort: 'high', model: model.id, status: 'done', stopReason: 'toolUse', content: [{ type: 'toolCall', id: 'call_2|fc_2', name: 'read', arguments: {} }] },
+            { id: 't2', sessionId: 's1', createdAt: 5, kind: 'toolResult', toolCallId: 'call_2|fc_2', toolName: 'read', content: [{ type: 'text', text: 'Result 2' }], isError: false },
+            { id: 'a3', sessionId: 's1', createdAt: 6, kind: 'assistant', reasoningEffort: 'low', model: model.id, status: 'done', stopReason: 'stop', content: [{ type: 'text', text: 'Done' }] },
+        ]
+        const request = (count: number, effort: string) => buildCodexRequest({
+            model, sessionId: 's1', systemPrompt: 'System', entries: entries.slice(0, count),
+            reasoningEffort: effort, baseReasoningEffort: 'low',
+        })
+
+        const high = request(3, 'high')
+        expect(high.reasoning?.effort).toBe('low')
+        expect(high.input.at(-2)).toMatchObject({ type: 'function_call_output' })
+        expect(high.input.at(-1)).toEqual({ type: 'configuration_update', reasoning: { effort: 'high' } })
+        const highReplay = request(4, 'high')
+        expect(highReplay.input.slice(0, high.input.length)).toEqual(high.input)
+
+        const low = request(5, 'low')
+        expect(low.input.slice(0, high.input.length)).toEqual(high.input)
+        expect(low.input.at(-1)).toEqual({ type: 'configuration_update', reasoning: { effort: 'low' } })
+        const lowReplay = request(6, 'low')
+        expect(lowReplay.input.slice(0, -1)).toEqual(low.input)
+        expect(lowReplay.input.filter((item) => 'type' in item && item.type === 'configuration_update')).toEqual([
+            { type: 'configuration_update', reasoning: { effort: 'high' } },
+            { type: 'configuration_update', reasoning: { effort: 'low' } },
+        ])
+    })
+
     it('supports configuration updates and base reasoning effort pinning across non-GPT-6 models with reasoning levels', () => {
         const model = {
             ...visionModel,
@@ -467,7 +503,7 @@ describe('buildCodexRequest', () => {
         })
     })
 
-    it('uses the explicit base without injecting an update before an assistant entry', () => {
+    it('replays an assistant effort change and applies the current effort at the request boundary', () => {
         const entries: ConversationEntry[] = [
             { id: 'u1', sessionId: 's1', createdAt: 1, kind: 'user', content: [{ type: 'text', text: 'First' }] },
             { id: 'a1', sessionId: 's1', createdAt: 2, kind: 'assistant', reasoningEffort: 'high', model: visionModel.id, status: 'done', stopReason: 'stop', content: [{ type: 'text', text: 'Answer' }] },
@@ -477,7 +513,11 @@ describe('buildCodexRequest', () => {
             reasoningEffort: 'off', baseReasoningEffort: 'off',
         })
         expect(body.reasoning).toBeUndefined()
-        expect(body.input.map((item) => 'role' in item ? item.role : item.type)).toEqual(['user', 'assistant'])
+        expect(body.input.map((item) => 'role' in item ? item.role : item.type)).toEqual([
+            'configuration_update', 'user', 'assistant', 'configuration_update',
+        ])
+        expect(body.input[0]).toEqual({ type: 'configuration_update', reasoning: { effort: 'high' } })
+        expect(body.input.at(-1)).toEqual({ type: 'configuration_update', reasoning: { effort: 'off' } })
     })
 
     it('keeps the explicit base after truncation when the first retained turn uses a higher effort', () => {
