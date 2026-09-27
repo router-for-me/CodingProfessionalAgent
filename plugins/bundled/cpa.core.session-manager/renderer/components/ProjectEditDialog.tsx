@@ -24,6 +24,7 @@ import {
     getProjectPaths,
 } from '../utils/projectPaths.js'
 import { isBrowserEnvironment } from '../utils/platform.js'
+import { ProjectRemovalConfirmDialog } from './ProjectRemovalConfirmDialog.js'
 
 export interface ProjectEditDialogProps {
     project: Project
@@ -52,18 +53,22 @@ export function ProjectEditDialog({
     const [paths, setPaths] = useState(() => getProjectPaths(project))
     const [selecting, setSelecting] = useState(false)
     const [directoryBrowserOpen, setDirectoryBrowserOpen] = useState(false)
+    const [confirmingRemoval, setConfirmingRemoval] = useState(false)
 
     useEffect(() => {
         if (!workspaceVisible) return
         nameInputRef.current?.focus()
         nameInputRef.current?.select()
+    }, [workspaceVisible])
 
+    useEffect(() => {
+        if (!workspaceVisible) return
         const handleKeyDown = (event: KeyboardEvent) => {
-            if (event.key === 'Escape') onClose()
+            if (event.key === 'Escape' && !confirmingRemoval) onClose()
         }
         document.addEventListener('keydown', handleKeyDown)
         return () => document.removeEventListener('keydown', handleKeyDown)
-    }, [onClose, workspaceVisible])
+    }, [confirmingRemoval, onClose, workspaceVisible])
 
     const isCustomPicker = directoryPicker !== undefined
 
@@ -137,8 +142,8 @@ export function ProjectEditDialog({
         <div
             className="fixed inset-0 z-[60] flex items-center justify-center bg-black/55 p-5"
             style={workspaceVisible ? undefined : { display: 'none' }}
-            inert={!workspaceVisible}
-            aria-hidden={!workspaceVisible}
+            inert={!workspaceVisible || confirmingRemoval}
+            aria-hidden={!workspaceVisible || confirmingRemoval}
             role="presentation"
             onMouseDown={(event) => {
                 if (event.target === event.currentTarget) onClose()
@@ -237,7 +242,7 @@ export function ProjectEditDialog({
                     <button
                         type="button"
                         className="rounded-lg bg-red-500/15 px-4 py-2 text-[13px] font-medium text-red-400 transition-colors hover:bg-red-500/25 hover:text-red-300"
-                        onClick={handleRemove}
+                        onClick={() => setConfirmingRemoval(true)}
                     >
                         {t('project.remove')}
                     </button>
@@ -269,6 +274,13 @@ export function ProjectEditDialog({
                 onClose={() => setDirectoryBrowserOpen(false)}
                 onSelect={handleWebDirectorySelect}
             />
+            {confirmingRemoval ? (
+                <ProjectRemovalConfirmDialog
+                    project={project}
+                    onCancel={() => setConfirmingRemoval(false)}
+                    onConfirm={handleRemove}
+                />
+            ) : null}
         </div>,
         document.body,
     )

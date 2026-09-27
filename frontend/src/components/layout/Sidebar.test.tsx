@@ -182,14 +182,31 @@ describe('Sidebar project groups', () => {
         expect(useProjectStore.getState().projects[0].pinned).toBe(true)
     })
 
-    it('removes the project and keeps its chats uncategorized', async () => {
+    it('requires confirmation before removing a project from the context menu', async () => {
         const user = userEvent.setup()
         render(<Sidebar />)
 
         fireEvent.contextMenu(screen.getByRole('button', { name: 'Example Project' }))
-        await user.click(
-            screen.getByRole('menuitem', { name: 'Remove project' }),
-        )
+        await user.click(screen.getByRole('menuitem', { name: 'Remove project' }))
+        const confirmation = screen.getByRole('alertdialog', { name: 'Remove Example Project?' })
+        expect(useProjectStore.getState().projects).toHaveLength(1)
+        expect(useSessionStore.getState().sessions.every((session) => session.projectId === 'project-1')).toBe(true)
+
+        await user.click(within(confirmation).getByRole('button', { name: 'Cancel' }))
+        expect(screen.queryByRole('alertdialog')).toBeNull()
+        expect(useProjectStore.getState().projects).toHaveLength(1)
+        expect(useSessionStore.getState().sessions.every((session) => session.projectId === 'project-1')).toBe(true)
+
+        fireEvent.contextMenu(screen.getByRole('button', { name: 'Example Project' }))
+        await user.click(screen.getByRole('menuitem', { name: 'Remove project' }))
+        await user.keyboard('{Escape}')
+        expect(screen.queryByRole('alertdialog')).toBeNull()
+        expect(useProjectStore.getState().projects).toHaveLength(1)
+        expect(useSessionStore.getState().sessions.every((session) => session.projectId === 'project-1')).toBe(true)
+
+        fireEvent.contextMenu(screen.getByRole('button', { name: 'Example Project' }))
+        await user.click(screen.getByRole('menuitem', { name: 'Remove project' }))
+        await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Remove project' }))
 
         expect(useProjectStore.getState().projects).toHaveLength(0)
         expect(

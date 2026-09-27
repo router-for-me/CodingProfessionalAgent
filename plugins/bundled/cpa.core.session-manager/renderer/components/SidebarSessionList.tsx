@@ -38,6 +38,7 @@ import {
 } from '@cpa/plugin-ui'
 import { useIsMobileBrowser } from '../utils/platform.js'
 import { ProjectEditDialog } from './ProjectEditDialog.js'
+import { ProjectRemovalConfirmDialog } from './ProjectRemovalConfirmDialog.js'
 import { SessionRow } from './SessionRow.js'
 import { getProjectPaths } from '../utils/projectPaths.js'
 import { revealProjectPath } from '../utils/projectReveal.js'
@@ -112,6 +113,7 @@ export function SidebarSessionList() {
     } catch {}
 
     const [editingProject, setEditingProject] = useState<Project | null>(null)
+    const [removingProject, setRemovingProject] = useState<Project | null>(null)
     const entriesBySession = sessionService?.getEntriesBySession?.()
 
     const activeSessions = useMemo(
@@ -201,6 +203,7 @@ export function SidebarSessionList() {
         if (projectService) {
             await projectService.remove(projectId)
         }
+        setRemovingProject(null)
     }
 
     const toggleProjectPin = async (projectId: string) => {
@@ -251,7 +254,7 @@ export function SidebarSessionList() {
                     onNewChat={() => handleNewProjectChat(project.id)}
                     onTogglePin={() => toggleProjectPin(project.id)}
                     onEdit={() => setEditingProject(project)}
-                    onRemove={() => handleRemoveProject(project.id)}
+                    onRemove={() => setRemovingProject(project)}
                 />
             ))}
 
@@ -282,7 +285,7 @@ export function SidebarSessionList() {
                         onNewChat={() => handleNewProjectChat(projectId)}
                         onTogglePin={() => toggleProjectPin(projectId)}
                         onEdit={() => setEditingProject(pseudoProject)}
-                        onRemove={() => handleRemoveProject(projectId)}
+                        onRemove={() => setRemovingProject(pseudoProject)}
                     />
                 )
             })}
@@ -301,6 +304,13 @@ export function SidebarSessionList() {
                 <ProjectEditDialog
                     project={editingProject}
                     onClose={() => setEditingProject(null)}
+                />
+            ) : null}
+            {removingProject ? (
+                <ProjectRemovalConfirmDialog
+                    project={removingProject}
+                    onCancel={() => setRemovingProject(null)}
+                    onConfirm={() => handleRemoveProject(removingProject.id)}
                 />
             ) : null}
         </>

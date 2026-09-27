@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '@/i18n'
@@ -85,6 +85,7 @@ describe('ProjectEditDialog', () => {
         await user.click(screen.getByRole('button', { name: 'Save' }))
 
         expect(useProjectStore.getState().projects[0]).toMatchObject({
+            id: project.id,
             name: 'New Project Name',
             path: '/workspace/example',
             paths: [
@@ -93,6 +94,7 @@ describe('ProjectEditDialog', () => {
                 '/workspace/shared-source',
             ],
         })
+        expect(useSessionStore.getState().sessions[0]?.projectId).toBe(project.id)
         expect(onClose).toHaveBeenCalledOnce()
     })
 
@@ -115,12 +117,46 @@ describe('ProjectEditDialog', () => {
         expect(onClose).toHaveBeenCalledOnce()
     })
 
-    it('removes the project and keeps its chats uncategorized', async () => {
+    it('keeps the project and its chats when removal is cancelled or dismissed', async () => {
         const user = userEvent.setup()
         const onClose = vi.fn()
         render(<ProjectEditDialog project={project} onClose={onClose} />)
 
         await user.click(screen.getByRole('button', { name: 'Remove project' }))
+        const confirmation = screen.getByRole('alertdialog', { name: 'Remove Example Project?' })
+        expect(confirmation).toHaveTextContent('Chats and source folders will not be deleted.')
+        const cancelButton = within(confirmation).getByRole('button', { name: 'Cancel' })
+        const confirmButton = within(confirmation).getByRole('button', { name: 'Remove project' })
+        expect(cancelButton).toHaveFocus()
+        expect(screen.getByRole('dialog', { hidden: true, name: 'Edit project' }).parentElement).toHaveAttribute('aria-hidden', 'true')
+        await user.tab({ shift: true })
+        expect(confirmButton).toHaveFocus()
+        await user.tab()
+        expect(cancelButton).toHaveFocus()
+        expect(useProjectStore.getState().projects).toEqual([project])
+        expect(useSessionStore.getState().sessions[0]?.projectId).toBe(project.id)
+
+        await user.click(cancelButton)
+        expect(screen.queryByRole('alertdialog')).toBeNull()
+        await user.click(screen.getByRole('button', { name: 'Remove project' }))
+        await user.keyboard('{Escape}')
+
+        expect(screen.queryByRole('alertdialog')).toBeNull()
+        expect(screen.getByRole('dialog', { name: 'Edit project' })).toBeInTheDocument()
+        expect(useProjectStore.getState().projects).toEqual([project])
+        expect(useSessionStore.getState().sessions[0]?.projectId).toBe(project.id)
+        expect(onClose).not.toHaveBeenCalled()
+    })
+
+    it('removes the project and uncategorizes its chats only after confirmation', async () => {
+        const user = userEvent.setup()
+        const onClose = vi.fn()
+        render(<ProjectEditDialog project={project} onClose={onClose} />)
+
+        await user.click(screen.getByRole('button', { name: 'Remove project' }))
+        const confirmation = screen.getByRole('alertdialog', { name: 'Remove Example Project?' })
+        expect(useProjectStore.getState().projects).toEqual([project])
+        await user.click(within(confirmation).getByRole('button', { name: 'Remove project' }))
 
         expect(useProjectStore.getState().projects).toEqual([])
         expect(useSessionStore.getState().sessions[0]?.projectId).toBeUndefined()
