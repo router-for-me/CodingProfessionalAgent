@@ -1009,6 +1009,94 @@ describe('SubAgentPanel mobile browser behavior', () => {
     })
 })
 
+describe('SubAgentPanel resize and auto-maximize behavior', () => {
+    const originalInnerWidth = window.innerWidth
+
+    beforeEach(() => {
+        Object.defineProperty(window, 'innerWidth', {
+            value: 1200,
+            configurable: true,
+        })
+    })
+
+    afterEach(() => {
+        Object.defineProperty(window, 'innerWidth', {
+            value: originalInnerWidth,
+            configurable: true,
+        })
+    })
+
+    it('resizes right sidebar width when dragging resize handle', () => {
+        useUiStore.setState({
+            rightSidebarCollapsed: false,
+            rightSidebarMaximized: false,
+            rightSidebarWidth: 320,
+        })
+        render(<SubAgentPanel sessionId="sess-1" />)
+
+        const handle = screen.getByRole('separator', { name: 'Resize right sidebar' })
+        expect(handle).toBeInTheDocument()
+
+        fireEvent.pointerDown(handle, { button: 0 })
+        // Drag to clientX = 800 -> desired width = 1200 - 800 = 400
+        fireEvent.pointerMove(window, { clientX: 800 })
+        fireEvent.pointerUp(window)
+
+        expect(useUiStore.getState().rightSidebarWidth).toBe(400)
+        expect(useUiStore.getState().rightSidebarMaximized).toBe(false)
+    })
+
+    it('automatically activates fullscreen maximized mode when dragging far enough to the left', () => {
+        useUiStore.setState({
+            rightSidebarCollapsed: false,
+            rightSidebarMaximized: false,
+            rightSidebarWidth: 600,
+        })
+        render(<SubAgentPanel sessionId="sess-1" />)
+
+        const handle = screen.getByRole('separator', { name: 'Resize right sidebar' })
+        expect(handle).toBeInTheDocument()
+
+        fireEvent.pointerDown(handle, { button: 0 })
+        // MAX_RIGHT_SIDEBAR_WIDTH = 640, AUTO_MAXIMIZE_THRESHOLD = 100 -> rawWidth >= 740 triggers auto-maximize
+        // clientX = 1200 - 700 = 500 -> rawWidth = 700 < 740 and clientX > 100, should not maximize yet
+        act(() => {
+            fireEvent.pointerMove(window, { clientX: 500 })
+        })
+        expect(useUiStore.getState().rightSidebarMaximized).toBe(false)
+        expect(useUiStore.getState().rightSidebarWidth).toBe(640)
+
+        // clientX = 1200 - 750 = 450 -> rawWidth = 750 >= 740, triggers auto-maximize
+        act(() => {
+            fireEvent.pointerMove(window, { clientX: 450 })
+        })
+
+        expect(useUiStore.getState().rightSidebarMaximized).toBe(true)
+        expect(useUiStore.getState().rightSidebarWidth).toBe(640)
+    })
+
+    it('automatically activates fullscreen maximized mode when dragged near the left edge', () => {
+        useUiStore.setState({
+            rightSidebarCollapsed: false,
+            rightSidebarMaximized: false,
+            rightSidebarWidth: 600,
+        })
+        render(<SubAgentPanel sessionId="sess-1" />)
+
+        const handle = screen.getByRole('separator', { name: 'Resize right sidebar' })
+        expect(handle).toBeInTheDocument()
+
+        fireEvent.pointerDown(handle, { button: 0 })
+        // AUTO_MAXIMIZE_EDGE_THRESHOLD = 100 -> clientX <= 100 triggers auto-maximize
+        act(() => {
+            fireEvent.pointerMove(window, { clientX: 80 })
+        })
+
+        expect(useUiStore.getState().rightSidebarMaximized).toBe(true)
+        expect(useUiStore.getState().rightSidebarWidth).toBe(640)
+    })
+})
+
 
 function userEntry(
     id: string,

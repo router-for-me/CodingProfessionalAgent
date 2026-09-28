@@ -26,6 +26,8 @@ import { useProjectStore } from '@/stores/projectStore'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import {
+    AUTO_MAXIMIZE_EDGE_THRESHOLD,
+    AUTO_MAXIMIZE_THRESHOLD,
     DEFAULT_RIGHT_SIDEBAR_WIDTH,
     MAX_RIGHT_SIDEBAR_WIDTH,
     MIN_RIGHT_SIDEBAR_WIDTH,
@@ -59,6 +61,7 @@ export function SubAgentPanel({
 
     const storedWidth = useUiStore((state) => state.rightSidebarWidth)
     const setRightSidebarWidth = useUiStore((state) => state.setRightSidebarWidth)
+    const setRightSidebarMaximized = useUiStore((state) => state.setRightSidebarMaximized)
     const [isResizing, setIsResizing] = useState(false)
     const collapsed = useUiStore((state) => state.rightSidebarCollapsed)
     const setRightSidebarCollapsed = useUiStore((state) => state.setRightSidebarCollapsed)
@@ -186,9 +189,19 @@ export function SubAgentPanel({
 
     const handleResize = useCallback(
         (clientX: number) => {
-            setRightSidebarWidth(window.innerWidth - clientX)
+            const desiredWidth = window.innerWidth - clientX
+            if (
+                desiredWidth >= MAX_RIGHT_SIDEBAR_WIDTH + AUTO_MAXIMIZE_THRESHOLD ||
+                clientX <= AUTO_MAXIMIZE_EDGE_THRESHOLD
+            ) {
+                setIsResizing(false)
+                setRightSidebarWidth(MAX_RIGHT_SIDEBAR_WIDTH)
+                setRightSidebarMaximized(true)
+                return
+            }
+            setRightSidebarWidth(desiredWidth)
         },
-        [setRightSidebarWidth]
+        [setRightSidebarWidth, setRightSidebarMaximized]
     )
 
     // Global keyboard shortcuts for registered panel tabs
