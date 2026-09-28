@@ -42,17 +42,43 @@ export function isMobileBrowser(): boolean {
 }
 
 /**
+ * Synchronizes the `data-mobile-browser` attribute on document.documentElement.
+ * Sets data-mobile-browser="true" when running in a mobile browser environment,
+ * or removes it when in desktop / PC web browser environments.
+ * Returns boolean indicating whether mobile browser environment is active.
+ */
+export function syncMobileBrowserDOM(): boolean {
+  if (typeof document === 'undefined') return false
+  const isMobile = isMobileBrowser()
+  if (isMobile) {
+    document.documentElement.setAttribute('data-mobile-browser', 'true')
+  } else {
+    document.documentElement.removeAttribute('data-mobile-browser')
+  }
+  return isMobile
+}
+
+/**
  * React hook that returns whether the current environment is a mobile browser,
  * updating reactively on window resize and orientation change events.
  */
 export function useIsMobileBrowser(): boolean {
-  const [isMobile, setIsMobile] = useState<boolean>(() => isMobileBrowser())
+  const [isMobile, setIsMobile] = useState<boolean>(() => {
+    const mobile = isMobileBrowser()
+    if (typeof document !== 'undefined') {
+      syncMobileBrowserDOM()
+    }
+    return mobile
+  })
 
   useEffect(() => {
     const handleResize = () => {
-      setIsMobile(isMobileBrowser())
+      const mobile = isMobileBrowser()
+      setIsMobile(mobile)
+      syncMobileBrowserDOM()
     }
 
+    syncMobileBrowserDOM()
     window.addEventListener('resize', handleResize)
     window.addEventListener('orientationchange', handleResize)
     return () => {

@@ -17,6 +17,7 @@ import { CLIProxyAPIAgentService } from '@/features/agent-runtime/CLIProxyAPIAge
 import { ElectronNativeBridge } from '@/features/agent-runtime/native/electronNativeBridge'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { getHostBridge, onHostReconnect } from '@/application/services/hostTransport'
+import { syncMobileBrowserDOM, useIsMobileBrowser } from '@/lib/platform'
 
 interface AppProvidersProps {
     children: ReactNode
@@ -265,10 +266,23 @@ function useProductionAgentService(): AgentService | null {
 }
 
 /**
+ * Syncs mobile browser status to DOM root data-mobile-browser attribute.
+ * Adapts reactively on resize and orientation change events.
+ */
+function useMobileBrowserSyncEffect() {
+    const isMobile = useIsMobileBrowser()
+
+    useEffect(() => {
+        syncMobileBrowserDOM()
+    }, [isMobile])
+}
+
+/**
  * App shell providers: i18n + theme + production agent service.
  * Persistence bootstrap is awaited in main before first paint.
  */
 export function AppProviders({ children }: AppProvidersProps) {
+    useMobileBrowserSyncEffect()
     useThemeEffect()
     useTraySyncEffect()
     usePreventSleepSyncEffect()

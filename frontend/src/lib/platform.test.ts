@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
-import { isBrowserEnvironment, isMobileBrowser, isWindowsPlatform, useIsMobileBrowser } from './platform'
+import { isBrowserEnvironment, isMobileBrowser, isWindowsPlatform, syncMobileBrowserDOM, useIsMobileBrowser } from './platform'
 
 describe('platform', () => {
   const originalUserAgent = navigator.userAgent
@@ -163,6 +163,38 @@ describe('platform', () => {
       })
 
       expect(result.current).toBe(true)
+    })
+  })
+
+  describe('syncMobileBrowserDOM', () => {
+    it('sets data-mobile-browser attribute when in mobile browser environment', () => {
+      document.documentElement.removeAttribute('data-mobile-browser')
+      Object.defineProperty(navigator, 'userAgent', {
+        value: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1',
+        configurable: true,
+      })
+      const isMobile = syncMobileBrowserDOM()
+      expect(isMobile).toBe(true)
+      expect(document.documentElement.getAttribute('data-mobile-browser')).toBe('true')
+    })
+
+    it('removes data-mobile-browser attribute when in desktop PC web or Electron environment', () => {
+      document.documentElement.setAttribute('data-mobile-browser', 'true')
+      Object.defineProperty(navigator, 'userAgent', {
+        value: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+        configurable: true,
+      })
+      Object.defineProperty(navigator, 'maxTouchPoints', {
+        value: 0,
+        configurable: true,
+      })
+      Object.defineProperty(window, 'innerWidth', {
+        value: 1280,
+        configurable: true,
+      })
+      const isMobile = syncMobileBrowserDOM()
+      expect(isMobile).toBe(false)
+      expect(document.documentElement.getAttribute('data-mobile-browser')).toBeNull()
     })
   })
 })

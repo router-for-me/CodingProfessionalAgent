@@ -11,6 +11,7 @@ import { initMacScrollbars } from './lib/macScrollbar'
 import { initWindowAnimationState } from './lib/windowAnimationState'
 import { initInjectedErrorGuard } from './lib/injectedErrorGuard'
 import { waitForWebAuthentication } from './features/web-auth/WebAuthGate'
+import { syncMobileBrowserDOM } from './lib/platform'
 import './styles/app.css'
 import type { Root } from 'react-dom/client'
 
@@ -32,6 +33,7 @@ export interface StartupDependencies {
 }
 
 export async function runStartup(deps?: StartupDependencies): Promise<void> {
+  syncMobileBrowserDOM()
   const root = deps?.root ?? createRoot(document.getElementById('root')!)
   try {
     await (deps?.waitForWebAuth ?? waitForWebAuthentication)(root)

@@ -33,6 +33,160 @@ body {
   }
 }
 
+/*
+ * =========================================================================
+ * Mobile Web Browser Typography & Icon Scaling Optimization
+ * =========================================================================
+ * Applied exclusively when running in a mobile web browser (data-mobile-browser="true").
+ * Guarantees zero side effects on Electron desktop or PC desktop browser runtimes.
+ * Enhances legibility of text, enlarges small icons, and provides touch-friendly
+ * target dimensions for seamless single-hand and finger operations.
+ */
+html[data-mobile-browser="true"] {
+  --ui-font-size: 16px !important;
+  --code-font-size: 13.5px !important;
+  font-size: 16px !important;
+  zoom: 1 !important;
+}
+
+html[data-mobile-browser="true"] body {
+  font-size: 16px !important;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* Elevate small arbitrary font-size classes to comfortable mobile scale */
+html[data-mobile-browser="true"] .text-\[10px\] {
+  font-size: 12px !important;
+  line-height: 1.4 !important;
+}
+
+html[data-mobile-browser="true"] .text-\[11px\] {
+  font-size: 13px !important;
+  line-height: 1.45 !important;
+}
+
+html[data-mobile-browser="true"] .text-\[12px\] {
+  font-size: 14px !important;
+  line-height: 1.5 !important;
+}
+
+html[data-mobile-browser="true"] .text-\[13px\] {
+  font-size: 15px !important;
+  line-height: 1.55 !important;
+}
+
+html[data-mobile-browser="true"] .text-\[14px\] {
+  font-size: 16px !important;
+  line-height: 1.6 !important;
+}
+
+html[data-mobile-browser="true"] .text-\[15px\] {
+  font-size: 16.5px !important;
+  line-height: 1.6 !important;
+}
+
+/* Ensure monospace and code elements remain legible without squinting */
+html[data-mobile-browser="true"] code,
+html[data-mobile-browser="true"] pre,
+html[data-mobile-browser="true"] .font-mono {
+  font-size: var(--code-font-size, 13.5px) !important;
+}
+
+/*
+ * Mobile Icon Sizes:
+ * Scale up micro icons (12px, 14px, 16px) to 15px-20px for finger touch clarity.
+ */
+html[data-mobile-browser="true"] svg.size-3,
+html[data-mobile-browser="true"] .size-3:not(button):not(input) {
+  width: 15px !important;
+  height: 15px !important;
+}
+
+html[data-mobile-browser="true"] svg.size-3\.5,
+html[data-mobile-browser="true"] .size-3\.5:not(button):not(input) {
+  width: 17.5px !important;
+  height: 17.5px !important;
+}
+
+html[data-mobile-browser="true"] svg.size-4,
+html[data-mobile-browser="true"] .size-4:not(button):not(input) {
+  width: 20px !important;
+  height: 20px !important;
+}
+
+html[data-mobile-browser="true"] svg.size-4\.5,
+html[data-mobile-browser="true"] .size-4\.5:not(button):not(input) {
+  width: 22px !important;
+  height: 22px !important;
+}
+
+/*
+ * Touch Targets & Action Controls:
+ * Elevate miniature desktop controls to comfortable mobile touch areas.
+ */
+html[data-mobile-browser="true"] [data-testid="main-titlebar"] button,
+html[data-mobile-browser="true"] button.size-6 {
+  min-width: 34px !important;
+  min-height: 34px !important;
+}
+
+html[data-mobile-browser="true"] button.size-7 {
+  min-width: 36px !important;
+  min-height: 36px !important;
+}
+
+html[data-mobile-browser="true"] button.size-8 {
+  min-width: 38px !important;
+  min-height: 38px !important;
+}
+
+/* Titlebar session title readability */
+html[data-mobile-browser="true"] [data-testid="main-titlebar"] span.truncate {
+  font-size: 15px !important;
+}
+
+/* Composer toolbar & model selector button enhancements */
+html[data-mobile-browser="true"] [data-testid="composer-container"] button[aria-label="Model"],
+html[data-mobile-browser="true"] button[aria-label="Model"] {
+  font-size: 14px !important;
+  padding-top: 6px !important;
+  padding-bottom: 6px !important;
+  padding-left: 12px !important;
+  padding-right: 12px !important;
+}
+
+/* Mobile Sidebar items: larger touch areas and legible typography */
+html[data-mobile-browser="true"] aside[data-mobile="true"] {
+  font-size: 15px !important;
+}
+
+html[data-mobile-browser="true"] aside[data-mobile="true"] button,
+html[data-mobile-browser="true"] aside[data-mobile="true"] [role="button"] {
+  touch-action: manipulation;
+}
+
+/* Chat message typography and readability */
+html[data-mobile-browser="true"] [data-testid="message-list-scroller"] p,
+html[data-mobile-browser="true"] [data-testid="message-list-content"] p {
+  font-size: 15.5px !important;
+  line-height: 1.62 !important;
+}
+
+html[data-mobile-browser="true"] [data-testid="message-list-scroller"] ul,
+html[data-mobile-browser="true"] [data-testid="message-list-scroller"] ol,
+html[data-mobile-browser="true"] [data-testid="message-list-content"] ul,
+html[data-mobile-browser="true"] [data-testid="message-list-content"] ol {
+  font-size: 15.5px !important;
+  line-height: 1.6 !important;
+}
+
+/* Tool card and thinking block headers */
+html[data-mobile-browser="true"] [data-testid="tool-card"] button,
+html[data-mobile-browser="true"] [data-testid="thinking-block"] button {
+  min-height: 36px !important;
+}
+
 input,
 textarea,
 [contenteditable="true"],
