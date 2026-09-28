@@ -19,6 +19,7 @@ import {
 import {
   __resetPersistenceForTests,
   applyPersistedState,
+  awaitSessionWakeBarrier,
   bindPersistence,
   deleteSessionEntries,
   deleteSessionLocalCache,
@@ -28,6 +29,8 @@ import {
   flushPendingPersistence,
   hydrateEmptySessionFromDisk,
   invalidateSessionDiskCache,
+  isCanonicalHistoryPrefix,
+  fastForwardSessionOnWake,
   loadPersistedState,
   loadSessionData,
   loadSessionEntries,
@@ -224,6 +227,404 @@ describe('persist pure helpers', () => {
     expect(SessionSet).toHaveBeenNthCalledWith(2, sessionId, expect.objectContaining({ expectedEntriesRevision: 'revision-1' }))
   })
 
+  it('preserves a host-appended reply through a real SQLite revision conflict', async () => {
+    const { SessionDatabaseService } = await vi.importActual<{ SessionDatabaseService: new (options: { dbPath: string }) => any }>(
+      '../../../../plugins/bundled/cpa.core.session-manager/main/sessionDatabaseService',
+    )
+    const db = new SessionDatabaseService({ dbPath: ':memory:' })
+    try {
+      const id = 'sqlite-prefix-forward'
+      const prompt = assistant('prompt', id, 'done', 'question')
+      const answer = assistant('answer', id, 'done', 'answer')
+      const baseline = await db.set(id, { id, entries: [prompt] })
+      setHostBridge({ SessionGet: (sessionId: string) => db.get(sessionId),
+        SessionSet: (sessionId: string, data: unknown) => db.set(sessionId, data) } as any)
+      await ensureSessionLoaded(id)
+      await db.set(id, { id, entries: [prompt, answer], expectedEntriesRevision: baseline })
+      await saveSessionData(id, [prompt])
+      expect(useMessageStore.getState().getEntries(id)).toEqual([prompt, answer])
+      expect((await db.get(id))?.entries).toEqual([prompt, answer])
+      expect(await db.list()).toEqual([id])
+      expect(useUiStore.getState().toasts).toEqual([])
+    } finally {
+      db.close()
+    }
+  })
+
+  it('silently fast-forwards a saved prefix and uses the new revision for subsequent writes', async () => {
+    const id = 'prefix-forward'
+    const prompt = assistant('prompt', id, 'done', 'question')
+    const answer = assistant('answer', id, 'done', 'answer')
+    let disk = { entries: [prompt], entriesRevision: 'r1' }
+    const SessionSet = vi.fn().mockRejectedValueOnce(new Error('SESSION_HISTORY_CONFLICT')).mockResolvedValue('r3')
+    setHostBridge({ SessionGet: vi.fn(async () => disk), SessionSet } as any)
+    await ensureSessionLoaded(id)
+    disk = { entries: [prompt, answer], entriesRevision: 'r2' }
+    await saveSessionData(id, [prompt])
+    expect(useMessageStore.getState().getEntries(id)).toEqual([prompt, answer])
+    expect(SessionSet).toHaveBeenCalledTimes(1)
+    expect(useUiStore.getState().toasts).toEqual([])
+    await saveSessionData(id, [prompt, answer])
+    expect(SessionSet).toHaveBeenLastCalledWith(id, expect.objectContaining({
+      entries: [prompt, answer], expectedEntriesRevision: 'r2',
+    }))
+  })
+
+  it('retries a local metadata edit once with complete remote history', async () => {
+    const id = 'prefix-metadata'
+    const prompt = assistant('prompt', id, 'done', 'question')
+    const answer = assistant('answer', id, 'done', 'answer')
+    let disk = { entries: [prompt], entriesRevision: 'r1' }
+    const SessionSet = vi.fn().mockRejectedValueOnce(new Error('SESSION_HISTORY_CONFLICT')).mockResolvedValue('r3')
+    setHostBridge({ SessionGet: vi.fn(async () => disk), SessionSet } as any)
+    await ensureSessionLoaded(id)
+    bindPersistence({ debounceMs: 100000 })
+    withSuppressedPersistence(() => useSessionStore.setState({ sessions: [
+      { id, title: 'Old', pinned: false, createdAt: 1, updatedAt: 1 },
+    ] }))
+    useSessionStore.setState({ sessions: useSessionStore.getState().sessions.map((session) =>
+      session.id === id ? { ...session, title: 'Local title', pinned: true } : session) })
+    disk = { entries: [prompt, answer], entriesRevision: 'r2' }
+    await saveSessionData(id, [prompt])
+    expect(SessionSet).toHaveBeenCalledTimes(2)
+    expect(SessionSet).toHaveBeenLastCalledWith(id, expect.objectContaining({
+      entries: [prompt, answer], expectedEntriesRevision: 'r2', title: 'Local title', pinned: true,
+    }))
+    expect(useSessionStore.getState().sessions.find((session) => session.id === id)?.title).toBe('Local title')
+    expect(useUiStore.getState().toasts).toEqual([])
+  })
+
+  it('compares all canonical fields, ignoring object key order but not array order', () => {
+    const id = 'canonical-prefix'
+    const prompt = assistant('same', id, 'done', 'answer') as AssistantEntry
+    const local = { ...prompt, content: [{ type: 'toolCall', id: 'call', name: 'test', arguments: { a: 1, b: [1, 2] } }] } as unknown as ConversationEntry
+    const remote = { ...prompt, content: [{ type: 'toolCall', id: 'call', name: 'test', arguments: { b: [1, 2], a: 1 } }] } as unknown as ConversationEntry
+    const tail = assistant('tail', id, 'done', 'done')
+    expect(isCanonicalHistoryPrefix([local], [remote, tail])).toBe(true)
+    expect(isCanonicalHistoryPrefix([local], [{ ...remote, content: [{ type: 'toolCall', id: 'call', name: 'test', arguments: { b: [2, 1], a: 1 } }] } as unknown as ConversationEntry, tail])).toBe(false)
+    expect(isCanonicalHistoryPrefix([prompt], [{ ...prompt, status: 'streaming' }, tail])).toBe(false)
+    expect(isCanonicalHistoryPrefix([prompt], [prompt, { ...tail, id: 'same' }])).toBe(false)
+  })
+
+  it.each([
+    [{ type: 'image', data: 'a', mimeType: 'image/png' }, { type: 'image', data: 'b', mimeType: 'image/png' }],
+    [{ type: 'thinking', thinking: 'reason', signature: 'sig-a' }, { type: 'thinking', thinking: 'reason', signature: 'sig-b' }],
+    [{ type: 'text', text: 'first' }, { type: 'text', text: 'different' }],
+  ])('rejects a same-ID prefix whose persisted content differs (%j)', (left, right) => {
+    const id = 'semantic-prefix'
+    const entry = assistant('entry', id, 'done', 'text')
+    const local = { ...entry, content: [left] } as ConversationEntry
+    const remote = { ...entry, content: [right] } as ConversationEntry
+    expect(isCanonicalHistoryPrefix([local], [remote, assistant('tail', id, 'done', 'tail')])).toBe(false)
+  })
+
+  it('does not fast-forward a shortened baseline, even when the remote suffix matches', async () => {
+    const id = 'shortened-prefix'
+    const first = assistant('first', id, 'done', 'first')
+    const second = assistant('second', id, 'done', 'second')
+    const tail = assistant('tail', id, 'done', 'tail')
+    let disk = { entries: [first, second], entriesRevision: 'r1' }
+    const SessionSet = vi.fn().mockRejectedValue(new Error('SESSION_HISTORY_CONFLICT'))
+    setHostBridge({ SessionGet: vi.fn(async () => disk), SessionSet } as any)
+    await ensureSessionLoaded(id)
+    useMessageStore.getState().replaceSessionEntries(id, [first])
+    disk = { entries: [first, second, tail], entriesRevision: 'r2' }
+    await expect(saveSessionData(id, [first])).rejects.toThrow('SESSION_HISTORY_CONFLICT')
+    expect(useMessageStore.getState().getEntries(id)).toEqual([first])
+  })
+
+  it('discards an already queued stale prefix after a successful fast-forward', async () => {
+    const id = 'queued-prefix'
+    const prompt = assistant('prompt', id, 'done', 'question')
+    const answer = assistant('answer', id, 'done', 'answer')
+    let disk = { entries: [prompt], entriesRevision: 'r1' }
+    let rejectWrite!: (error: Error) => void
+    const SessionSet = vi.fn(() => new Promise<string>((_resolve, reject) => { rejectWrite = reject }))
+    setHostBridge({ SessionGet: vi.fn(async () => disk), SessionSet } as any)
+    await ensureSessionLoaded(id)
+    const first = saveSessionData(id, [prompt])
+    const queued = saveSessionData(id, [prompt])
+    await flushWrites()
+    disk = { entries: [prompt, answer], entriesRevision: 'r2' }
+    rejectWrite(new Error('SESSION_HISTORY_CONFLICT'))
+    await Promise.all([first, queued])
+    expect(useMessageStore.getState().getEntries(id)).toEqual([prompt, answer])
+    expect(SessionSet).toHaveBeenCalledTimes(1)
+  })
+
+  it('protects a deletion made during the conflict read instead of restoring the removed entry', async () => {
+    const id = 'forward-delete-race'
+    const prompt = assistant('prompt', id, 'done', 'question')
+    const answer = assistant('answer', id, 'done', 'answer')
+    let resolveRead!: (snapshot: unknown) => void
+    const SessionGet = vi.fn().mockResolvedValueOnce({ entries: [prompt], entriesRevision: 'r1' })
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveRead = resolve }))
+    setHostBridge({ SessionGet, SessionSet: vi.fn().mockRejectedValue(new Error('SESSION_HISTORY_CONFLICT')) } as any)
+    await ensureSessionLoaded(id)
+    const save = saveSessionData(id, [prompt])
+    await vi.waitFor(() => expect(SessionGet).toHaveBeenCalledTimes(2))
+    useMessageStore.getState().removeEntry(id, prompt.id)
+    resolveRead({ entries: [prompt, answer], entriesRevision: 'r2' })
+    await expect(save).rejects.toThrow('SESSION_HISTORY_PENDING')
+    expect(useMessageStore.getState().getEntries(id)).toEqual([])
+  })
+
+  it('defers a conflict if a local edit arrives while the remote snapshot is in flight', async () => {
+    const id = 'forward-read-race'
+    const prompt = assistant('prompt', id, 'done', 'question')
+    const answer = assistant('answer', id, 'done', 'answer')
+    let resolveRead!: (snapshot: unknown) => void
+    const SessionGet = vi.fn().mockResolvedValueOnce({ entries: [prompt], entriesRevision: 'r1' })
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveRead = resolve }))
+    setHostBridge({ SessionGet, SessionSet: vi.fn().mockRejectedValue(new Error('SESSION_HISTORY_CONFLICT')) } as any)
+    await ensureSessionLoaded(id)
+    const save = saveSessionData(id, [prompt])
+    await vi.waitFor(() => expect(SessionGet).toHaveBeenCalledTimes(2))
+    useMessageStore.getState().appendEntry(assistant('local', id, 'done', 'new edit'))
+    resolveRead({ entries: [prompt, answer], entriesRevision: 'r2' })
+    await expect(save).rejects.toThrow('SESSION_HISTORY_PENDING')
+    expect(useMessageStore.getState().getEntries(id).map((entry) => entry.id)).toEqual(['prompt', 'local'])
+    expect(useUiStore.getState().toasts).toEqual([])
+  })
+
+  it('uses a wake barrier to read the complete idle history without writing it back', async () => {
+    const id = 'wake-forward'
+    const prompt = assistant('prompt', id, 'done', 'question')
+    const answer = assistant('answer', id, 'done', 'answer')
+    let disk = { entries: [prompt], entriesRevision: 'r1' }
+    const SessionSet = vi.fn().mockResolvedValue('r3')
+    setHostBridge({ SessionGet: vi.fn(async () => disk), SessionSet } as any)
+    await ensureSessionLoaded(id)
+    disk = { entries: [prompt, answer], entriesRevision: 'r2' }
+    await fastForwardSessionOnWake(id, Promise.resolve(true))
+    expect(useMessageStore.getState().getEntries(id)).toEqual([prompt, answer])
+    expect(SessionSet).not.toHaveBeenCalled()
+    await saveSessionData(id, [prompt, answer])
+    expect(SessionSet).toHaveBeenLastCalledWith(id, expect.objectContaining({ expectedEntriesRevision: 'r2' }))
+  })
+
+  it('fast-forwards an unversioned browser user entry after a save conflict', async () => {
+    const id = 'unversioned-conflict'
+    const prompt = { id: 'prompt', sessionId: id, kind: 'user' as const, createdAt: 1,
+      content: [{ type: 'text' as const, text: 'question' }] } as ConversationEntry
+    const answer = assistant('answer', id, 'done', 'answer')
+    let disk = { entries: [] as ConversationEntry[], entriesRevision: 'r0' }
+    const SessionSet = vi.fn().mockResolvedValueOnce('r1').mockRejectedValueOnce(new Error('SESSION_HISTORY_CONFLICT'))
+    setHostBridge({ SessionGet: vi.fn(async () => disk), SessionSet } as any)
+    await ensureSessionLoaded(id)
+    useMessageStore.getState().appendEntry(prompt)
+    await saveSessionData(id, [prompt])
+    disk = { entries: [{ ...prompt, version: 1 }, answer], entriesRevision: 'r2' }
+    await expect(saveSessionData(id, [prompt])).resolves.toBeUndefined()
+    expect(useMessageStore.getState().getEntries(id)).toHaveLength(2)
+  })
+
+  it('refreshes an unversioned browser prompt on wake', async () => {
+    const id = 'unversioned-wake'
+    const prompt = { id: 'prompt', sessionId: id, kind: 'user' as const, createdAt: 1,
+      content: [{ type: 'text' as const, text: 'question' }] } as ConversationEntry
+    let disk = { entries: [] as ConversationEntry[], entriesRevision: 'r0' }
+    setHostBridge({ SessionGet: vi.fn(async () => disk), SessionSet: vi.fn().mockResolvedValue('r1') } as any)
+    await ensureSessionLoaded(id)
+    useMessageStore.getState().appendEntry(prompt)
+    await saveSessionData(id, [prompt])
+    disk = { entries: [{ ...prompt, version: 1 }, assistant('answer', id, 'done', 'answer')], entriesRevision: 'r2' }
+    await fastForwardSessionOnWake(id)
+    expect(useMessageStore.getState().getEntries(id)).toHaveLength(2)
+  })
+
+  it('rejects the wake barrier after repeated deferred history reads', async () => {
+    const id = 'repeated-deferred-wake'
+    const entry = assistant('p', id, 'done', 'old')
+    const SessionGet = vi.fn()
+      .mockResolvedValueOnce({ entries: [entry], entriesRevision: 'r1' })
+      .mockImplementation(async () => {
+        useSessionStore.getState().renameSession(id, `edit-${SessionGet.mock.calls.length}`)
+        return { entries: [entry, assistant('answer', id, 'done', 'remote')], entriesRevision: 'r2' }
+      })
+    setHostBridge({ SessionGet } as any)
+    await ensureSessionLoaded(id)
+    bindPersistence({ debounceMs: 100000 })
+    withSuppressedPersistence(() => useSessionStore.setState({ sessions: [
+      { id, title: 'Original', pinned: false, createdAt: 1, updatedAt: 1 },
+    ] }))
+    const wake = fastForwardSessionOnWake(id)
+    await expect(wake).rejects.toThrow('SESSION_HISTORY_PENDING')
+    await expect(awaitSessionWakeBarrier(id)).rejects.toThrow('pending retry')
+    expect(SessionGet).toHaveBeenCalledTimes(4)
+    expect(useMessageStore.getState().getEntries(id)).toEqual([entry])
+  })
+
+  it('retries an initial wake read invalidated by a metadata edit', async () => {
+    const id = 'unloaded-deferred-wake'
+    const entry = assistant('p', id, 'done', 'remote')
+    const SessionGet = vi.fn().mockImplementationOnce(async () => {
+      useSessionStore.getState().renameSession(id, 'Edited while reading')
+      return { entries: [entry], entriesRevision: 'r1' }
+    }).mockResolvedValue({ entries: [entry], entriesRevision: 'r1' })
+    setHostBridge({ SessionGet } as any)
+    bindPersistence({ debounceMs: 100000 })
+    withSuppressedPersistence(() => useSessionStore.setState({ sessions: [
+      { id, title: 'Original', pinned: false, createdAt: 1, updatedAt: 1 },
+    ] }))
+    await fastForwardSessionOnWake(id)
+    expect(SessionGet).toHaveBeenCalledTimes(2)
+    expect(useMessageStore.getState().getEntries(id)).toEqual([entry])
+  })
+
+  it('rejects the send barrier when the history read fails', async () => {
+    const id = 'failed-wake-read'
+    const old = assistant('p', id, 'done', 'old')
+    const SessionGet = vi.fn().mockResolvedValueOnce({ entries: [old], entriesRevision: 'r1' })
+      .mockRejectedValueOnce(new Error('network unavailable'))
+      .mockResolvedValue({ entries: [old], entriesRevision: 'r1' })
+    setHostBridge({ SessionGet } as any)
+    await ensureSessionLoaded(id)
+    const wake = fastForwardSessionOnWake(id, Promise.resolve(true))
+    const blocked = awaitSessionWakeBarrier(id)
+    await expect(wake).rejects.toThrow('network unavailable')
+    await expect(blocked).rejects.toThrow('network unavailable')
+    await expect(awaitSessionWakeBarrier(id)).rejects.toThrow('pending retry')
+    // A failed barrier must not poison a subsequent wake.
+    await expect(fastForwardSessionOnWake(id)).resolves.toBeUndefined()
+    await expect(awaitSessionWakeBarrier(id)).resolves.toBeUndefined()
+  })
+
+  it('discards a queued partial stream snapshot after a clean-mirror wake', async () => {
+    const id = 'queued-stream-wake'
+    const partial = assistant('p', id, 'streaming', 'partial')
+    const complete = assistant('p', id, 'done', 'complete')
+    let resolveRead!: (value: unknown) => void
+    const SessionGet = vi.fn().mockResolvedValueOnce({ entries: [partial], entriesRevision: 'r1' })
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveRead = resolve }))
+    const SessionSet = vi.fn().mockResolvedValue('r3')
+    setHostBridge({ SessionGet, SessionSet } as any)
+    await ensureSessionLoaded(id)
+    const wake = fastForwardSessionOnWake(id)
+    await vi.waitFor(() => expect(SessionGet).toHaveBeenCalledTimes(2))
+    const queued = saveSessionData(id, [partial])
+    resolveRead({ entries: [complete], entriesRevision: 'r2' })
+    await Promise.all([wake, queued])
+    expect(SessionSet.mock.calls.some(([, payload]) => payload.expectedEntriesRevision === 'r2' &&
+      payload.entries[0].status === 'streaming')).toBe(false)
+  })
+
+  it('discards a queued longer snapshot after a clean-mirror truncation', async () => {
+    const id = 'queued-clean-truncation'
+    const first = assistant('first', id, 'done', 'keep')
+    const removed = assistant('removed', id, 'done', 'old')
+    let resolveRead!: (value: unknown) => void
+    const SessionGet = vi.fn().mockResolvedValueOnce({ entries: [first, removed], entriesRevision: 'r1' })
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveRead = resolve }))
+    const SessionSet = vi.fn().mockResolvedValue('r3')
+    setHostBridge({ SessionGet, SessionSet } as any)
+    await ensureSessionLoaded(id)
+    const wake = fastForwardSessionOnWake(id)
+    await vi.waitFor(() => expect(SessionGet).toHaveBeenCalledTimes(2))
+    const queued = saveSessionData(id, [first, removed])
+    resolveRead({ entries: [first], entriesRevision: 'r2' })
+    await Promise.all([wake, queued])
+    expect(useMessageStore.getState().getEntries(id)).toEqual([first])
+    expect(SessionSet).not.toHaveBeenCalled()
+  })
+
+  it('does not acknowledge an edit newer than the saved queued snapshot', async () => {
+    const id = 'queued-newer-edit'
+    const old = assistant('p', id, 'streaming', 'old')
+    const edited = assistant('p', id, 'streaming', 'local edit')
+    const tail = assistant('answer', id, 'done', 'remote answer')
+    let disk = { entries: [old], entriesRevision: 'r1' }
+    setHostBridge({ SessionGet: vi.fn(async () => disk), SessionSet: vi.fn().mockResolvedValue('r2') } as any)
+    await ensureSessionLoaded(id)
+    bindPersistence({ debounceMs: 100000 })
+    const queued = saveSessionData(id, [old])
+    useMessageStore.getState().replaceSessionEntries(id, [edited])
+    await queued
+    disk = { entries: [old, tail], entriesRevision: 'r3' }
+    await expect(fastForwardSessionOnWake(id)).rejects.toThrow('SESSION_HISTORY_PENDING')
+    await expect(awaitSessionWakeBarrier(id)).rejects.toThrow('pending retry')
+    expect(useMessageStore.getState().getEntries(id)[0]).toEqual(edited)
+  })
+
+  it('does not acknowledge a local edit made during the native-store await', async () => {
+    const id = 'native-await-edit'
+    const old = assistant('p', id, 'streaming', 'old')
+    const edited = assistant('p', id, 'streaming', 'local edit')
+    let disk = { entries: [old], entriesRevision: 'r1' }
+    const SessionSet = vi.fn().mockResolvedValue('r2')
+    setHostBridge({ SessionGet: vi.fn(async () => disk), SessionSet,
+      KVStoreGet: vi.fn(), KVStoreSet: vi.fn().mockResolvedValue(undefined) } as any)
+    await ensureSessionLoaded(id)
+    bindPersistence({ debounceMs: 100000 })
+    const queued = savePersistedState(serializeAppState())
+    useMessageStore.getState().replaceSessionEntries(id, [edited])
+    await queued
+    expect(SessionSet).toHaveBeenCalledWith(id, expect.objectContaining({ entries: [old] }))
+    disk = { entries: [assistant('p', id, 'done', 'remote newer')], entriesRevision: 'r3' }
+    await expect(fastForwardSessionOnWake(id)).rejects.toThrow('SESSION_HISTORY_PENDING')
+    await expect(awaitSessionWakeBarrier(id)).rejects.toThrow('pending retry')
+    expect(useMessageStore.getState().getEntries(id)[0]).toEqual(edited)
+  })
+
+  it('does not pair a serialized old history with a fast-forwarded revision', async () => {
+    const id = 'native-await-wake'
+    const partial = assistant('p', id, 'done', 'partial')
+    const complete = assistant('p', id, 'done', 'complete')
+    let resolveRead!: (value: unknown) => void
+    const SessionGet = vi.fn().mockResolvedValueOnce({ entries: [partial], entriesRevision: 'r1' })
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveRead = resolve }))
+    const SessionSet = vi.fn().mockResolvedValue('r3')
+    setHostBridge({ SessionGet, SessionSet,
+      KVStoreGet: vi.fn(), KVStoreSet: vi.fn().mockResolvedValue(undefined) } as any)
+    await ensureSessionLoaded(id)
+    const wake = fastForwardSessionOnWake(id)
+    await vi.waitFor(() => expect(SessionGet).toHaveBeenCalledTimes(2))
+    const snapshot = serializeAppState()
+    const queued = savePersistedState(snapshot)
+    resolveRead({ entries: [complete], entriesRevision: 'r2' })
+    await Promise.all([wake, queued])
+    expect(useMessageStore.getState().getEntries(id)).toEqual([complete])
+    expect(SessionSet.mock.calls.some(([, payload]) => payload.expectedEntriesRevision === 'r2' &&
+      payload.entries[0].content[0].text === 'partial')).toBe(false)
+  })
+
+  it('does not roll back completed persisted content with a queued stale stream snapshot (SQLite)', async () => {
+    const { SessionDatabaseService } = await vi.importActual<{
+      SessionDatabaseService: new (options: { dbPath: string }) => {
+        get: (id: string) => Promise<{ entries: ConversationEntry[] }>
+        set: (id: string, payload: Record<string, unknown>) => Promise<string>
+        close: () => void
+      }
+    }>('../../../../plugins/bundled/cpa.core.session-manager/main/sessionDatabaseService')
+    const db = new SessionDatabaseService({ dbPath: ':memory:' })
+    try {
+      const id = 'queued-sqlite-stream'
+      const partial = assistant('p', id, 'streaming', 'partial')
+      const complete = assistant('p', id, 'done', 'complete')
+      const baseline = await db.set(id, { id, entries: [partial] })
+      let readCount = 0
+      let resolveRead!: () => void
+      setHostBridge({
+        SessionGet: async (sessionId: string) => {
+          readCount += 1
+          if (readCount === 2) await new Promise<void>((resolve) => { resolveRead = resolve })
+          return db.get(sessionId)
+        },
+        SessionSet: (sessionId: string, payload: Record<string, unknown>) => db.set(sessionId, payload),
+      } as any)
+      await ensureSessionLoaded(id)
+      await db.set(id, { id, entries: [complete], expectedEntriesRevision: baseline })
+      const wake = fastForwardSessionOnWake(id)
+      await vi.waitFor(() => expect(readCount).toBe(2))
+      const queued = saveSessionData(id, [partial])
+      resolveRead()
+      await Promise.all([wake, queued])
+      expect((await db.get(id))?.entries).toEqual([complete])
+    } finally {
+      db.close()
+    }
+  })
+
   it('propagates history conflicts without falling back to localStorage or acknowledging removals', async () => {
     const sessionId = 'save-conflict'
     const entry = assistant('remove', sessionId, 'done', 'remove')
@@ -260,7 +661,7 @@ describe('persist pure helpers', () => {
     })
     invalidateSessionDiskCache(sessionId)
     await reloadSessionFromDisk(sessionId)
-    await expect(saveSessionData(sessionId, useMessageStore.getState().getEntries(sessionId))).rejects.toThrow('SESSION_HISTORY_CONFLICT')
+    await expect(saveSessionData(sessionId, useMessageStore.getState().getEntries(sessionId))).rejects.toThrow('SESSION_HISTORY_PENDING')
     expect(SessionSet).toHaveBeenLastCalledWith(sessionId, expect.objectContaining({ expectedEntriesRevision: 'before-truncation' }))
     useSessionRunStore.getState().clearRun(sessionId)
   })

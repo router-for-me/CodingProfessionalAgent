@@ -186,15 +186,52 @@ export const deletedRemoteSessionIds = new Set<string>()
 const loadedSessionIds = new Set<string>()
 const staleSessionIds = new Set<string>()
 const sessionEntriesRevisions = new Map<string, string>()
+const sessionBaselineLengths = new Map<string, number>()
+const historyEditGenerations = new Map<string, number>()
+const metadataEditGenerations = new Map<string, number>()
+const agentEditGenerations = new Map<string, number>()
+const acknowledgedHistoryGenerations = new Map<string, number>()
+const acknowledgedMetadataGenerations = new Map<string, number>()
+const acknowledgedAgentGenerations = new Map<string, number>()
 const pendingEntryRemovals = new Map<string, Map<string, number>>()
 let entryRemovalSequence = 0
 const sessionReadEpochs = new Map<string, number>()
 const sessionHydrations = new Map<string, { epoch: number; promise: Promise<ConversationEntry[]> }>()
 const sessionWrites = new Map<string, Promise<void>>()
+type SessionSaveOptions = { expectedEntriesRevision?: string; snapshotGeneration?: number }
+const serializedSessionOptions = new WeakMap<PersistedAppState, Map<string, SessionSaveOptions>>()
+const wakeBarriers = new Map<string, Promise<void>>()
+const failedWakeSessions = new Set<string>()
 const sessionWriteEpochs = new Map<string, number>()
 const persistingSessionIds = new Set<string>()
 const historyConflicts = new Map<string, { payload: SessionFilePayload; toastId: string }>()
 const historyRecoveries = new Map<string, Promise<void>>()
+
+function advanceEdit(map: Map<string, number>, sessionId: string): void {
+  map.set(sessionId, (map.get(sessionId) ?? 0) + 1)
+}
+
+function hasPendingEdit(edits: Map<string, number>, acknowledged: Map<string, number>, sessionId: string): boolean {
+  return (edits.get(sessionId) ?? 0) !== (acknowledged.get(sessionId) ?? 0)
+}
+
+export function hasPendingSessionMetadata(sessionId: string): boolean {
+  return hasPendingEdit(metadataEditGenerations, acknowledgedMetadataGenerations, sessionId)
+}
+
+export function captureSessionMetadataAcknowledgement(sessionId: string): () => void {
+  const generation = metadataEditGenerations.get(sessionId) ?? 0
+  return () => {
+    if (deletedRemoteSessionIds.has(sessionId)) return
+    acknowledgedMetadataGenerations.set(sessionId,
+      Math.max(acknowledgedMetadataGenerations.get(sessionId) ?? 0, generation))
+  }
+}
+
+function hasPendingHistoryEdit(sessionId: string): boolean {
+  return hasPendingEdit(historyEditGenerations, acknowledgedHistoryGenerations, sessionId) ||
+    Boolean(pendingEntryRemovals.get(sessionId)?.size)
+}
 
 export function hasUnsavedSessionHistory(sessionId: string): boolean {
     return dirtySessionIds.has(sessionId) || persistingSessionIds.has(sessionId) ||
@@ -230,6 +267,11 @@ export function markRemoteSessionDeleted(sessionId: string): void {
   historyConflicts.delete(sessionId)
   pendingEntryRemovals.delete(sessionId)
   sessionEntriesRevisions.delete(sessionId)
+  sessionBaselineLengths.delete(sessionId)
+  wakeBarriers.delete(sessionId)
+  failedWakeSessions.delete(sessionId)
+  for (const map of [historyEditGenerations, metadataEditGenerations, agentEditGenerations,
+    acknowledgedHistoryGenerations, acknowledgedMetadataGenerations, acknowledgedAgentGenerations]) map.delete(sessionId)
 }
 
 export function invalidateSessionDiskCache(sessionId: string): void {
@@ -246,6 +288,7 @@ subscribeMessageEvents((event) => {
   if ((event.type === 'session-evicted' || event.type === 'session-cleared') && !hasUnsavedSessionHistory(event.sessionId)) {
     loadedSessionIds.delete(event.sessionId)
     sessionEntriesRevisions.delete(event.sessionId)
+    sessionBaselineLengths.delete(event.sessionId)
     pendingEntryRemovals.delete(event.sessionId)
     sessionReadEpochs.set(event.sessionId, (sessionReadEpochs.get(event.sessionId) ?? 0) + 1)
   }
@@ -1205,7 +1248,14 @@ function sanitizeSubAgentStatus(
 
 export function serializeAppState(): PersistedAppState {
   const rawEntries = useMessageStore.getState().entriesBySession
-  return {
+  const sessionOptions = new Map<string, SessionSaveOptions>()
+  for (const sessionId of Object.keys(rawEntries)) {
+    sessionOptions.set(sessionId, {
+      expectedEntriesRevision: sessionEntriesRevisions.get(sessionId),
+      snapshotGeneration: historyEditGenerations.get(sessionId) ?? 0,
+    })
+  }
+  const snapshot: PersistedAppState = {
     version: CURRENT_VERSION,
     settings: useSettingsStore.getState().settings,
     projects: useProjectStore.getState().projects,
@@ -1226,6 +1276,8 @@ export function serializeAppState(): PersistedAppState {
     bottomPanelHeight: useUiStore.getState().bottomPanelHeight,
     cachedModels: useModelCatalogStore.getState().models as import('@/features/models/types').ModelCatalogEntry[],
   }
+  serializedSessionOptions.set(snapshot, sessionOptions)
+  return snapshot
 }
 
 export function applyPersistedState(state: PersistedAppState): void {
@@ -1539,6 +1591,65 @@ function syncLoadedWorktreeSetup(
   })
 }
 
+type SessionSnapshot = NonNullable<ReturnType<typeof parseSessionFilePayload>> & { entriesRevision: string }
+
+// This read never acknowledges a version or changes stores. Invalid history must not look empty.
+async function readSessionSnapshot(sessionId: string): Promise<SessionSnapshot | null> {
+  const bridge = getHostBridge()
+  if (!bridge?.SessionGet) throw new Error('Session history read is unavailable')
+  const data = await bridge.SessionGet(sessionId) as { entries?: unknown; entriesRevision?: unknown } | null
+  if (!data || !Array.isArray(data.entries) ||
+    typeof data.entriesRevision !== 'string' || !data.entriesRevision) return null
+  const entries = data.entries as ConversationEntry[]
+  const ids = new Set<string>()
+  for (const entry of entries) {
+    if (!entry || entry.version !== 1 || entry.sessionId !== sessionId ||
+      typeof entry.id !== 'string' || !entry.id || ids.has(entry.id) || !sanitizeEntry(entry)) return null
+    ids.add(entry.id)
+  }
+  const parsed = parseSessionFilePayload(sessionId, data)
+  if (!parsed || parsed.entries.length !== entries.length) return null
+  return { ...parsed, entriesRevision: data.entriesRevision as string }
+}
+
+function canonicalEqual(a: unknown, b: unknown, depth = 0): boolean {
+  if (Object.is(a, b)) return true
+  if (depth > 64 || typeof a !== typeof b || !a || !b || typeof a !== 'object') return false
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return Array.isArray(a) && Array.isArray(b) && a.length === b.length &&
+      a.every((item, index) => canonicalEqual(item, b[index], depth + 1))
+  }
+  const left = a as Record<string, unknown>
+  const right = b as Record<string, unknown>
+  const keys = Object.keys(left)
+  return keys.length === Object.keys(right).length && keys.every((key) =>
+    Object.prototype.hasOwnProperty.call(right, key) && canonicalEqual(left[key], right[key], depth + 1))
+}
+
+export function isCanonicalHistoryPrefix(local: ConversationEntry[], remote: ConversationEntry[]): boolean {
+  if (local.length >= remote.length) return false
+  const ids = new Set<string>()
+  for (const entry of remote) {
+    if (!entry || (entry.version !== undefined && entry.version !== 1) || entry.sessionId !== remote[0].sessionId ||
+      typeof entry.id !== 'string' || !entry.id ||
+      ids.has(entry.id) || !sanitizeEntry(entry)) return false
+    ids.add(entry.id)
+  }
+  ids.clear()
+  for (const [index, entry] of local.entries()) {
+    const other = remote[index]
+    if (!entry || !other || (entry.version !== undefined && entry.version !== 1) ||
+      (other.version !== undefined && other.version !== 1) ||
+      entry.id !== other.id || entry.sessionId !== other.sessionId || entry.kind !== other.kind ||
+      ids.has(entry.id)) return false
+    ids.add(entry.id)
+    const left = sanitizeEntry(entry)
+    const right = sanitizeEntry(other)
+    if (!left || !right || !canonicalEqual(left, right)) return false
+  }
+  return true
+}
+
 export async function loadSessionData(
   sessionId: string,
 ): Promise<{
@@ -1562,16 +1673,20 @@ export async function loadSessionData(
       const epoch = sessionReadEpochs.get(sessionId)
       const data = await bridge.SessionGet(sessionId)
       if (data) {
+        const parsed = parseSessionFilePayload(sessionId, data)
         const revision = (data as { entriesRevision?: unknown }).entriesRevision
         const hasLiveEntries = useMessageStore.getState().entriesBySession[sessionId] !== undefined
         // A merge must not silently authorize old live entries against a newer remote history.
-        const canReplaceBaseline = baseline === undefined || (!hasLiveEntries && !hasUnsavedSessionHistory(sessionId))
-        if (typeof revision === 'string' &&
+        const canReplaceBaseline = !hasLiveEntries && !hasUnsavedSessionHistory(sessionId)
+        if (parsed && typeof revision === 'string' &&
           sessionReadEpochs.get(sessionId) === epoch &&
           sessionEntriesRevisions.get(sessionId) === baseline && canReplaceBaseline) {
           sessionEntriesRevisions.set(sessionId, revision)
+          if (Array.isArray((data as { entries?: unknown }).entries) &&
+            parsed.entries.length === (data as { entries: unknown[] }).entries.length) {
+            sessionBaselineLengths.set(sessionId, parsed.entries.length)
+          }
         }
-        const parsed = parseSessionFilePayload(sessionId, data)
         if (parsed) {
           syncLoadedWorktreeSetup(sessionId, parsed)
         }
@@ -1616,14 +1731,28 @@ export async function saveSessionData(
   sessionId: string,
   entries: ConversationEntry[],
   subAgents?: SubAgentRecord[],
+  options?: SessionSaveOptions,
 ): Promise<void> {
   if (!sessionId) return
   if (deletedRemoteSessionIds.has(sessionId)) return
   const epoch = sessionWriteEpochs.get(sessionId) ?? 0
+  const editGeneration = options?.snapshotGeneration ?? historyEditGenerations.get(sessionId) ?? 0
+  const capturedEntries = sanitizeConversationEntries({ [sessionId]: entries })[sessionId] ?? []
+  const revisionAtEnqueue = options ? options.expectedEntriesRevision : sessionEntriesRevisions.get(sessionId)
   const previous = sessionWrites.get(sessionId)
   const write = (previous ?? Promise.resolve()).catch(() => {}).then(() => {
     if (deletedRemoteSessionIds.has(sessionId) || (sessionWriteEpochs.get(sessionId) ?? 0) !== epoch) return
-    return writeSessionData(sessionId, entries, subAgents)
+    const live = useMessageStore.getState().entriesBySession[sessionId]
+    const currentRevision = sessionEntriesRevisions.get(sessionId)
+    if (revisionAtEnqueue !== currentRevision && options &&
+      (!live || !canonicalEqual(sanitizeConversationEntries({ [sessionId]: live })[sessionId], capturedEntries))) return
+    const superseded = live && revisionAtEnqueue !== currentRevision &&
+      editGeneration <= (acknowledgedHistoryGenerations.get(sessionId) ?? 0)
+    if (superseded && !hasPendingHistoryEdit(sessionId) && !hasPendingSessionMetadata(sessionId) &&
+      !hasPendingEdit(agentEditGenerations, acknowledgedAgentGenerations, sessionId)) return
+    return writeSessionData(sessionId, superseded ? live : capturedEntries, subAgents,
+      false, superseded && !options ? (historyEditGenerations.get(sessionId) ?? 0) : editGeneration,
+      currentRevision)
   })
   sessionWrites.set(sessionId, write)
   try {
@@ -1633,11 +1762,156 @@ export async function saveSessionData(
   }
 }
 
+type FastForwardResult = 'applied' | 'current' | 'diverged' | 'deferred'
+
+async function tryFastForwardSessionHistory(
+  sessionId: string,
+  entries: ConversationEntry[],
+  expectedRevision: string | undefined,
+  failedRemovals: readonly string[] = [],
+  allowCleanMirror = false,
+  isValid: () => boolean = () => true,
+): Promise<FastForwardResult> {
+  const live = useMessageStore.getState().entriesBySession[sessionId]
+  const baseline = sessionBaselineLengths.get(sessionId)
+  const removal = pendingEntryRemovals.get(sessionId)
+  if (deletedRemoteSessionIds.has(sessionId) || historyConflicts.has(sessionId) || historyRecoveries.has(sessionId) ||
+    isSessionRunning(sessionId) || (expectedRevision && sessionEntriesRevisions.get(sessionId) !== expectedRevision) ||
+    (live && !canonicalEqual(sanitizeConversationEntries({ [sessionId]: live })[sessionId],
+      sanitizeConversationEntries({ [sessionId]: entries })[sessionId]))) return 'deferred'
+  if (!expectedRevision || baseline === undefined || !live || failedRemovals.length || removal?.size ||
+    live.length < baseline || hasPendingEdit(agentEditGenerations, acknowledgedAgentGenerations, sessionId)) return 'diverged'
+  const readEpoch = sessionReadEpochs.get(sessionId) ?? 0
+  const writeEpoch = sessionWriteEpochs.get(sessionId) ?? 0
+  const editGeneration = historyEditGenerations.get(sessionId) ?? 0
+  const metadataGeneration = metadataEditGenerations.get(sessionId) ?? 0
+  const agentGeneration = agentEditGenerations.get(sessionId) ?? 0
+  const removalSequence = entryRemovalSequence
+  const snapshot = allowCleanMirror
+    ? await readSessionSnapshot(sessionId)
+    : await readSessionSnapshot(sessionId).catch(() => null)
+  if (!snapshot) {
+    if (allowCleanMirror) throw new Error('Session history read returned an invalid snapshot')
+    return 'deferred'
+  }
+  if (!isValid() || deletedRemoteSessionIds.has(sessionId) || historyConflicts.has(sessionId) || historyRecoveries.has(sessionId) ||
+    isSessionRunning(sessionId) || (sessionReadEpochs.get(sessionId) ?? 0) !== readEpoch ||
+    (sessionWriteEpochs.get(sessionId) ?? 0) !== writeEpoch ||
+    (historyEditGenerations.get(sessionId) ?? 0) !== editGeneration ||
+    (metadataEditGenerations.get(sessionId) ?? 0) !== metadataGeneration ||
+    (agentEditGenerations.get(sessionId) ?? 0) !== agentGeneration ||
+    entryRemovalSequence !== removalSequence || pendingEntryRemovals.get(sessionId)?.size ||
+    sessionEntriesRevisions.get(sessionId) !== expectedRevision ||
+    useMessageStore.getState().entriesBySession[sessionId] !== live) return 'deferred'
+  if (snapshot.entriesRevision === expectedRevision) return 'current'
+  if (!isCanonicalHistoryPrefix(live, snapshot.entries)) {
+    if (!allowCleanMirror || hasPendingHistoryEdit(sessionId)) return 'diverged'
+    // A clean remote mirror may have grown within its last streamed entry.
+  }
+  withSuppressedPersistence(() => {
+    useMessageStore.getState().replaceSessionEntries(sessionId, snapshot.entries)
+    useSubAgentStore.getState().setAgentsForParent(sessionId, snapshot.subAgents ?? [])
+  })
+  sessionEntriesRevisions.set(sessionId, snapshot.entriesRevision)
+  sessionBaselineLengths.set(sessionId, snapshot.entries.length)
+  acknowledgedHistoryGenerations.set(sessionId, editGeneration)
+  acknowledgedAgentGenerations.set(sessionId, agentGeneration)
+  if (!hasPendingSessionMetadata(sessionId) && !hasPendingHistoryEdit(sessionId)) dirtySessionIds.delete(sessionId)
+  sessionReadEpochs.set(sessionId, readEpoch + 1)
+  loadedSessionIds.add(sessionId)
+  staleSessionIds.delete(sessionId)
+  return 'applied'
+}
+
+// Enqueue wake-up reads on the same per-session boundary as saves.
+export async function awaitSessionWakeBarrier(sessionId: string): Promise<void> {
+  const barrier = wakeBarriers.get(sessionId)
+  if (barrier) await barrier
+  else if (failedWakeSessions.has(sessionId)) throw new Error('Session wake synchronization is pending retry')
+}
+
+export function fastForwardSessionOnWake(
+  sessionId: string,
+  statusReady: Promise<boolean> = Promise.resolve(true),
+  isValid: () => boolean = () => true,
+): Promise<void> {
+  if (!sessionId || deletedRemoteSessionIds.has(sessionId)) return Promise.resolve()
+  const previous = sessionWrites.get(sessionId)
+  const epoch = sessionWriteEpochs.get(sessionId) ?? 0
+  const read = (previous ?? Promise.resolve()).catch(() => {}).then(async () => {
+    if (!await statusReady) throw new Error('Unable to verify session run status after reconnect')
+    if (!isValid() || (sessionWriteEpochs.get(sessionId) ?? 0) !== epoch) {
+      throw new Error('SESSION_HISTORY_PENDING: Session changed during wake')
+    }
+    if (isSessionRunning(sessionId)) return
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const live = useMessageStore.getState().entriesBySession[sessionId]
+      const revision = sessionEntriesRevisions.get(sessionId)
+      if (live && revision) {
+        const result = await tryFastForwardSessionHistory(sessionId, live, revision, [], true, isValid)
+        if (result === 'applied' || result === 'current') return
+        if (result === 'diverged') break
+      } else if (!hasPendingHistoryEdit(sessionId) &&
+        !hasPendingEdit(agentEditGenerations, acknowledgedAgentGenerations, sessionId) &&
+        !historyConflicts.has(sessionId) && !historyRecoveries.has(sessionId)) {
+        const readEpoch = sessionReadEpochs.get(sessionId) ?? 0
+        const editGeneration = historyEditGenerations.get(sessionId) ?? 0
+        const agentGeneration = agentEditGenerations.get(sessionId) ?? 0
+        const metadataGeneration = metadataEditGenerations.get(sessionId) ?? 0
+        const removalSequence = entryRemovalSequence
+        const snapshot = await readSessionSnapshot(sessionId)
+        if (!snapshot) throw new Error('Session history read returned an invalid snapshot')
+        if (isValid() && !deletedRemoteSessionIds.has(sessionId) && !isSessionRunning(sessionId) &&
+          useMessageStore.getState().entriesBySession[sessionId] === live &&
+          (sessionReadEpochs.get(sessionId) ?? 0) === readEpoch &&
+          (sessionWriteEpochs.get(sessionId) ?? 0) === epoch &&
+          (historyEditGenerations.get(sessionId) ?? 0) === editGeneration &&
+          (agentEditGenerations.get(sessionId) ?? 0) === agentGeneration &&
+          (metadataEditGenerations.get(sessionId) ?? 0) === metadataGeneration &&
+          entryRemovalSequence === removalSequence && !pendingEntryRemovals.get(sessionId)?.size) {
+          withSuppressedPersistence(() => {
+            useMessageStore.getState().replaceSessionEntries(sessionId, snapshot.entries)
+            useSubAgentStore.getState().setAgentsForParent(sessionId, snapshot.subAgents ?? [])
+          })
+          sessionEntriesRevisions.set(sessionId, snapshot.entriesRevision)
+          sessionBaselineLengths.set(sessionId, snapshot.entries.length)
+          loadedSessionIds.add(sessionId)
+          staleSessionIds.delete(sessionId)
+          sessionReadEpochs.set(sessionId, readEpoch + 1)
+          return
+        }
+      } else {
+        break
+      }
+      if (!isValid() || deletedRemoteSessionIds.has(sessionId) || isSessionRunning(sessionId) ||
+        (sessionWriteEpochs.get(sessionId) ?? 0) !== epoch) break
+    }
+    throw new Error('SESSION_HISTORY_PENDING: Session history changed during wake')
+  })
+  sessionWrites.set(sessionId, read)
+  wakeBarriers.set(sessionId, read)
+  void read.then(() => {
+    if (wakeBarriers.get(sessionId) === read) failedWakeSessions.delete(sessionId)
+  }, () => {
+    if (wakeBarriers.get(sessionId) === read) failedWakeSessions.add(sessionId)
+  }).finally(() => {
+    if (wakeBarriers.get(sessionId) === read) wakeBarriers.delete(sessionId)
+  }).finally(() => {
+    if (sessionWrites.get(sessionId) === read) sessionWrites.delete(sessionId)
+  }).catch(() => {})
+  return read
+}
+
 async function writeSessionData(
   sessionId: string,
   entries: ConversationEntry[],
   subAgents?: SubAgentRecord[],
+  retry = false,
+  historyGeneration = historyEditGenerations.get(sessionId) ?? 0,
+  expectedEntriesRevision = sessionEntriesRevisions.get(sessionId),
 ): Promise<void> {
+  const metadataGeneration = metadataEditGenerations.get(sessionId) ?? 0
+  const agentGeneration = agentEditGenerations.get(sessionId) ?? 0
   const sanitized =
     sanitizeConversationEntries({ [sessionId]: entries })[sessionId] ?? []
   const sessionAgents =
@@ -1682,7 +1956,7 @@ async function writeSessionData(
     id: sessionId,
     version: CURRENT_VERSION,
     entries: sanitized,
-    expectedEntriesRevision: sessionEntriesRevisions.get(sessionId),
+    expectedEntriesRevision,
     removedEntryIds: Array.from(removals.keys()),
     ...(session?.title ? { title: session.title } : {}),
     ...(session?.pinned !== undefined ? { pinned: session.pinned } : {}),
@@ -1723,6 +1997,17 @@ async function writeSessionData(
     } catch (error) {
       if (String(error).includes('SESSION_DELETED')) markRemoteSessionDeleted(sessionId)
       if (String(error).includes('SESSION_HISTORY_CONFLICT') && !deletedRemoteSessionIds.has(sessionId)) {
+        if (retry) throw new Error('SESSION_HISTORY_PENDING: Remote history changed again')
+        const result = await tryFastForwardSessionHistory(sessionId, payload.entries,
+          payload.expectedEntriesRevision, payload.removedEntryIds)
+        if (result === 'applied') {
+          if (hasPendingSessionMetadata(sessionId)) {
+            return writeSessionData(sessionId, useMessageStore.getState().getEntries(sessionId), undefined, true,
+              historyEditGenerations.get(sessionId) ?? 0)
+          }
+          return
+        }
+        if (result === 'deferred') throw new Error('SESSION_HISTORY_PENDING: Remote history unavailable or changed during read')
         const toastId = useUiStore.getState().pushToast(
           `History conflict in "${payload.title || sessionId}". Stop this session, then preserve a local copy and reload.`,
           { label: 'Preserve & reload', run: () => {
@@ -1737,6 +2022,11 @@ async function writeSessionData(
     }
     if (deletedRemoteSessionIds.has(sessionId)) return
     sessionEntriesRevisions.set(sessionId, revision)
+    sessionBaselineLengths.set(sessionId, sanitized.length)
+    acknowledgedHistoryGenerations.set(sessionId, historyGeneration)
+    acknowledgedMetadataGenerations.set(sessionId,
+      Math.max(acknowledgedMetadataGenerations.get(sessionId) ?? 0, metadataGeneration))
+    acknowledgedAgentGenerations.set(sessionId, agentGeneration)
     sessionReadEpochs.set(sessionId, (sessionReadEpochs.get(sessionId) ?? 0) + 1)
     const removed = pendingEntryRemovals.get(sessionId)
     for (const [id, sequence] of removals) {
@@ -1789,6 +2079,7 @@ export function recoverSessionHistory(sessionId: string): Promise<void> {
             useMessageStore.getState().replaceSessionEntries(copyId, copyEntries)
         })
         sessionEntriesRevisions.set(copyId, copyRevision)
+        sessionBaselineLengths.set(copyId, copyEntries.length)
         const remote = await loadSessionData(sessionId)
         if (!remote?.entriesRevision) throw new Error('Remote history unavailable. Local conflict copy was preserved.')
         const removals = pendingEntryRemovals.get(sessionId)
@@ -1804,6 +2095,9 @@ export function recoverSessionHistory(sessionId: string): Promise<void> {
             useSubAgentStore.getState().setAgentsForParent(sessionId, remote.subAgents ?? [])
         })
         sessionEntriesRevisions.set(sessionId, remote.entriesRevision)
+        sessionBaselineLengths.set(sessionId, remote.entries.length)
+        acknowledgedHistoryGenerations.set(sessionId, historyEditGenerations.get(sessionId) ?? 0)
+        acknowledgedAgentGenerations.set(sessionId, agentEditGenerations.get(sessionId) ?? 0)
         pendingEntryRemovals.delete(sessionId)
         dirtySessionIds.delete(sessionId)
         historyConflicts.delete(sessionId)
@@ -1838,7 +2132,7 @@ export async function deleteSessionLocalCache(sessionId: string): Promise<void> 
   if (!sessionId) return
   markRemoteSessionDeleted(sessionId)
   sessionDeletionHook?.(sessionId)
-  return withSuppressedPersistence(async () => {
+  return withSuppressedPersistence(() => {
     loadedSessionIds.delete(sessionId)
     staleSessionIds.delete(sessionId)
 
@@ -2003,6 +2297,9 @@ function hydrateSessionFromDisk(
     })
     if (!mergeLive && loaded.entriesRevision) {
       sessionEntriesRevisions.set(sessionId, loaded.entriesRevision)
+      sessionBaselineLengths.set(sessionId, loaded.entries.length)
+      acknowledgedHistoryGenerations.set(sessionId, historyEditGenerations.get(sessionId) ?? 0)
+      acknowledgedAgentGenerations.set(sessionId, agentEditGenerations.get(sessionId) ?? 0)
     }
     loadedSessionIds.add(sessionId)
     staleSessionIds.delete(sessionId)
@@ -2444,18 +2741,25 @@ export async function savePersistedState(
 
   const errors: unknown[] = []
   let succeeded = false
+  // Capture payloads and their baselines before the first asynchronous store lookup.
+  const sessionSnapshots = new Map<string, { entries: ConversationEntry[]; options: SessionSaveOptions }>()
+  const serializedOptions = serializedSessionOptions.get(state)
+  for (const sessionId of Object.keys(state.messagesBySession)) {
+    if (options?.sessionIds && !options.sessionIds.has(sessionId)) continue
+    sessionSnapshots.set(sessionId, {
+      entries: sanitizeConversationEntries({ [sessionId]: state.messagesBySession[sessionId] })[sessionId] ?? [],
+      options: serializedOptions?.get(sessionId) ?? {
+        expectedEntriesRevision: sessionEntriesRevisions.get(sessionId),
+        snapshotGeneration: historyEditGenerations.get(sessionId) ?? 0,
+      },
+    })
+  }
 
   const store = await getNativeStore()
   if (store) {
     try {
       const requestedSessionIds = options?.sessionIds
-      const activeMemorySessionIds = new Set(
-        Object.keys(state.messagesBySession).filter(
-          (sessionId) =>
-            requestedSessionIds === undefined ||
-            requestedSessionIds.has(sessionId),
-        ),
-      )
+      const activeMemorySessionIds = new Set(sessionSnapshots.keys())
 
       const historyErrors: unknown[] = []
       const captureHistoryError = (error: unknown) => { historyErrors.push(error) }
@@ -2466,7 +2770,9 @@ export async function savePersistedState(
           .map((sessionId) =>
             saveSessionData(
               sessionId,
-              state.messagesBySession[sessionId] ?? [],
+              sessionSnapshots.get(sessionId)!.entries,
+              undefined,
+              sessionSnapshots.get(sessionId)!.options,
             ).catch(captureHistoryError),
           ),
       )
@@ -2589,12 +2895,12 @@ export async function savePersistedState(
 
   // Fall back to localStorage when native store is unavailable or failed; one success is enough.
   try {
-    const activeMemorySessionIds = new Set(Object.keys(state.messagesBySession))
+    const activeMemorySessionIds = new Set(sessionSnapshots.keys())
     for (const sessionId of activeMemorySessionIds) {
       if (isRemoteActive(sessionId)) continue
-      const entries = state.messagesBySession[sessionId] ?? []
-      if (entries.length > 0) {
-        await saveSessionData(sessionId, entries)
+      const snapshot = sessionSnapshots.get(sessionId)!
+      if (snapshot.entries.length > 0) {
+        await saveSessionData(sessionId, snapshot.entries, undefined, snapshot.options)
       }
     }
     const allAgents = useSubAgentStore.getState().agents
@@ -2680,6 +2986,11 @@ async function runPersistWrite(): Promise<void> {
     await savePersistedState(snapshot, {
       sessionIds: sessionIdsAtStart,
     })
+    for (const sessionId of sessionIdsAtStart) {
+      if (isBrowserEnvironment() && isSessionRunning(sessionId) && !deletedRemoteSessionIds.has(sessionId)) {
+        dirtySessionIds.add(sessionId)
+      }
+    }
     lastWriteError = null
     writeAttempt = 0
     clearRetryTimer()
@@ -3022,27 +3333,28 @@ export function bindPersistence(options?: BindPersistenceOptions): void {
   )
   unsubscribers.push(
     useSessionStore.subscribe((state) => {
-      if (reloadDepth > 0) return
+      const suppressed = reloadDepth > 0
       const currentIds = new Set(state.sessions.map((s) => s.id))
-      for (const session of state.sessions) {
-        if (previousSessionsById.get(session.id) !== session) {
-          dirtySessionIds.add(session.id)
+      if (!suppressed) {
+        for (const session of state.sessions) {
+          if (previousSessionsById.get(session.id) !== session) {
+            dirtySessionIds.add(session.id)
+            advanceEdit(metadataEditGenerations, session.id)
+          }
         }
-      }
-      for (const id of previousSessionIds) {
-        if (!currentIds.has(id)) {
-          if (deletedRemoteSessionIds.has(id)) {
-            void deleteSessionLocalCache(id)
-          } else {
-            void deleteSessionEntries(id)
+        for (const id of previousSessionIds) {
+          if (!currentIds.has(id)) {
+            if (deletedRemoteSessionIds.has(id)) {
+              void deleteSessionLocalCache(id)
+            } else {
+              void deleteSessionEntries(id)
+            }
           }
         }
       }
       previousSessionIds = currentIds
-      previousSessionsById = new Map(
-        state.sessions.map((session) => [session.id, session]),
-      )
-      schedulePersist()
+      previousSessionsById = new Map(state.sessions.map((session) => [session.id, session]))
+      if (!suppressed) schedulePersist()
     }),
   )
   unsubscribers.push(
@@ -3059,22 +3371,32 @@ export function bindPersistence(options?: BindPersistenceOptions): void {
         return
       }
       if (state.agents !== previousAgents) {
-        const previousById = new Map(
-          previousAgents.map((agent) => [agent.id, agent]),
-        )
+        const previousById = new Map(previousAgents.map((agent) => [agent.id, agent]))
         const nextIds = new Set(state.agents.map((agent) => agent.id))
         for (const agent of state.agents) {
           if (previousById.get(agent.id) !== agent) {
             dirtySessionIds.add(agent.parentSessionId)
+            advanceEdit(agentEditGenerations, agent.parentSessionId)
           }
         }
         for (const agent of previousAgents) {
           if (!nextIds.has(agent.id)) {
             dirtySessionIds.add(agent.parentSessionId)
+            advanceEdit(agentEditGenerations, agent.parentSessionId)
           }
         }
         previousAgents = state.agents
         schedulePersist()
+      }
+    }),
+  )
+  unsubscribers.push(
+    useSessionRunStore.subscribe((state, previous) => {
+      for (const sessionId of dirtySessionIds) {
+        if (previous.activeRuns[sessionId] && !state.activeRuns[sessionId]) {
+          schedulePersist()
+          break
+        }
       }
     }),
   )
@@ -3087,6 +3409,7 @@ export function bindPersistence(options?: BindPersistenceOptions): void {
           prev.entriesBySession[sessionId]
         ) {
           dirtySessionIds.add(sessionId)
+          advanceEdit(historyEditGenerations, sessionId)
         }
       }
       let urgency: PersistUrgency = 'debounce'
@@ -3236,11 +3559,20 @@ export function __resetPersistenceForTests(): void {
   loadedSessionIds.clear()
   staleSessionIds.clear()
   sessionEntriesRevisions.clear()
+  sessionBaselineLengths.clear()
+  historyEditGenerations.clear()
+  metadataEditGenerations.clear()
+  agentEditGenerations.clear()
+  acknowledgedHistoryGenerations.clear()
+  acknowledgedMetadataGenerations.clear()
+  acknowledgedAgentGenerations.clear()
   pendingEntryRemovals.clear()
   entryRemovalSequence = 0
   sessionReadEpochs.clear()
   sessionHydrations.clear()
   sessionWrites.clear()
+  wakeBarriers.clear()
+  failedWakeSessions.clear()
   sessionWriteEpochs.clear()
   persistingSessionIds.clear()
   historyConflicts.clear()

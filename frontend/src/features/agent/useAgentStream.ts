@@ -47,6 +47,7 @@ import {
     ensureSessionLoaded,
     flushPendingPersistence,
     schedulePersist,
+    awaitSessionWakeBarrier,
     withSuppressedPersistence,
 } from '@/application/services/persistenceService'
 import {
@@ -424,7 +425,7 @@ function bindNativeSync(service: AgentService): void {
                     agents?: SubAgentRecord[]
                 }
                 if (parsed.agents && Array.isArray(parsed.agents)) {
-                    useSubAgentStore.getState().mergeHostAgents(parsed.agents)
+                    withSuppressedPersistence(() => useSubAgentStore.getState().mergeHostAgents(parsed.agents!))
                 }
             } catch {
                 // Ignore JSON parse error
@@ -3252,13 +3253,15 @@ export function useAgentStream(
             if (!trimmed && images.length === 0) return null
 
             if (isBrowserEnvironment()) {
-                const sessionState = useSessionStore.getState()
+                const initialSessionState = useSessionStore.getState()
                 const targetSessionId =
                     payload.sessionId !== undefined
                         ? (payload.sessionId || null)
                         : (scopedSessionId !== undefined
                             ? (scopedSessionId || null)
-                            : (sessionState.currentSessionId || null))
+                            : (initialSessionState.currentSessionId || null))
+                if (targetSessionId) await awaitSessionWakeBarrier(targetSessionId)
+                const sessionState = useSessionStore.getState()
                 const targetSession = targetSessionId
                     ? sessionState.sessions.find((s) => s.id === targetSessionId)
                     : undefined

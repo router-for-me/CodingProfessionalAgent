@@ -92,6 +92,7 @@ import {
     initPersistence,
     flushPendingPersistence,
     ensureSessionLoaded,
+    captureSessionMetadataAcknowledgement,
     schedulePersist,
     setSessionDeletionHook,
 } from './persistenceService'
@@ -290,15 +291,6 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
                 await capabilityClient.invoke('sessions.update', [sessionId, patch])
                 return
             }
-            const bridge = getHostBridge()
-            if (typeof bridge?.SessionSetMeta === 'function') {
-                const current = useSessionStore.getState().sessions.find((s) => s.id === sessionId)
-                if (current) {
-                    const merged = { ...current, ...patch }
-                    const unread = merged.unread === 'error' ? 'error' : merged.unread === true
-                    void bridge.SessionSetMeta({ ...merged, unread }).catch(() => {})
-                }
-            }
             if (patch.rightSidebar) {
                 useSessionStore.getState().setSessionRightSidebar?.(sessionId, patch.rightSidebar)
             }
@@ -345,6 +337,16 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
                         patch.worktreePath !== undefined ? patch.worktreePath : cur.worktreePath,
                         patch.environmentId !== undefined ? patch.environmentId : cur.environmentId,
                     )
+                }
+            }
+            const bridge = getHostBridge()
+            if (typeof bridge?.SessionSetMeta === 'function') {
+                const current = useSessionStore.getState().sessions.find((s) => s.id === sessionId)
+                if (current) {
+                    const merged = { ...current, ...patch }
+                    const unread = merged.unread === 'error' ? 'error' : merged.unread === true
+                    const acknowledge = captureSessionMetadataAcknowledgement(sessionId)
+                    await bridge.SessionSetMeta({ ...merged, unread }).then(acknowledge).catch(() => {})
                 }
             }
         },

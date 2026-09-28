@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { rendererRegistry } from '@/plugins/platform/rendererRegistry'
 import { rendererPluginRuntime } from '@/plugins/platform/RendererPluginRuntimeHost'
-import { bootstrapApplication, resyncFromMain } from './bootstrapApplication'
+import { bootstrapApplication, disposeBootstrapSubscriptions, resyncFromMain } from './bootstrapApplication'
 import { setHostBridge } from './hostTransport'
-import { __resetPersistenceForTests, withSuppressedPersistence } from './persistenceService'
+import { __resetPersistenceForTests, awaitSessionWakeBarrier, ensureSessionLoaded, flushPendingPersistence, withSuppressedPersistence } from './persistenceService'
 import { useSessionRunStore } from '@/stores/sessionRunStore'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useMessageStore } from '@/stores/messageStore'
@@ -13,12 +13,135 @@ import type { Session } from '@/types/models'
 
 describe('bootstrapApplication', () => {
     afterEach(async () => {
+        disposeBootstrapSubscriptions()
         setHostBridge(null);
         __resetPersistenceForTests()
         useProjectStore.setState({ projects: [] })
         await rendererPluginRuntime.reset()
         rendererRegistry.clear()
         vi.restoreAllMocks()
+    })
+
+    it('audit: accepts later remote metadata after an unloaded session metadata save', async () => {
+        const id = 'audit-unloaded-metadata'
+        localStorage.clear()
+        useSessionStore.setState({ sessions: [], currentSessionId: null })
+        let handler!: (event: any) => Promise<void>
+        const session = { id, title: 'Original', pinned: false, createdAt: 1, updatedAt: 1 }
+        const SessionSetMeta = vi.fn().mockResolvedValue(undefined)
+        setHostBridge({ StorageGet: vi.fn().mockResolvedValue(null), StorageSet: vi.fn(),
+            SessionListSessions: vi.fn().mockResolvedValue([session]), SessionSetMeta,
+            SessionGetActiveRuns: vi.fn().mockResolvedValue([]), PluginsScan: vi.fn().mockResolvedValue([]),
+            onNativeEvent: vi.fn((callback) => { handler = callback; return () => {} }),
+        } as any)
+        await bootstrapApplication()
+        const { getHostServices } = await import('./createHostServices')
+        await getHostServices().sessions.update(id, { unread: true })
+        await flushPendingPersistence()
+        expect(SessionSetMeta).toHaveBeenCalled()
+        await handler({ kind: 'session:meta-updated', data: JSON.stringify({ ...session, title: 'New remote', updatedAt: 100 }) })
+        expect(useSessionStore.getState().sessions.find((item) => item.id === id)?.title).toBe('New remote')
+    })
+
+    it('audit: a successful wake barrier contains remote history even if metadata changed during the read', async () => {
+        const id = 'audit-deferred-wake'
+        localStorage.clear()
+        useSessionStore.setState({ sessions: [], currentSessionId: null })
+        const old = { id: 'p', sessionId: id, kind: 'assistant', version: 1, createdAt: 1,
+            content: [{ type: 'text', text: 'old' }], status: 'done', stopReason: 'stop' }
+        const answer = { ...old, id: 'answer', content: [{ type: 'text', text: 'new answer' }] }
+        let resolveRead!: (snapshot: unknown) => void
+        const SessionGet = vi.fn().mockResolvedValueOnce({ entries: [old], entriesRevision: 'r1' })
+            .mockImplementationOnce(() => new Promise(resolve => { resolveRead = resolve }))
+            .mockResolvedValue({ entries: [old, answer], entriesRevision: 'r2' })
+        setHostBridge({ StorageGet: vi.fn().mockResolvedValue(null), StorageSet: vi.fn(),
+            SessionGetActiveRuns: vi.fn().mockResolvedValue([]), SessionGet, PluginsScan: vi.fn().mockResolvedValue([]) } as any)
+        await bootstrapApplication()
+        withSuppressedPersistence(() => useSessionStore.setState({ sessions: [
+            { id, title: 'Original', pinned: false, createdAt: 1, updatedAt: 1 },
+        ], currentSessionId: id }))
+        await ensureSessionLoaded(id)
+        const visibility = vi.spyOn(document, 'visibilityState', 'get')
+        visibility.mockReturnValue('hidden')
+        document.dispatchEvent(new Event('visibilitychange'))
+        visibility.mockReturnValue('visible')
+        document.dispatchEvent(new Event('visibilitychange'))
+        const barrier = awaitSessionWakeBarrier(id)
+        await vi.waitFor(() => expect(SessionGet).toHaveBeenCalledTimes(2))
+        useSessionStore.getState().renameSession(id, 'Local title')
+        resolveRead({ entries: [old, answer], entriesRevision: 'r2' })
+        await barrier
+        expect(useMessageStore.getState().getEntries(id)).toHaveLength(2)
+    })
+
+    it('does not erase a newer run event with a slow stale active-runs response', async () => {
+        let resolveRuns!: (runs: unknown[]) => void
+        let now = 10000
+        vi.spyOn(Date, 'now').mockImplementation(() => now)
+        useSessionRunStore.setState({ activeRuns: {} })
+        setHostBridge({ SessionGetActiveRuns: vi.fn(() => new Promise(resolve => { resolveRuns = resolve })) } as any)
+        const sync = resyncFromMain()
+        useSessionRunStore.getState().setRun('audit', {
+            sessionId: 'audit', status: 'running', runId: 'new-run', clientId: 'host', updatedAt: now,
+        })
+        now += 3000
+        resolveRuns([])
+        await expect(sync).resolves.toBe(false)
+        expect(useSessionRunStore.getState().activeRuns.audit?.runId).toBe('new-run')
+    })
+
+    it('keeps the target wake barrier valid when an unrelated run event races the status query', async () => {
+        const id = 'audit'
+        const old = { id: 'p', sessionId: id, kind: 'assistant', version: 1, createdAt: 1,
+            content: [{ type: 'text', text: 'old' }], status: 'done', stopReason: 'stop' }
+        let resolveRuns!: (runs: unknown[]) => void
+        const SessionGetActiveRuns = vi.fn().mockResolvedValue([])
+        const SessionGet = vi.fn().mockResolvedValue({ entries: [old], entriesRevision: 'r1' })
+        setHostBridge({ StorageGet: vi.fn().mockResolvedValue(null), StorageSet: vi.fn(),
+            SessionGetActiveRuns, SessionGet, PluginsScan: vi.fn().mockResolvedValue([]) } as any)
+        await bootstrapApplication()
+        withSuppressedPersistence(() => useSessionStore.setState({ sessions: [
+            { id, title: 'Audit', createdAt: 1, updatedAt: 1, pinned: false },
+        ], currentSessionId: id }))
+        await ensureSessionLoaded(id)
+        SessionGetActiveRuns.mockImplementationOnce(() => new Promise(resolve => { resolveRuns = resolve }))
+        const visibility = vi.spyOn(document, 'visibilityState', 'get')
+        visibility.mockReturnValue('hidden')
+        document.dispatchEvent(new Event('visibilitychange'))
+        visibility.mockReturnValue('visible')
+        document.dispatchEvent(new Event('visibilitychange'))
+        useSessionRunStore.getState().setRun('other', {
+            sessionId: 'other', status: 'running', runId: 'new-run', clientId: 'host', updatedAt: Date.now(),
+        })
+        resolveRuns([])
+        await expect(awaitSessionWakeBarrier(id)).resolves.toBeUndefined()
+        expect(useSessionRunStore.getState().activeRuns.other?.runId).toBe('new-run')
+    })
+
+    it('retries a failed status query without leaving a permanently rejected send barrier', async () => {
+        const id = 'retry-wake'
+        const entry = { id: 'p', sessionId: id, kind: 'assistant', version: 1, createdAt: 1,
+            content: [{ type: 'text', text: 'old' }], status: 'done', stopReason: 'stop' }
+        const SessionGetActiveRuns = vi.fn().mockResolvedValueOnce([])
+            .mockRejectedValueOnce(new Error('temporary status failure')).mockResolvedValue([])
+        const SessionGet = vi.fn().mockResolvedValue({ entries: [entry], entriesRevision: 'r1' })
+        setHostBridge({ StorageGet: vi.fn().mockResolvedValue(null), StorageSet: vi.fn(),
+            SessionGetActiveRuns, SessionGet, PluginsScan: vi.fn().mockResolvedValue([]) } as any)
+        await bootstrapApplication()
+        withSuppressedPersistence(() => useSessionStore.setState({ sessions: [
+            { id, title: 'Retry', createdAt: 1, updatedAt: 1, pinned: false },
+        ], currentSessionId: id }))
+        await ensureSessionLoaded(id)
+        const visibility = vi.spyOn(document, 'visibilityState', 'get')
+        visibility.mockReturnValue('hidden')
+        document.dispatchEvent(new Event('visibilitychange'))
+        visibility.mockReturnValue('visible')
+        document.dispatchEvent(new Event('visibilitychange'))
+        const firstBarrier = awaitSessionWakeBarrier(id)
+        await expect(firstBarrier).rejects.toThrow('Unable to verify session run status')
+        await expect(awaitSessionWakeBarrier(id)).rejects.toThrow('pending retry')
+        await vi.waitFor(() => expect(SessionGetActiveRuns).toHaveBeenCalledTimes(3))
+        await vi.waitFor(() => expect(awaitSessionWakeBarrier(id)).resolves.toBeUndefined())
     })
 
     it('registers and activates core plugins and initializes persistence', async () => {
@@ -87,6 +210,91 @@ describe('bootstrapApplication', () => {
             useSessionRunStore.setState({ activeRuns: previousRuns })
             useSessionStore.setState({ currentSessionId: previousCurrent })
         }
+    })
+
+    it('silently catches up a visible idle browser session without a reconnect or save echo', async () => {
+        const id = 'visible-session'
+        const prompt = { id: 'prompt', sessionId: id, kind: 'user', version: 1, createdAt: 1,
+            content: [{ type: 'text', text: 'Question' }] }
+        const answer = { id: 'answer', sessionId: id, kind: 'assistant', version: 1, createdAt: 2,
+            status: 'done', stopReason: 'stop', content: [{ type: 'text', text: 'Answer' }] }
+        let disk = { entries: [prompt], entriesRevision: 'r1' }
+        const SessionGet = vi.fn(async () => disk)
+        const SessionSet = vi.fn().mockResolvedValue('r3')
+        setHostBridge({ StorageGet: vi.fn().mockResolvedValue(null), StorageSet: vi.fn(),
+            SessionGetActiveRuns: vi.fn().mockResolvedValue([]), SessionGet, SessionSet,
+            PluginsScan: vi.fn().mockResolvedValue([]) } as any)
+        await bootstrapApplication()
+        withSuppressedPersistence(() => useSessionStore.setState({ sessions: [
+            { id, title: 'Question', pinned: false, createdAt: 1, updatedAt: 1 },
+        ], currentSessionId: id }))
+        await ensureSessionLoaded(id)
+        disk = { entries: [prompt, answer], entriesRevision: 'r2' }
+        const readsBeforeWake = SessionGet.mock.calls.length
+        useUiStore.setState({ composerDraft: 'Keep this draft' })
+        const visibility = vi.spyOn(document, 'visibilityState', 'get')
+        visibility.mockReturnValue('hidden')
+        document.dispatchEvent(new Event('visibilitychange'))
+        expect(SessionGet).toHaveBeenCalledTimes(readsBeforeWake)
+        visibility.mockReturnValue('visible')
+        document.dispatchEvent(new Event('visibilitychange'))
+        await vi.waitFor(() => expect(useMessageStore.getState().getEntries(id)).toHaveLength(2))
+        expect(useUiStore.getState().composerDraft).toBe('Keep this draft')
+        expect(SessionSet).not.toHaveBeenCalled()
+        expect(useUiStore.getState().toasts.some((toast) => toast.message?.includes('History conflict'))).toBe(false)
+    })
+
+    it('waits for a running session to become idle before replacing its history', async () => {
+        const id = 'running-wake'
+        const prompt = { id: 'prompt', sessionId: id, kind: 'user', version: 1, createdAt: 1, content: [] }
+        const answer = { id: 'answer', sessionId: id, kind: 'assistant', version: 1, createdAt: 2,
+            status: 'done', stopReason: 'stop', content: [{ type: 'text', text: 'Complete' }] }
+        let disk: { entries: unknown[]; entriesRevision: string } = { entries: [prompt], entriesRevision: 'r1' }
+        let active = false
+        let handler!: (event: any) => Promise<void>
+        const SessionGet = vi.fn(async () => disk)
+        setHostBridge({ StorageGet: vi.fn().mockResolvedValue(null), StorageSet: vi.fn(),
+            SessionGetActiveRuns: vi.fn(async () => active ? [{ sessionId: id, runId: 'run', clientId: 'host', status: 'running', updatedAt: 1 }] : []),
+            SessionGet, PluginsScan: vi.fn().mockResolvedValue([]),
+            onNativeEvent: vi.fn((callback) => { handler = callback; return () => {} }),
+        } as any)
+        await bootstrapApplication()
+        withSuppressedPersistence(() => useSessionStore.setState({ sessions: [
+            { id, title: 'Run', pinned: false, createdAt: 1, updatedAt: 1 },
+        ], currentSessionId: id }))
+        await ensureSessionLoaded(id)
+        const readsBeforeWake = SessionGet.mock.calls.length
+        active = true
+        disk = { entries: [prompt, answer], entriesRevision: 'r2' }
+        const visibility = vi.spyOn(document, 'visibilityState', 'get')
+        visibility.mockReturnValue('hidden')
+        document.dispatchEvent(new Event('visibilitychange'))
+        visibility.mockReturnValue('visible')
+        document.dispatchEvent(new Event('visibilitychange'))
+        await vi.waitFor(() => expect(useSessionRunStore.getState().activeRuns[id]?.status).toBe('running'))
+        expect(SessionGet).toHaveBeenCalledTimes(readsBeforeWake)
+        active = false
+        await handler({ kind: 'session:run-status', data: JSON.stringify({
+            sessionId: id, runId: 'run', clientId: 'host', status: 'idle', updatedAt: Date.now(),
+        }) })
+        await vi.waitFor(() => expect(useMessageStore.getState().getEntries(id)).toHaveLength(2))
+    })
+
+    it('does not echo remote metadata into a later local selection save', async () => {
+        const id = 'remote-only-meta'
+        const session = { id, title: 'Remote', pinned: false, createdAt: 1, updatedAt: 1 }
+        const SessionSet = vi.fn()
+        let handler!: (event: any) => Promise<void>
+        setHostBridge({ StorageGet: vi.fn().mockResolvedValue(null), StorageSet: vi.fn(),
+            SessionListSessions: vi.fn().mockResolvedValue([session]), SessionSet,
+            SessionGetActiveRuns: vi.fn().mockResolvedValue([]),
+            onNativeEvent: vi.fn((callback) => { handler = callback; return () => {} }),
+            PluginsScan: vi.fn().mockResolvedValue([]) } as any)
+        await bootstrapApplication()
+        await handler({ kind: 'session:meta-updated', data: JSON.stringify({ ...session, title: 'New remote', updatedAt: 2 }) })
+        useSessionStore.getState().setCurrentSession(id)
+        await flushPendingPersistence()
+        expect(SessionSet).not.toHaveBeenCalled()
     })
 
     it('scans and activates external catalog packages during startup', async () => {
@@ -734,10 +942,10 @@ describe('bootstrapApplication', () => {
         await bootstrapApplication()
 
         const sessionId = 'sync-sidebar-sess'
-        useSessionStore.setState({
+        withSuppressedPersistence(() => useSessionStore.setState({
             sessions: [{ id: sessionId, title: 'Sync Sess', pinned: false, createdAt: 1, updatedAt: 1 }],
             currentSessionId: sessionId,
-        })
+        }))
         useUiStore.setState({
             rightSidebarCollapsed: false,
             rightPanelActiveTab: null,
@@ -786,13 +994,13 @@ describe('bootstrapApplication', () => {
 
         await bootstrapApplication()
 
-        useSessionStore.setState({
+        withSuppressedPersistence(() => useSessionStore.setState({
             sessions: [
                 { id: 'sess-current', title: 'Current', pinned: false, createdAt: 1, updatedAt: 1 },
                 { id: 'sess-other', title: 'Other', pinned: false, createdAt: 2, updatedAt: 2 },
             ],
             currentSessionId: 'sess-current',
-        })
+        }))
         useUiStore.setState({
             rightSidebarCollapsed: false,
             rightPanelActiveTab: 'review',
@@ -846,7 +1054,7 @@ describe('bootstrapApplication', () => {
         await bootstrapApplication()
 
         const sessionId = 'preserve-sidebar-sess'
-        useSessionStore.setState({
+        withSuppressedPersistence(() => useSessionStore.setState({
             sessions: [
                 {
                     id: sessionId,
@@ -863,7 +1071,7 @@ describe('bootstrapApplication', () => {
                 },
             ],
             currentSessionId: sessionId,
-        })
+        }))
         useUiStore.setState({
             rightSidebarCollapsed: false,
             rightSidebarWidth: 380,
@@ -934,10 +1142,10 @@ describe('bootstrapApplication', () => {
             updatedAt: 1,
         }
 
-        useSessionStore.setState({
+        withSuppressedPersistence(() => useSessionStore.setState({
             sessions: [initialSession],
             currentSessionId: 'sess-other',
-        })
+        }))
 
         await nativeEventHandler!({
             operationId: 'op-meta-bg',
