@@ -348,7 +348,7 @@ export function SubAgentPanel({
         <aside
             className={cn(
                 isMobile
-                    ? 'fixed inset-0 z-50 flex h-full w-full flex-col overflow-hidden app-background-surface bg-[var(--bg-app)]'
+                    ? 'fixed inset-0 z-[60] flex h-full w-full flex-col overflow-hidden app-background-surface bg-[var(--bg-app)]'
                     : cn(
                         'relative flex h-full flex-col',
                         isLayoutTransitioning

@@ -30,14 +30,21 @@ import {
     AlertCircle,
     Archive,
     Check,
+    ChevronLeft,
     ChevronRight,
     Clock,
+    Copy,
+    Edit3,
     Folder,
     GitBranch,
     GitFork,
     Loader2,
+    Mail,
+    MessageSquarePlus,
     Pin,
     PinOff,
+    Share2,
+    X,
 } from '@cpa/plugin-ui'
 import { useIsMobileBrowser } from '../utils/platform.js'
 import { getProjectPaths } from '../utils/projectPaths.js'
@@ -104,6 +111,10 @@ export function SessionRow({ session }: SessionRowProps) {
     const hoverCardId = useId()
     const [menuOpen, setMenuOpen] = useState(false)
     const [moveMenuOpen, setMoveMenuOpen] = useState(false)
+    const [mobileSheetView, setMobileSheetView] = useState<'main' | 'projects'>('main')
+    const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+    const touchStartPosRef = useRef<{ x: number; y: number } | null>(null)
+    const didTriggerLongPressRef = useRef(false)
     const [hoverCardOpen, setHoverCardOpen] = useState(false)
     const [editingTitle, setEditingTitle] = useState(false)
     const [worktreeModalOpen, setWorktreeModalOpen] = useState(false)
@@ -203,6 +214,7 @@ export function SessionRow({ session }: SessionRowProps) {
     const closeMenu = () => {
         setMenuOpen(false)
         setMoveMenuOpen(false)
+        setMobileSheetView('main')
     }
 
     const openMenuAt = (left: number, top: number) => {
@@ -219,6 +231,7 @@ export function SessionRow({ session }: SessionRowProps) {
             ),
         })
         setMoveMenuOpen(false)
+        setMobileSheetView('main')
         setMenuOpen(true)
     }
 
@@ -303,16 +316,29 @@ export function SessionRow({ session }: SessionRowProps) {
     }, [hoverCardOpen, workspaceVisible])
 
     useEffect(() => {
+        return () => {
+            if (longPressTimerRef.current) {
+                clearTimeout(longPressTimerRef.current)
+                longPressTimerRef.current = null
+            }
+        }
+    }, [])
+
+    useEffect(() => {
         if (!menuOpen || !workspaceVisible) return
 
         const onPointerDown = (event: PointerEvent) => {
+            if (isMobile) return
             const target = event.target as Node
             if (!menuRef.current?.contains(target)) closeMenu()
         }
         const onKeyDown = (event: KeyboardEvent) => {
             if (event.key === 'Escape') closeMenu()
         }
-        const onViewportChange = () => closeMenu()
+        const onViewportChange = () => {
+            if (isMobile) return
+            closeMenu()
+        }
 
         document.addEventListener('pointerdown', onPointerDown)
         document.addEventListener('keydown', onKeyDown)
@@ -324,9 +350,65 @@ export function SessionRow({ session }: SessionRowProps) {
             window.removeEventListener('resize', onViewportChange)
             window.removeEventListener('scroll', onViewportChange, true)
         }
-    }, [menuOpen, workspaceVisible])
+    }, [isMobile, menuOpen, workspaceVisible])
+
+    const handleTouchStart = (event: React.TouchEvent<HTMLAnchorElement>) => {
+        if (!isMobile) return
+        if (event.touches.length !== 1) return
+        const touch = event.touches[0]
+        touchStartPosRef.current = { x: touch.clientX, y: touch.clientY }
+        didTriggerLongPressRef.current = false
+
+        if (longPressTimerRef.current) {
+            clearTimeout(longPressTimerRef.current)
+        }
+
+        longPressTimerRef.current = setTimeout(() => {
+            didTriggerLongPressRef.current = true
+            try {
+                if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+                    navigator.vibrate(35)
+                }
+            } catch {}
+            openMenuAt(touch.clientX, touch.clientY)
+        }, 450)
+    }
+
+    const handleTouchMove = (event: React.TouchEvent<HTMLAnchorElement>) => {
+        if (!isMobile || !touchStartPosRef.current) return
+        const touch = event.touches[0]
+        const deltaX = Math.abs(touch.clientX - touchStartPosRef.current.x)
+        const deltaY = Math.abs(touch.clientY - touchStartPosRef.current.y)
+        if (deltaX > 8 || deltaY > 8) {
+            if (longPressTimerRef.current) {
+                clearTimeout(longPressTimerRef.current)
+                longPressTimerRef.current = null
+            }
+        }
+    }
+
+    const handleTouchEnd = () => {
+        if (longPressTimerRef.current) {
+            clearTimeout(longPressTimerRef.current)
+            longPressTimerRef.current = null
+        }
+    }
+
+    const handleTouchCancel = () => {
+        if (longPressTimerRef.current) {
+            clearTimeout(longPressTimerRef.current)
+            longPressTimerRef.current = null
+        }
+        touchStartPosRef.current = null
+    }
 
     const handleSelect = (e?: ReactMouseEvent<HTMLAnchorElement>) => {
+        if (didTriggerLongPressRef.current) {
+            e?.preventDefault?.()
+            e?.stopPropagation?.()
+            didTriggerLongPressRef.current = false
+            return
+        }
         e?.preventDefault?.()
         closeHoverCard(true)
         closeMenu()
@@ -348,6 +430,11 @@ export function SessionRow({ session }: SessionRowProps) {
     const handleContextMenu = (event: ReactMouseEvent<HTMLAnchorElement>) => {
         event.preventDefault()
         event.stopPropagation()
+        if (longPressTimerRef.current) {
+            clearTimeout(longPressTimerRef.current)
+            longPressTimerRef.current = null
+        }
+        didTriggerLongPressRef.current = true
         openMenuAt(event.clientX, event.clientY)
     }
 
@@ -614,8 +701,13 @@ export function SessionRow({ session }: SessionRowProps) {
                 href={`/chat/${session.id}`}
                 onClick={handleSelect}
                 onContextMenu={handleContextMenu}
+                onTouchStart={handleTouchStart}
+                onTouchMove={handleTouchMove}
+                onTouchEnd={handleTouchEnd}
+                onTouchCancel={handleTouchCancel}
+                style={{ WebkitTouchCallout: 'none' }}
                 className={cn(
-                    'flex h-8 select-none items-center gap-1.5 rounded-md py-1 pl-2 pr-2 text-[13px] transition-colors',
+                    'flex h-8 select-none items-center gap-1.5 rounded-md py-1 pl-2 pr-2 text-[13px] transition-colors [-webkit-touch-callout:none]',
                     active
                         ? 'bg-[var(--bg-sidebar-hover)] text-[var(--text-primary)] font-medium'
                         : 'text-[var(--text-secondary)] hover:bg-[var(--bg-sidebar-hover)] hover:text-[var(--text-primary)]',
@@ -778,16 +870,267 @@ export function SessionRow({ session }: SessionRowProps) {
                 : null}
 
             {menuOpen && workspaceVisible && typeof document !== 'undefined'
-                ? createPortal(
-                      <div
-                          ref={menuRef}
-                          role="menu"
-                          aria-label={t('session.contextMenu', {
-                              title: session.title,
-                          })}
-                          className="fixed z-50 w-52 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-1 shadow-2xl"
-                          style={menuPosition}
-                      >
+                ? isMobile
+                    ? createPortal(
+                          <div
+                              className="fixed inset-0 z-[70] flex flex-col justify-end select-none [-webkit-touch-callout:none] [-webkit-user-select:none]"
+                              role="dialog"
+                              aria-modal="true"
+                              aria-label={t('session.contextMenu', {
+                                  title: session.title,
+                              })}
+                              data-testid="session-action-sheet"
+                              onContextMenu={(e) => e.preventDefault()}
+                          >
+                              {/* Backdrop overlay */}
+                              <div
+                                  className="fixed inset-0 bg-black/60 backdrop-blur-xs transition-opacity animate-action-sheet-fade-in"
+                                  onClick={closeMenu}
+                                  aria-hidden="true"
+                              />
+
+                              {/* Action Sheet Panel */}
+                              <div
+                                  ref={menuRef}
+                                  className="relative z-10 flex max-h-[85vh] w-full flex-col rounded-t-2xl border-t border-[var(--border-subtle)] bg-[var(--bg-elevated)] shadow-2xl overflow-hidden select-none [-webkit-touch-callout:none] [-webkit-user-select:none] animate-action-sheet-slide-up"
+                                  style={{
+                                      paddingBottom: 'max(16px, env(safe-area-inset-bottom, 16px))',
+                                      WebkitUserSelect: 'none',
+                                      userSelect: 'none',
+                                      WebkitTouchCallout: 'none',
+                                  }}
+                              >
+                                  {/* Pull handle indicator */}
+                                  <div className="mx-auto mt-2.5 mb-1.5 h-1 w-10 shrink-0 rounded-full bg-[var(--text-muted)]/30" />
+
+                                  {/* Header with session title and metadata */}
+                                  <div className="flex shrink-0 items-center justify-between border-b border-[var(--border-subtle)] px-4 pb-2.5 pt-1">
+                                      {mobileSheetView === 'projects' ? (
+                                          <button
+                                              type="button"
+                                              onClick={() => setMobileSheetView('main')}
+                                              className="flex items-center gap-1 text-[14px] font-medium text-[var(--accent-blue)]"
+                                          >
+                                              <ChevronLeft className="size-4" />
+                                              <span>{t('common.back', { defaultValue: 'Back' })}</span>
+                                          </button>
+                                      ) : (
+                                          <div className="min-w-0 flex-1 pr-2">
+                                              <div className="truncate text-[15px] font-semibold text-[var(--text-primary)]">
+                                                  {session.title}
+                                              </div>
+                                              <div className="text-[12px] text-[var(--text-muted)]">
+                                                  {project ? `${project.name} • ` : ''}
+                                                  {t(sessionAge.key, { count: sessionAge.count })}
+                                              </div>
+                                          </div>
+                                      )}
+                                      <button
+                                          type="button"
+                                          aria-label={t('common.close', { defaultValue: 'Close' })}
+                                          onClick={closeMenu}
+                                          className="flex size-7 shrink-0 items-center justify-center rounded-full bg-[var(--bg-sidebar-hover)] text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                                      >
+                                          <X className="size-4" />
+                                      </button>
+                                  </div>
+
+                                  {/* Scrollable actions body */}
+                                  <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2 divide-y divide-[var(--border-subtle)]/40">
+                                      {mobileSheetView === 'projects' ? (
+                                          /* Project Selection Sub-view */
+                                          <div className="py-1 space-y-1">
+                                              <button
+                                                  type="button"
+                                                  className="flex w-full min-h-[46px] items-center justify-between rounded-xl px-3 py-2 text-left text-[15px] text-[var(--text-primary)] transition-colors active:bg-[var(--bg-sidebar-hover)]"
+                                                  onClick={() => {
+                                                      handleMove(undefined)
+                                                      closeMenu()
+                                                  }}
+                                              >
+                                                  <span>{t('composer.noProject')}</span>
+                                                  {session.projectId === undefined ? (
+                                                      <Check className="size-4 text-[var(--accent-blue)]" />
+                                                  ) : null}
+                                              </button>
+                                              {sortedProjects.map((candidate: any) => (
+                                                  <button
+                                                      key={candidate.id}
+                                                      type="button"
+                                                      className="flex w-full min-h-[46px] items-center justify-between rounded-xl px-3 py-2 text-left text-[15px] text-[var(--text-primary)] transition-colors active:bg-[var(--bg-sidebar-hover)]"
+                                                      onClick={() => {
+                                                          handleMove(candidate.id)
+                                                          closeMenu()
+                                                      }}
+                                                  >
+                                                      <span className="truncate pr-2">{candidate.name}</span>
+                                                      {candidate.id === session.projectId ? (
+                                                          <Check className="size-4 text-[var(--accent-blue)]" />
+                                                      ) : null}
+                                                  </button>
+                                              ))}
+                                          </div>
+                                      ) : (
+                                          /* Main Actions List */
+                                          <>
+                                              {/* Group 1: Common Session Operations */}
+                                              <div className="py-1 space-y-0.5">
+                                                  <button
+                                                      type="button"
+                                                      className="flex w-full min-h-[46px] items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[15px] text-[var(--text-primary)] transition-colors active:bg-[var(--bg-sidebar-hover)]"
+                                                      onClick={handleTogglePin}
+                                                  >
+                                                      {session.pinned ? (
+                                                          <PinOff className="size-5 shrink-0 text-[var(--accent-blue)]" />
+                                                      ) : (
+                                                          <Pin className="size-5 shrink-0 text-[var(--text-muted)]" />
+                                                      )}
+                                                      <span className="min-w-0 flex-1 truncate">
+                                                          {session.pinned ? t('session.unpin') : t('session.pinChat')}
+                                                      </span>
+                                                  </button>
+
+                                                  <button
+                                                      type="button"
+                                                      className="flex w-full min-h-[46px] items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[15px] text-[var(--text-primary)] transition-colors active:bg-[var(--bg-sidebar-hover)]"
+                                                      onClick={() => setMobileSheetView('projects')}
+                                                  >
+                                                      <Folder className="size-5 shrink-0 text-[var(--text-muted)]" />
+                                                      <span className="min-w-0 flex-1 truncate">{t('session.moveTo')}</span>
+                                                      <ChevronRight className="size-4 text-[var(--text-muted)]" />
+                                                  </button>
+
+                                                  {project ? (
+                                                      <button
+                                                          type="button"
+                                                          className="flex w-full min-h-[46px] items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[15px] text-[var(--text-primary)] transition-colors active:bg-[var(--bg-sidebar-hover)]"
+                                                          onClick={() => {
+                                                              handleMove(undefined)
+                                                              closeMenu()
+                                                          }}
+                                                      >
+                                                          <Folder className="size-5 shrink-0 text-[var(--accent-orange)]" />
+                                                          <span className="min-w-0 flex-1 truncate">
+                                                              {t('session.removeFromProject', { name: project.name })}
+                                                          </span>
+                                                      </button>
+                                                  ) : null}
+
+                                                  <button
+                                                      type="button"
+                                                      className="flex w-full min-h-[46px] items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[15px] text-[var(--text-primary)] transition-colors active:bg-[var(--bg-sidebar-hover)]"
+                                                      onClick={handleRename}
+                                                  >
+                                                      <Edit3 className="size-5 shrink-0 text-[var(--text-muted)]" />
+                                                      <span className="min-w-0 flex-1 truncate">{t('session.renameChat')}</span>
+                                                  </button>
+
+                                                  <button
+                                                      type="button"
+                                                      className="flex w-full min-h-[46px] items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[15px] text-[var(--text-primary)] transition-colors active:bg-[var(--bg-sidebar-hover)]"
+                                                      onClick={handleToggleUnread}
+                                                  >
+                                                      <Mail className="size-5 shrink-0 text-[var(--text-muted)]" />
+                                                      <span className="min-w-0 flex-1 truncate">
+                                                          {session.unread ? t('session.markRead') : t('session.markUnread')}
+                                                      </span>
+                                                  </button>
+
+                                                  <button
+                                                      type="button"
+                                                      className="flex w-full min-h-[46px] items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[15px] text-[var(--accent-red)] transition-colors active:bg-[var(--bg-sidebar-hover)]"
+                                                      onClick={handleArchive}
+                                                  >
+                                                      <Archive className="size-5 shrink-0 text-[var(--accent-red)]" />
+                                                      <span className="min-w-0 flex-1 truncate">{t('session.archiveChat')}</span>
+                                                  </button>
+                                              </div>
+
+                                              {/* Group 2: Copying & Links */}
+                                              <div className="py-1 space-y-0.5">
+                                                  {projectPath ? (
+                                                      <button
+                                                          type="button"
+                                                          className="flex w-full min-h-[46px] items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[15px] text-[var(--text-primary)] transition-colors active:bg-[var(--bg-sidebar-hover)]"
+                                                          onClick={() => handleCopy(projectPath)}
+                                                      >
+                                                          <Copy className="size-5 shrink-0 text-[var(--text-muted)]" />
+                                                          <span className="min-w-0 flex-1 truncate">{t('session.copyWorkingDirectory')}</span>
+                                                      </button>
+                                                  ) : null}
+
+                                                  <button
+                                                      type="button"
+                                                      className="flex w-full min-h-[46px] items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[15px] text-[var(--text-primary)] transition-colors active:bg-[var(--bg-sidebar-hover)]"
+                                                      onClick={() => handleCopy(session.id)}
+                                                  >
+                                                      <Copy className="size-5 shrink-0 text-[var(--text-muted)]" />
+                                                      <span className="min-w-0 flex-1 truncate">{t('session.copySessionId')}</span>
+                                                  </button>
+
+                                                  <button
+                                                      type="button"
+                                                      className="flex w-full min-h-[46px] items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[15px] text-[var(--text-primary)] transition-colors active:bg-[var(--bg-sidebar-hover)]"
+                                                      onClick={() => {
+                                                          const deepLink = createHashRouteUrl(`/chat/${session.id}`)
+                                                          handleCopy(deepLink)
+                                                      }}
+                                                  >
+                                                      <Share2 className="size-5 shrink-0 text-[var(--text-muted)]" />
+                                                      <span className="min-w-0 flex-1 truncate">{t('session.copyDeepLink')}</span>
+                                                  </button>
+                                              </div>
+
+                                              {/* Group 3: Continuations */}
+                                              <div className="py-1 space-y-0.5">
+                                                  <button
+                                                      type="button"
+                                                      data-testid="session-menu-continue-chat"
+                                                      className="flex w-full min-h-[46px] items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[15px] text-[var(--text-primary)] transition-colors active:bg-[var(--bg-sidebar-hover)]"
+                                                      onClick={handleContinueInNewChat}
+                                                  >
+                                                      <MessageSquarePlus className="size-5 shrink-0 text-[var(--accent-blue)]" />
+                                                      <span className="min-w-0 flex-1 truncate">{t('session.continueInNewChat')}</span>
+                                                  </button>
+
+                                                  <button
+                                                      type="button"
+                                                      data-testid="session-menu-continue-worktree"
+                                                      className="flex w-full min-h-[46px] items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[15px] text-[var(--text-primary)] transition-colors active:bg-[var(--bg-sidebar-hover)]"
+                                                      onClick={handleContinueInWorktree}
+                                                  >
+                                                      <GitFork className="size-5 shrink-0 text-[var(--accent-blue)]" />
+                                                      <span className="min-w-0 flex-1 truncate">{t('session.continueInNewWorktree')}</span>
+                                                  </button>
+                                              </div>
+                                          </>
+                                      )}
+                                  </div>
+
+                                  {/* Bottom Cancel Button */}
+                                  <div className="shrink-0 px-3 pt-2">
+                                      <button
+                                          type="button"
+                                          onClick={closeMenu}
+                                          className="flex h-12 w-full items-center justify-center rounded-xl bg-[var(--bg-sidebar-hover)] text-[16px] font-semibold text-[var(--text-primary)] transition-colors active:opacity-80"
+                                      >
+                                          {t('common.cancel', { defaultValue: 'Cancel' })}
+                                      </button>
+                                  </div>
+                              </div>
+                          </div>,
+                          document.body,
+                      )
+                    : createPortal(
+                          <div
+                              ref={menuRef}
+                              role="menu"
+                              aria-label={t('session.contextMenu', {
+                                  title: session.title,
+                              })}
+                              className="fixed z-50 w-52 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-1 shadow-2xl"
+                              style={menuPosition}
+                          >
                           <button
                               type="button"
                               role="menuitem"

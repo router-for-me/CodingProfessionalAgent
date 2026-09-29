@@ -99,5 +99,15 @@ describe('Mobile Web Typography & Icon Sizing', () => {
     expect(cssContent).toContain('html[data-mobile-browser="true"] button.size-6')
     expect(cssContent).toContain('html[data-mobile-browser="true"] button.size-7')
     expect(cssContent).toContain('html[data-mobile-browser="true"] button.size-8')
+
+    // Sidebar overlay elevation & hiding workspace floating overlays
+    expect(cssContent).toContain('html[data-mobile-browser="true"] aside[data-mobile="true"][data-state="open"]')
+    expect(cssContent).toContain('z-index: 60 !important;')
+    expect(cssContent).toContain('html[data-mobile-browser="true"]:has(aside[data-mobile="true"][data-state="open"]) [data-floating-id]')
+
+    // Mobile Action Sheet text selection suppression
+    expect(cssContent).toContain('[data-testid="session-action-sheet"]')
+    expect(cssContent).toContain('-webkit-user-select: none !important;')
+    expect(cssContent).toContain('-webkit-touch-callout: none !important;')
   })
 })

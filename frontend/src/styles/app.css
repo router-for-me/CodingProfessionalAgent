@@ -161,6 +161,18 @@ html[data-mobile-browser="true"] aside[data-mobile="true"] {
   font-size: 15px !important;
 }
 
+html[data-mobile-browser="true"] aside[data-mobile="true"][data-state="open"] {
+  z-index: 60 !important;
+}
+
+/* Hide workspace floating overlay elements (such as TodoProgressBar at z-50) when mobile sidebar is open */
+html[data-mobile-browser="true"]:has(aside[data-mobile="true"][data-state="open"]) [data-floating-id],
+html[data-mobile-browser="true"]:has(aside[data-mobile="true"][data-state="open"]) .fixed.inset-0.z-50.pointer-events-none {
+  opacity: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
 html[data-mobile-browser="true"] aside[data-mobile="true"] button,
 html[data-mobile-browser="true"] aside[data-mobile="true"] [role="button"] {
   touch-action: manipulation;
@@ -185,6 +197,52 @@ html[data-mobile-browser="true"] [data-testid="message-list-content"] ol {
 html[data-mobile-browser="true"] [data-testid="tool-card"] button,
 html[data-mobile-browser="true"] [data-testid="thinking-block"] button {
   min-height: 36px !important;
+}
+
+/* Disable native iOS Safari callout and link preview on touchable elements */
+html[data-mobile-browser="true"] a,
+html[data-mobile-browser="true"] button,
+html[data-mobile-browser="true"] [role="button"],
+html[data-mobile-browser="true"] [data-mobile-touchable="true"] {
+  -webkit-touch-callout: none !important;
+}
+
+/* Mobile Action Sheet Animations */
+@keyframes action-sheet-slide-up {
+  from {
+    transform: translateY(100%);
+    opacity: 0.9;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes action-sheet-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.animate-action-sheet-slide-up {
+  animation: action-sheet-slide-up 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-action-sheet-fade-in {
+  animation: action-sheet-fade-in 0.18s ease-out forwards;
+}
+
+/* Mobile Action Sheet: disable text selection and long-press callout across all elements */
+[data-testid="session-action-sheet"],
+[data-testid="session-action-sheet"] * {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+  -webkit-touch-callout: none !important;
+  -webkit-user-drag: none !important;
 }
 
 input,

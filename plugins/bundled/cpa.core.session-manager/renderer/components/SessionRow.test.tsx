@@ -1,5 +1,5 @@
 import type { MouseEventHandler, ReactNode } from 'react'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '@/i18n'
@@ -108,6 +108,7 @@ describe('SessionRow', () => {
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     Object.defineProperty(navigator, 'userAgent', {
       value: originalUserAgent,
       configurable: true,
@@ -518,6 +519,135 @@ describe('SessionRow', () => {
       await user.click(menuItem)
 
       expect(useUiStore.getState().sidebarCollapsed).toBe(true)
+    })
+
+    it('renders mobile Action Sheet instead of desktop popup menu when context menu is triggered', async () => {
+      const user = userEvent.setup()
+      render(<SessionRow session={testSession} />)
+
+      fireEvent.contextMenu(screen.getByTitle('CPA Directory Query'), {
+        clientX: 100,
+        clientY: 100,
+      })
+
+      // Action Sheet dialog should be rendered into document body via portal
+      const actionSheet = screen.getByTestId('session-action-sheet')
+      expect(actionSheet).toBeInTheDocument()
+      expect(actionSheet).toHaveAttribute('role', 'dialog')
+
+      // Should contain session title in the Action Sheet header
+      expect(screen.getAllByText('CPA Directory Query').length).toBeGreaterThanOrEqual(1)
+
+      // Should contain Cancel button
+      const cancelBtn = screen.getByRole('button', { name: 'Cancel' })
+      expect(cancelBtn).toBeInTheDocument()
+
+      // Clicking Cancel button should close the Action Sheet
+      await user.click(cancelBtn)
+      expect(screen.queryByTestId('session-action-sheet')).not.toBeInTheDocument()
+    })
+
+    it('triggers mobile Action Sheet via touch long-press gesture and prevents click navigation', () => {
+      vi.useFakeTimers()
+      render(<SessionRow session={testSession} />)
+
+      const link = screen.getByTitle('CPA Directory Query')
+
+      // Touch start on mobile
+      fireEvent.touchStart(link, {
+        touches: [{ clientX: 120, clientY: 200 }],
+      })
+
+      // Before timer finishes, Action Sheet is not open yet
+      expect(screen.queryByTestId('session-action-sheet')).not.toBeInTheDocument()
+
+      // Fast-forward 460ms (past 450ms long-press threshold) wrapped in act
+      act(() => {
+        vi.advanceTimersByTime(460)
+      })
+
+      // Action Sheet should now be open
+      expect(screen.getByTestId('session-action-sheet')).toBeInTheDocument()
+
+      // Subsequent click/touchEnd should be intercepted and NOT navigate
+      fireEvent.touchEnd(link)
+      fireEvent.click(link)
+
+      expect(navigateMock).not.toHaveBeenCalled()
+      vi.useRealTimers()
+    })
+
+    it('cancels touch long-press when finger moves (scrolls)', () => {
+      vi.useFakeTimers()
+      render(<SessionRow session={testSession} />)
+
+      const link = screen.getByTitle('CPA Directory Query')
+
+      fireEvent.touchStart(link, {
+        touches: [{ clientX: 120, clientY: 200 }],
+      })
+
+      // Finger moves 20px (scrolling the list)
+      fireEvent.touchMove(link, {
+        touches: [{ clientX: 120, clientY: 220 }],
+      })
+
+      act(() => {
+        vi.advanceTimersByTime(500)
+      })
+
+      // Long press was cancelled by scroll movement
+      expect(screen.queryByTestId('session-action-sheet')).not.toBeInTheDocument()
+      vi.useRealTimers()
+    })
+
+    it('switches to project selection view in mobile Action Sheet and moves session', async () => {
+      const user = userEvent.setup()
+      render(<SessionRow session={testSession} />)
+
+      fireEvent.contextMenu(screen.getByTitle('CPA Directory Query'), {
+        clientX: 100,
+        clientY: 100,
+      })
+
+      expect(screen.getByTestId('session-action-sheet')).toBeInTheDocument()
+
+      // Click "Move to..." in Action Sheet
+      const moveToBtn = screen.getByRole('button', { name: /Move to/i })
+      await user.click(moveToBtn)
+
+      // Back button and project list should appear
+      expect(screen.getByRole('button', { name: /Back/i })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Example Project' })).toBeInTheDocument()
+
+      // Click "Example Project" to move
+      await user.click(screen.getByRole('button', { name: 'Example Project' }))
+
+      // Sheet closes after selection
+      expect(screen.queryByTestId('session-action-sheet')).not.toBeInTheDocument()
+    })
+
+    it('has -webkit-touch-callout: none on the link element to prevent iOS Safari link preview', () => {
+      render(<SessionRow session={testSession} />)
+      const link = screen.getByTitle('CPA Directory Query')
+      expect(link.className).toContain('[-webkit-touch-callout:none]')
+    })
+
+    it('disables text selection and touch-callout on Action Sheet and its elements', () => {
+      render(<SessionRow session={testSession} />)
+      fireEvent.contextMenu(screen.getByTitle('CPA Directory Query'), {
+        clientX: 100,
+        clientY: 100,
+      })
+
+      const sheet = screen.getByTestId('session-action-sheet')
+      expect(sheet.className).toContain('select-none')
+      expect(sheet.className).toContain('[-webkit-touch-callout:none]')
+      expect(sheet.className).toContain('[-webkit-user-select:none]')
+
+      // Verify context menu event is prevented on the Action Sheet to block native browser menu
+      const contextMenuEvent = fireEvent.contextMenu(sheet)
+      expect(contextMenuEvent).toBe(false)
     })
   })
 })

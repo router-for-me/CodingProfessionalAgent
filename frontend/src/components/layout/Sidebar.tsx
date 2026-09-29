@@ -53,7 +53,7 @@ export function Sidebar() {
 
         return (
             <aside
-                className="fixed inset-0 z-50 flex h-full w-full flex-col overflow-hidden app-background-surface bg-[var(--bg-sidebar)] select-none"
+                className="fixed inset-0 z-[60] flex h-full w-full flex-col overflow-hidden app-background-surface bg-[var(--bg-sidebar)] select-none"
                 aria-hidden={false}
                 data-state="open"
                 data-mobile="true"

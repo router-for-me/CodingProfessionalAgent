@@ -985,7 +985,7 @@ describe('SubAgentPanel mobile browser behavior', () => {
         const aside = container.querySelector('aside')
         expect(aside).toHaveAttribute('data-state', 'open')
         expect(aside).toHaveAttribute('data-mobile', 'true')
-        expect(aside).toHaveClass('fixed', 'inset-0', 'z-50', 'w-full', 'h-full')
+        expect(aside).toHaveClass('fixed', 'inset-0', 'z-[60]', 'w-full', 'h-full')
         expect(screen.queryByRole('separator', { name: 'Resize right sidebar' })).toBeNull()
         expect(screen.getByRole('button', { name: /collapse sidebar|expand sidebar/i })).toBeInTheDocument()
         expect(screen.getByTestId('bottom-panel-toggle')).toBeInTheDocument()

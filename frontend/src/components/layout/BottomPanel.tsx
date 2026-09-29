@@ -75,7 +75,7 @@ export function BottomPanel() {
                 aria-hidden={false}
                 data-state="open"
                 data-mobile="true"
-                className="fixed inset-0 z-50 flex h-full w-full flex-col overflow-hidden app-background-surface bg-[var(--bg-app)]"
+                className="fixed inset-0 z-[60] flex h-full w-full flex-col overflow-hidden app-background-surface bg-[var(--bg-app)]"
             >
                 <div className="flex h-full min-h-0 w-full shrink-0 flex-col">
                     <div
