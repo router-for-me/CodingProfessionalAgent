@@ -541,6 +541,7 @@ export interface UiService {
     isSidebarCollapsed?(): boolean
     toggleSidebar?(): void
     togglePinnedSummaryVisible?(): void
+    setPinnedSummaryVisible?(visible: boolean, options?: { syncSession?: boolean }): void
     openSettings(section?: string, options?: unknown): void
     closeSettings?(): void
     pushToast(message: string, type?: 'info' | 'success' | 'warning' | 'error'): void

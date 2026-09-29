@@ -466,7 +466,12 @@ describe('SessionRow', () => {
     })
 
     it('does NOT show hover details card when clicked, directly selects session and closes sidebar', async () => {
-      useUiStore.setState({ sidebarCollapsed: false })
+      useUiStore.setState({
+        sidebarCollapsed: false,
+        bottomPanelVisible: true,
+        pinnedSummaryVisible: true,
+        rightSidebarCollapsed: false,
+      })
       const user = userEvent.setup()
       render(<SessionRow session={testSession} />)
 
@@ -489,8 +494,11 @@ describe('SessionRow', () => {
         ),
       ).toBe(false)
 
-      // Sidebar should be collapsed to switch view directly to chat window
+      // Sidebar, bottom panel, pinned summary, and right sidebar should all be collapsed/hidden on mobile
       expect(useUiStore.getState().sidebarCollapsed).toBe(true)
+      expect(useUiStore.getState().bottomPanelVisible).toBe(false)
+      expect(useUiStore.getState().pinnedSummaryVisible).toBe(false)
+      expect(useUiStore.getState().rightSidebarCollapsed).toBe(true)
     })
 
     it('does NOT open hover details on hover in mobile browser', async () => {

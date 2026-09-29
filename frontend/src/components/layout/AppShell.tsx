@@ -7,6 +7,7 @@ import { SettingsPanel } from '@/components/settings/SettingsPanel'
 import { ToastHost } from '@/components/ui/ToastHost'
 import { cn } from '@/lib/cn'
 import { dismissSplashScreen } from '@/lib/splash'
+import { isMobileBrowser } from '@/lib/platform'
 import { useUiStore } from '@/stores/uiStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useSessionStore } from '@/stores/sessionStore'
@@ -68,19 +69,29 @@ export function AppShell() {
         const targetSession = useSessionStore
             .getState()
             .sessions.find((s) => s.id === chatSessionId)
-        useUiStore.getState().restoreForSession(targetSession?.rightSidebar ?? null)
-        if (chatSessionId) {
-            const setup = useWorktreeSetupStore.getState().getSetup(chatSessionId)
-            const isWorktreeError = setup?.status === 'error'
-            if (isWorktreeError) {
-                useUiStore.getState().setPinnedSummaryVisible(false)
-            } else if (targetSession?.pinnedSummaryVisible !== undefined) {
-                useUiStore.getState().setPinnedSummaryVisible(targetSession.pinnedSummaryVisible)
-            } else {
-                useUiStore.getState().setPinnedSummaryVisible(true)
-            }
+
+        if (isMobileBrowser()) {
+            // On mobile browser, switching sessions defaults to clean chat view:
+            // Do not open pinned summary, left sidebar, or bottom panel regardless of state on other clients.
+            useUiStore.getState().setSidebarCollapsed(true)
+            useUiStore.getState().setBottomPanelVisible(false)
+            useUiStore.getState().setPinnedSummaryVisible(false, { syncSession: false })
+            useUiStore.getState().setRightSidebarCollapsed(true)
         } else {
-            useUiStore.getState().setPinnedSummaryVisible(false)
+            useUiStore.getState().restoreForSession(targetSession?.rightSidebar ?? null)
+            if (chatSessionId) {
+                const setup = useWorktreeSetupStore.getState().getSetup(chatSessionId)
+                const isWorktreeError = setup?.status === 'error'
+                if (isWorktreeError) {
+                    useUiStore.getState().setPinnedSummaryVisible(false)
+                } else if (targetSession?.pinnedSummaryVisible !== undefined) {
+                    useUiStore.getState().setPinnedSummaryVisible(targetSession.pinnedSummaryVisible)
+                } else {
+                    useUiStore.getState().setPinnedSummaryVisible(true)
+                }
+            } else {
+                useUiStore.getState().setPinnedSummaryVisible(false)
+            }
         }
     }, [chatSessionId])
 

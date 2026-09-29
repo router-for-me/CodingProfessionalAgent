@@ -135,7 +135,7 @@ interface UiState {
     ) => void
     restoreForSession: (sidebarState?: SessionRightSidebarState | null) => void
     togglePinnedSummaryVisible: () => void
-  setPinnedSummaryVisible: (visible: boolean) => void
+  setPinnedSummaryVisible: (visible: boolean, options?: { syncSession?: boolean }) => void
   toggleBottomPanelVisible: () => void
   setBottomPanelVisible: (visible: boolean) => void
   setBottomPanelHeight: (height: number) => void
@@ -173,7 +173,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   rightPanelOpenTabs: [],
   rightPanelActiveTab: null,
   rightPanelTabParams: {},
-  pinnedSummaryVisible: true,
+  pinnedSummaryVisible: isMobileBrowser() ? false : true,
   bottomPanelVisible: false,
   bottomPanelHeight: DEFAULT_BOTTOM_PANEL_HEIGHT,
   settingsOpen: false,
@@ -361,11 +361,13 @@ export const useUiStore = create<UiState>((set, get) => ({
     }
   },
 
-  setPinnedSummaryVisible: (visible) => {
+  setPinnedSummaryVisible: (visible, options) => {
     set({ pinnedSummaryVisible: visible })
-    const currentSessionId = useSessionStore.getState().currentSessionId
-    if (currentSessionId) {
-      useSessionStore.getState().setSessionPinnedSummaryVisible(currentSessionId, visible)
+    if (options?.syncSession !== false) {
+      const currentSessionId = useSessionStore.getState().currentSessionId
+      if (currentSessionId) {
+        useSessionStore.getState().setSessionPinnedSummaryVisible(currentSessionId, visible)
+      }
     }
   },
 
@@ -453,8 +455,8 @@ export const useUiStore = create<UiState>((set, get) => ({
           : state.rightPanelTabParams,
       pinnedSummaryVisible:
         typeof data.pinnedSummaryVisible === 'boolean'
-          ? data.pinnedSummaryVisible
-          : state.pinnedSummaryVisible,
+          ? (isMobileBrowser() ? false : data.pinnedSummaryVisible)
+          : (isMobileBrowser() ? false : state.pinnedSummaryVisible),
       bottomPanelVisible:
         typeof data.bottomPanelVisible === 'boolean'
           ? data.bottomPanelVisible

@@ -1213,6 +1213,10 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
             useUiStore.getState().togglePinnedSummaryVisible()
         },
 
+        setPinnedSummaryVisible(visible: boolean, options?: { syncSession?: boolean }): void {
+            useUiStore.getState().setPinnedSummaryVisible(visible, options)
+        },
+
         openSettings(section?: string, options?: unknown): void {
             if (typeof section === 'object' && section !== null) {
                 const sObj = section as Record<string, unknown>

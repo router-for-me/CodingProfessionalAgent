@@ -210,6 +210,56 @@ describe('AppShell host slot skeleton', () => {
         expect(screen.queryByTestId('pinned-summary')).not.toBeInTheDocument()
     })
 
+    it('does NOT open pinned summary, left sidebar, or bottom panel by default on mobile browser when switching sessions', () => {
+        const originalUserAgent = navigator.userAgent
+        try {
+            Object.defineProperty(navigator, 'userAgent', {
+                value: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+                configurable: true,
+            })
+            mockPathname = '/chat/session-mobile-test'
+            useSessionStore.setState({
+                sessions: [
+                    {
+                        id: 'session-mobile-test',
+                        title: 'Mobile Session',
+                        pinned: false,
+                        pinnedSummaryVisible: true,
+                        createdAt: 1,
+                        updatedAt: 1,
+                    },
+                ],
+            })
+            useUiStore.setState({
+                sidebarCollapsed: false,
+                bottomPanelVisible: true,
+                pinnedSummaryVisible: true,
+                rightSidebarCollapsed: false,
+            })
+
+            render(<AppShell />)
+
+            // On mobile browser, switching sessions defaults to clean chat view
+            expect(useUiStore.getState().pinnedSummaryVisible).toBe(false)
+            expect(screen.queryByTestId('pinned-summary')).not.toBeInTheDocument()
+            expect(useUiStore.getState().sidebarCollapsed).toBe(true)
+            expect(useUiStore.getState().bottomPanelVisible).toBe(false)
+            expect(useUiStore.getState().rightSidebarCollapsed).toBe(true)
+
+            // Pinned summary is still toggleable when user manually clicks toggle
+            const toggle = screen.getByTestId('pinned-summary-toggle')
+            expect(toggle).toBeInTheDocument()
+            fireEvent.click(toggle)
+            expect(useUiStore.getState().pinnedSummaryVisible).toBe(true)
+            expect(screen.getByTestId('pinned-summary')).toBeInTheDocument()
+        } finally {
+            Object.defineProperty(navigator, 'userAgent', {
+                value: originalUserAgent,
+                configurable: true,
+            })
+        }
+    })
+
     it('renders right sidebar selection window on home page when expanded without tabs', () => {
         useProjectStore.setState({
             projects: [{ id: 'proj-1', name: 'TestProj', path: '/test', pinned: false, createdAt: 1, updatedAt: 1 }],

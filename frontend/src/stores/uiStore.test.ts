@@ -241,4 +241,15 @@ describe('uiStore - right panel tabs', () => {
     session = useSessionStore.getState().sessions.find((s) => s.id === sessionId)
     expect(session?.pinnedSummaryVisible).toBe(true)
   })
+
+  it('does not sync pinnedSummaryVisible to sessionStore when syncSession is false', () => {
+    const sessionId = useSessionStore.getState().createSession({ title: 'No Sync Test' })
+    useSessionStore.getState().setCurrentSession(sessionId)
+    useSessionStore.getState().setSessionPinnedSummaryVisible(sessionId, true)
+
+    useUiStore.getState().setPinnedSummaryVisible(false, { syncSession: false })
+    expect(useUiStore.getState().pinnedSummaryVisible).toBe(false)
+    const session = useSessionStore.getState().sessions.find((s) => s.id === sessionId)
+    expect(session?.pinnedSummaryVisible).toBe(true)
+  })
 })

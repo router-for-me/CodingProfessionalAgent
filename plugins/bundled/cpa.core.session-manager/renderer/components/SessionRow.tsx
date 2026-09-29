@@ -416,6 +416,9 @@ export function SessionRow({ session }: SessionRowProps) {
         sessionService?.setCurrentSessionId?.(session.id)
         if (isMobile) {
             uiService?.setSidebarCollapsed?.(true)
+            uiService?.setBottomPanelVisible?.(false)
+            uiService?.setPinnedSummaryVisible?.(false, { syncSession: false })
+            uiService?.setRightSidebarCollapsed?.(true)
         }
         if (navigate) {
             void navigate({
@@ -671,6 +674,9 @@ export function SessionRow({ session }: SessionRowProps) {
             sessionService?.setCurrentSessionId?.(forkedId)
             if (isMobile) {
                 uiService?.setSidebarCollapsed?.(true)
+                uiService?.setBottomPanelVisible?.(false)
+                uiService?.setPinnedSummaryVisible?.(false, { syncSession: false })
+                uiService?.setRightSidebarCollapsed?.(true)
             }
             if (navigate) {
                 void navigate({
