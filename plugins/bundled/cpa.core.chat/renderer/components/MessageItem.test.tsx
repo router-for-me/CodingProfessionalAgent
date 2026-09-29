@@ -1,7 +1,8 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import userEvent from '@testing-library/user-event'
 import i18n from '@/i18n'
-import { HostServicesProvider } from '@cpa/plugin-ui'
+import { HostServicesProvider, SkillDraftEditor, readSkillDraftParts, SKILL_DRAFT_CLIPBOARD_MIME } from '@cpa/plugin-ui'
 import type { DisplayChatMessage } from '../types.js'
 import {
   AssistantMessageRenderer,
@@ -57,6 +58,47 @@ describe('MessageItem user actions', () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('Original content'))
   })
 
+  it('copies a stored card with provenance for cross-trigger paste while leaving literal text literal', () => {
+    const data = new Map<string, string>()
+    const clipboardData = {
+      getData: (format: string) => data.get(format) ?? '',
+      setData: (format: string, value: string) => data.set(format, value),
+    }
+    const previousExec = document.execCommand
+    document.execCommand = vi.fn(() => {
+      fireEvent.copy(document.querySelector('textarea')!, { clipboardData })
+      return true
+    })
+    const writeClipboard = vi.fn()
+    const settingsSnapshot = { skills: { defaultMode: 'auto', trigger: '/' } }
+    const availableSkills = [{ name: 'demo' }]
+    try {
+      render(<HostServicesProvider services={{
+        settings: { getSnapshot: () => settingsSnapshot, subscribe: () => () => {} },
+        skillUsage: { getAvailableSkills: () => availableSkills },
+        ui: { writeClipboard, pushToast: vi.fn() },
+      } as any}>
+        <MessageItem message={{ ...message, content: '/skill:demo $demo',
+          parts: [{ type: 'text', text: '/skill:demo $demo' }], skillReferences: [{ start: 12, name: 'demo' }] }} />
+      </HostServicesProvider>)
+      fireEvent.click(screen.getByRole('button', { name: /Copy/i }))
+      expect(document.execCommand).toHaveBeenCalledWith('copy')
+      expect(data.get('text/plain')).toBe('/skill:demo /skill:demo')
+      expect(data.get(SKILL_DRAFT_CLIPBOARD_MIME)).toBeTruthy()
+      expect(writeClipboard).not.toHaveBeenCalled()
+
+      render(<SkillDraftEditor value="" trigger="#" skills={[{ name: 'demo' }]} onChange={vi.fn()} testId="paste-target" />)
+      const input = screen.getByTestId('paste-target')
+      fireEvent.paste(input, { clipboardData })
+      expect(readSkillDraftParts(input)).toEqual([
+        { type: 'text', text: '/skill:demo ' },
+        { type: 'skill', name: 'demo', displayName: 'Demo' },
+      ])
+    } finally {
+      document.execCommand = previousExec
+    }
+  })
+
   it('restores original content when edit is cancelled', () => {
     render(
       <MessageItem
@@ -93,7 +135,7 @@ describe('MessageItem user actions', () => {
     fireEvent.click(screen.getByRole('button', { name: /Send/i }))
 
     await waitFor(() => {
-      expect(onEditMessage).toHaveBeenCalledWith('u1', 'Updated content')
+      expect(onEditMessage).toHaveBeenCalledWith('u1', 'Updated content', [])
     })
     expect(screen.queryByTestId('message-edit-input')).not.toBeInTheDocument()
   })
@@ -313,6 +355,52 @@ describe('MessageItem user actions', () => {
       'aria-selected',
       'false',
     )
+  })
+
+  it('retains multiple selected # cards and literal dollar text when editing a message', async () => {
+    const user = userEvent.setup()
+    const onEditMessage = vi.fn().mockResolvedValue(undefined)
+    const settingsSnapshot = { skills: { defaultMode: 'auto', trigger: '#' } }
+    const availableSkills = [{ name: 'demo', description: 'Demo skill' }, { name: 'model', description: 'Model skill' }]
+    const hostServices = {
+      settings: { getSnapshot: () => settingsSnapshot, subscribe: () => () => {} },
+      skillUsage: { getAvailableSkills: () => availableSkills },
+    }
+    render(<HostServicesProvider services={hostServices as any}>
+      <MessageItem message={{ ...message, content: '$demo ', parts: [{ type: 'text', text: '$demo ' }], skillReferences: [] }}
+        onEditMessage={onEditMessage} />
+    </HostServicesProvider>)
+    fireEvent.click(screen.getByRole('button', { name: /Edit/i }))
+    const input = screen.getByTestId('message-edit-input')
+    setContentEditableValue(input, '$demo #de')
+    fireEvent.mouseDown(screen.getByRole('option', { name: /Demo/i }))
+    await user.type(input, '#mo')
+    fireEvent.mouseDown(screen.getByRole('option', { name: /Model/i }))
+    expect(input.querySelectorAll('[data-skill-name]')).toHaveLength(2)
+    fireEvent.click(screen.getByRole('button', { name: /Send/i }))
+    await waitFor(() => expect(onEditMessage).toHaveBeenCalledWith('u1', '$demo $demo $model', [
+      { start: 6, name: 'demo' }, { start: 12, name: 'model' },
+    ]))
+  })
+
+  it('copies only stored chip references with the current shortcut and keeps literal text', async () => {
+    const writeClipboard = vi.fn().mockResolvedValue(undefined)
+    const settingsSnapshot = { skills: { defaultMode: 'auto', trigger: '/' } }
+    const availableSkills = [{ name: 'demo' }]
+    const hostServices = {
+      settings: { getSnapshot: () => settingsSnapshot, subscribe: () => () => {} },
+      skillUsage: { getAvailableSkills: () => availableSkills },
+      ui: { writeClipboard, pushToast: vi.fn() },
+    }
+    render(
+      <HostServicesProvider services={hostServices as any}>
+        <MessageItem message={{ ...message, content: '$demo $demo', parts: [{ type: 'text', text: '$demo $demo' }], skillReferences: [{ start: 6, name: 'demo' }] }}
+          onEditMessage={vi.fn()} />
+      </HostServicesProvider>,
+    )
+    expect(screen.getByTestId('user-skill-chip')).toHaveTextContent('$demo')
+    fireEvent.click(screen.getByRole('button', { name: /Copy/i }))
+    await waitFor(() => expect(writeClipboard).toHaveBeenCalledWith('$demo /skill:demo'))
   })
 
   it('renders recall icon button instead of copy/edit for queued/pending user message', async () => {

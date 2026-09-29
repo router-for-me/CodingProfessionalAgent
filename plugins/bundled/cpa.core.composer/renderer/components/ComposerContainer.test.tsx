@@ -540,7 +540,7 @@ describe('ComposerContainer Integration', () => {
             to: '/chat/$sessionId',
             params: { sessionId },
         })
-        expect(textarea).toHaveAttribute('data-value', '')
+        expect(screen.getByTestId('composer-input')).toHaveAttribute('data-value', '')
 
         setPathname('/')
         act(() => {
@@ -796,8 +796,9 @@ describe('ComposerContainer Integration', () => {
         expect(mockAgent.abortCalls).toHaveLength(0)
 
         // Type second prompt while streaming is active
-        await user.type(textarea, 'second prompt')
-        fireEvent.keyDown(textarea, { key: 'Enter' })
+        const streamingInput = screen.getByTestId('composer-input')
+        await user.type(streamingInput, 'second prompt')
+        fireEvent.keyDown(streamingInput, { key: 'Enter' })
 
         // First run should be aborted
         await waitFor(() => {

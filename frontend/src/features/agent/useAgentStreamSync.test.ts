@@ -1897,6 +1897,7 @@ describe('useAgentStreamSync', () => {
         await act(async () => {
             sessionId = await result.current.send({
                 text: 'Delegated prompt from browser',
+                skillReferences: [],
                 projectId: 'test-project',
                 branch: 'feature-branch',
             })
@@ -1910,12 +1911,14 @@ describe('useAgentStreamSync', () => {
         if (entries[0]?.kind === 'user') {
             const textBlock = entries[0].content.find((c) => c.type === 'text')
             expect(textBlock?.text).toBe('Delegated prompt from browser')
+            expect(entries[0].skillReferences).toEqual([])
         }
 
         expect(delegateRunMock).toHaveBeenCalledWith(
             expect.objectContaining({
                 sessionId,
                 text: 'Delegated prompt from browser',
+                skillReferences: [],
                 images: undefined,
                 projectId: 'test-project',
                 branch: 'feature-branch',

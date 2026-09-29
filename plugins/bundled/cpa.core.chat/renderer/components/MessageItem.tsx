@@ -14,15 +14,20 @@ import {
     Copy,
     ExtensionSlot,
     getSkillQuery,
-    insertSkillAtCaret,
+    insertSkillInParts,
     parseSkillDraft,
+    parseReferencedSkillDraft,
+    formatSkillDraftForClipboard,
+    writeSkillDraftClipboard,
+    type SkillDraftPart,
+    normalizeSkillDraft,
+    readSkillDraftParts,
     Pencil,
     PluginMessageHost,
     PluginPartHost,
     ReactMarkdown,
     RotateCcw,
     Undo2,
-    serializeSkillDraft,
     SkillChip,
     SkillDraftEditor,
     skillDraftHasChip,
@@ -33,6 +38,7 @@ import {
     remarkGfm,
     useHostServices,
     useSkillUsageCounts,
+    useSettings,
     useAvailableSkills,
     useTranslation,
     useChatRenderers,
@@ -61,7 +67,7 @@ import { ToolCard } from './ToolCard.js'
 import { TurnHeader } from './TurnHeader.js'
 import { MemoryCitationsView } from './MemoryCitationsView.js'
 import { extractMemoryCitations, stripMemoryCitations } from '@cpa/plugin-sdk'
-import type { MemoryCitation } from '@cpa/plugin-api'
+import type { MemoryCitation, SkillTrigger } from '@cpa/plugin-api'
 
 export function ForkIcon({ className }: { className?: string }) {
     return (
@@ -107,7 +113,7 @@ export interface MessageItemProps {
     message: DisplayChatMessage
     onApproveTool?: (toolId: string) => void
     onRejectTool?: (toolId: string) => void
-    onEditMessage?: (messageId: string, text: string) => void | Promise<void>
+    onEditMessage?: (messageId: string, text: string, references?: { start: number; name: string }[]) => void | Promise<void>
     onRetry?: () => void | Promise<void>
     onFork?: () => void | Promise<void>
     onExecuteHook?: () => void | Promise<void>
@@ -239,6 +245,7 @@ export const UserMessageRenderer = memo(function UserMessageRenderer(
     const { t, i18n } = useTranslation()
     const services = useHostServices()
     const editTextareaRef = useRef<HTMLDivElement>(null)
+    const [initialReferences, setInitialReferences] = useState<{ start: number; name: string }[] | undefined>()
     const reactId = useId()
     const skillListboxId = `skill-menu-${reactId.replace(/:/g, '')}`
     const [isEditing, setIsEditing] = useState(false)
@@ -248,6 +255,7 @@ export const UserMessageRenderer = memo(function UserMessageRenderer(
     const [activeSkillIndex, setActiveSkillIndex] = useState(0)
     const [isSubmittingEdit, setIsSubmittingEdit] = useState(false)
     const usageCounts = useSkillUsageCounts()
+    const trigger = useSettings().skills?.trigger ?? '$'
 
     const isPending = Boolean(message.pendingStatus)
 
@@ -263,7 +271,7 @@ export const UserMessageRenderer = memo(function UserMessageRenderer(
 
     const composerSkills = useAvailableSkills()
 
-    const skillQuery = getSkillQuery(editText, editCursor)
+    const skillQuery = getSkillQuery(editText, editCursor, trigger)
     const skillSuggestions = useMemo(() => {
         if (skillQuery === null) return [] as SkillSuggestion[]
         return buildSkillSuggestions({
@@ -300,9 +308,11 @@ export const UserMessageRenderer = memo(function UserMessageRenderer(
         setSkillMenuOpen(false)
     }, [isEditing, skillQuery])
 
-    const copyUserText = async (copyContent: string) => {
+    const copyUserText = async (copyContent: string, parts: SkillDraftPart[] | null) => {
         try {
-            await copyTextToClipboard(copyContent, services)
+            if (!parts || !copySkillPartsToClipboard(parts, trigger)) {
+                await copyTextToClipboard(copyContent, services)
+            }
             services?.ui?.pushToast(t('message.copySuccess'))
         } catch {
             services?.ui?.pushToast(t('message.copyFailed'))
@@ -312,7 +322,10 @@ export const UserMessageRenderer = memo(function UserMessageRenderer(
     const startEditing = () => {
         const stored = userText(message)
         const presentation = matchSkillPresentation(stored, composerSkills)
-        const next = presentation ? skillPresentationCommand(presentation) : stored
+        const next = presentation && !Array.isArray(message.skillReferences)
+            ? skillPresentationCommand(presentation) : stored
+        setInitialReferences(Array.isArray(message.skillReferences)
+            ? message.skillReferences as { start: number; name: string }[] : undefined)
         setEditText(next)
         setEditCursor(next.length)
         setSkillMenuOpen(false)
@@ -335,7 +348,9 @@ export const UserMessageRenderer = memo(function UserMessageRenderer(
 
     const selectSkill = (suggestion: SkillSuggestion | string) => {
         const skillName = typeof suggestion === 'string' ? suggestion : suggestion.name
-        const inserted = insertSkillAtCaret(editText, skillName, editCursor)
+        const inserted = insertSkillInParts(readSkillDraftParts(editTextareaRef.current), skillName, editCursor, trigger)
+        if (!inserted) return
+        setInitialReferences(inserted.references)
         setEditText(inserted.text)
         setEditCursor(inserted.cursor)
         setSkillMenuOpen(false)
@@ -346,7 +361,11 @@ export const UserMessageRenderer = memo(function UserMessageRenderer(
         if (!onEditMessage || isSubmittingEdit || !editText.trim()) return
         setIsSubmittingEdit(true)
         try {
-            await onEditMessage(message.id, editText)
+            const normalized = normalizeSkillDraft(readSkillDraftParts(editTextareaRef.current), composerSkills, trigger)
+            const leadingWhitespace = normalized.text.length - normalized.text.trimStart().length
+            await onEditMessage(message.id, normalized.text.trim(), normalized.references
+                .map((ref) => ({ ...ref, start: ref.start - leadingWhitespace }))
+                .filter((ref) => ref.start >= 0))
             resetEditing()
         } catch (error) {
             services?.ui?.pushToast(
@@ -358,14 +377,21 @@ export const UserMessageRenderer = memo(function UserMessageRenderer(
     }
 
     const text = userText(message)
-    const draftParts = parseSkillDraft(text, composerSkills)
+    const draftParts = Array.isArray(message.skillReferences)
+        ? parseReferencedSkillDraft(text, message.skillReferences as { start: number; name: string }[])
+        : parseSkillDraft(text, composerSkills)
     const hasInlineSkills = skillDraftHasChip(draftParts)
-    const wholeSkill = hasInlineSkills ? null : matchSkillPresentation(text, composerSkills)
-    const copyText = hasInlineSkills
-        ? serializeSkillDraft(draftParts)
+    const wholeSkill = hasInlineSkills || Array.isArray(message.skillReferences)
+        ? null : matchSkillPresentation(text, composerSkills)
+    const copyParts: SkillDraftPart[] | null = hasInlineSkills
+        ? draftParts
         : wholeSkill
-            ? skillPresentationCommand(wholeSkill)
-            : text
+            ? [
+                { type: 'skill', name: wholeSkill.name, displayName: wholeSkill.displayName },
+                ...(wholeSkill.args ? [{ type: 'text' as const, text: ` ${wholeSkill.args}` }] : []),
+            ]
+            : null
+    const copyText = copyParts ? formatSkillDraftForClipboard(copyParts, trigger) : text
 
     return (
         <div
@@ -391,6 +417,9 @@ export const UserMessageRenderer = memo(function UserMessageRenderer(
                                     value={editText}
                                     cursor={editCursor}
                                     skills={composerSkills}
+                                    trigger={trigger}
+                                    references={initialReferences}
+                                    legacyValue={!Array.isArray(message.skillReferences)}
                                     disabled={isSubmittingEdit}
                                     ariaLabel={t('message.editInput')}
                                     testId="message-edit-input"
@@ -401,6 +430,7 @@ export const UserMessageRenderer = memo(function UserMessageRenderer(
                                     ariaAutocomplete={showSkillMenu ? 'list' : undefined}
                                     role={showSkillMenu ? 'combobox' : undefined}
                                     onChange={(next, cursor) => {
+                                        setInitialReferences(undefined)
                                         setEditText(next)
                                         setEditCursor(typeof cursor === 'number' ? cursor : next.length)
                                     }}
@@ -580,7 +610,7 @@ export const UserMessageRenderer = memo(function UserMessageRenderer(
                                     title={t('message.copy')}
                                     aria-label={t('message.copy')}
                                     onClick={() => {
-                                        void copyUserText(copyText)
+                                        void copyUserText(copyText, copyParts)
                                     }}
                                     className={cn(
                                         'rounded p-1 text-[var(--text-muted)] transition-colors',
@@ -970,6 +1000,32 @@ export function AssistantText(props: {
             {activeCitations && <MemoryCitationsView citations={activeCitations} />}
         </div>
     )
+}
+
+function copySkillPartsToClipboard(parts: readonly SkillDraftPart[], trigger: SkillTrigger): boolean {
+    if (typeof document.execCommand !== 'function') return false
+    const input = document.createElement('textarea')
+    input.value = formatSkillDraftForClipboard(parts, trigger)
+    input.style.position = 'fixed'
+    input.style.opacity = '0'
+    let written = false
+    input.addEventListener('copy', (event) => {
+        if (!event.clipboardData) return
+        event.preventDefault()
+        writeSkillDraftClipboard(event.clipboardData, parts, trigger)
+        written = true
+    })
+    const previous = document.activeElement
+    document.body.appendChild(input)
+    input.select()
+    try {
+        return document.execCommand('copy') && written
+    } catch {
+        return false
+    } finally {
+        input.remove()
+        if (previous instanceof HTMLElement) previous.focus({ preventScroll: true })
+    }
 }
 
 async function copyTextToClipboard(text: string, services?: any): Promise<void> {

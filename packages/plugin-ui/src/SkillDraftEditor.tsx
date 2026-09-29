@@ -8,10 +8,17 @@ import {
     type ReactElement,
     type RefObject,
 } from 'react'
+import type { SkillTrigger } from '@cpa/plugin-api'
 import { cn } from './cn.js'
 import {
     parseSkillDraft,
+    formatSkillDraftForClipboard,
+    parseReferencedSkillDraft,
+    formatSkillDisplayName,
+    skillReferencesFromParts,
     serializeSkillDraft,
+    SKILL_DRAFT_CLIPBOARD_MIME,
+    writeSkillDraftClipboard,
     type SkillDraftPart,
     type SkillNameRef,
 } from './skillDraft.js'
@@ -19,6 +26,11 @@ import {
 export interface SkillDraftEditorProps {
     value: string
     skills?: readonly SkillNameRef[]
+    trigger?: SkillTrigger
+    legacyValue?: boolean
+    allowSlashToken?: boolean
+    reservedSlashNames?: readonly string[]
+    references?: readonly { start: number; name: string }[]
     disabled?: boolean
     placeholder?: string
     ariaLabel?: string
@@ -49,6 +61,7 @@ const TYPING_DEBOUNCE_MS = 500
 interface HistoryEntry {
     value: string
     cursor: number
+    references?: { start: number; name: string }[]
 }
 
 const BOX_ICON_PATHS = [
@@ -60,6 +73,11 @@ const BOX_ICON_PATHS = [
 export function SkillDraftEditor({
     value,
     skills = [],
+    trigger = '$',
+    legacyValue = false,
+    allowSlashToken = false,
+    reservedSlashNames = [],
+    references,
     disabled = false,
     placeholder,
     ariaLabel,
@@ -88,12 +106,16 @@ export function SkillDraftEditor({
     const [isComposing, setIsComposing] = useState(false)
     const skillsRef = useRef(skills)
     skillsRef.current = skills
+    const triggerRef = useRef(trigger)
+    triggerRef.current = trigger
+    const reservedRef = useRef(reservedSlashNames)
+    reservedRef.current = reservedSlashNames
     const onChangeRef = useRef(onChange)
     onChangeRef.current = onChange
     const cursorRef = useRef(cursor)
     cursorRef.current = cursor
 
-    const historyRef = useRef<HistoryEntry[]>([{ value, cursor: cursor ?? value.length }])
+    const historyRef = useRef<HistoryEntry[]>([{ value, cursor: cursor ?? value.length, references: references ? [...references] : undefined }])
     const historyIndexRef = useRef<number>(0)
     const lastTypingTimeRef = useRef<number>(0)
     const isApplyingHistoryRef = useRef<boolean>(false)
@@ -122,14 +144,20 @@ export function SkillDraftEditor({
         adjustEditorHeight(rootRef.current, minHeightRef, maxHeight, minHeight)
     }
 
-    const pushHistory = (nextValue: string, nextCursor: number, forceNew: boolean = false) => {
+    const pushHistory = (
+        nextValue: string,
+        nextCursor: number,
+        forceNew: boolean = false,
+        explicitReferences?: { start: number; name: string }[],
+    ) => {
         const now = Date.now()
         const history = historyRef.current
         const index = historyIndexRef.current
         const current = history[index]
+        const references = explicitReferences ?? (rootRef.current ? skillReferencesFromParts(partsFromDom(rootRef.current)) : undefined)
 
         if (current && current.value === nextValue) {
-            history[index] = { value: nextValue, cursor: nextCursor }
+            history[index] = { value: nextValue, cursor: nextCursor, references }
             return
         }
 
@@ -142,10 +170,10 @@ export function SkillDraftEditor({
             (current && (current.value.endsWith(' ') || current.value.endsWith('\n')))
 
         if (isTyping && current && !isWordBoundary) {
-            history[index] = { value: nextValue, cursor: nextCursor }
+            history[index] = { value: nextValue, cursor: nextCursor, references }
         } else {
             const nextHistory = history.slice(0, index + 1)
-            nextHistory.push({ value: nextValue, cursor: nextCursor })
+            nextHistory.push({ value: nextValue, cursor: nextCursor, references })
             if (nextHistory.length > MAX_HISTORY_LENGTH) {
                 nextHistory.shift()
             }
@@ -159,7 +187,9 @@ export function SkillDraftEditor({
         if (!root) return
         isApplyingHistoryRef.current = true
         lastEmittedRef.current = entry.value
-        const parts = parseSkillDraft(entry.value, skillsRef.current)
+        const parts = entry.references
+            ? parseReferencedSkillDraft(entry.value, entry.references)
+            : parseSkillDraft(entry.value, skillsRef.current, undefined, triggerRef.current, legacyValue)
         writeDraftDom(root, parts)
         setDraftCaret(root, entry.cursor)
         resize()
@@ -191,19 +221,17 @@ export function SkillDraftEditor({
 
         const { start, end } = getSelectionOffsets(root)
         const currentText = readDraftDom(root).text
-        const nextText = currentText.slice(0, start) + '\n' + currentText.slice(end)
-        const nextCursor = start + 1
-
-        pushHistory(nextText, nextCursor, true)
-
-        const parts = parseSkillDraft(nextText, skillsRef.current)
+        const parts = replaceDraftParts(partsFromDom(root), start, end, '\n', skillsRef.current, triggerRef.current, false, reservedRef.current)
+        const nextText = serializeSkillDraft(parts)
+        const nextCursor = nextText.length - currentText.slice(end).length
+        pushHistory(nextText, nextCursor, true, skillReferencesFromParts(parts))
         writeDraftDom(root, parts)
         setDraftCaret(root, nextCursor)
         resize()
         scrollToActivePosition(root)
 
         lastEmittedRef.current = nextText
-        onChangeRef.current(nextText, Math.min(nextCursor, nextText.length))
+        onChangeRef.current(nextText, nextCursor)
     }
 
     useLayoutEffect(() => {
@@ -217,7 +245,12 @@ export function SkillDraftEditor({
             return
         }
 
+        const referencesChanged = references !== undefined && !sameReferences(
+            references,
+            skillReferencesFromParts(partsFromDom(root)),
+        )
         if (
+            !referencesChanged &&
             value === lastEmittedRef.current &&
             root.childNodes.length > 0 &&
             (!value ? root.querySelector('br') === null : true)
@@ -230,8 +263,23 @@ export function SkillDraftEditor({
         lastEmittedRef.current = value
         const nextCaret =
             typeof cursorRef.current === 'number' ? cursorRef.current : value.length
-        writeDraftDom(root, parseSkillDraft(value, skillsRef.current))
-        setDraftCaret(root, nextCaret)
+        const parts = references
+            ? parseReferencedSkillDraft(value, references)
+            : parseSkillDraft(value, skillsRef.current, undefined, trigger, legacyValue, reservedRef.current, allowSlashToken || legacyValue)
+        writeDraftDom(root, parts)
+        const canonical = serializeSkillDraft(parts)
+        const canonicalCaret = canonical === value ? nextCaret : Math.min(
+            serializeSkillDraft(parseSkillDraft(
+                value.slice(0, nextCaret) + ' ', skillsRef.current, undefined,
+                trigger, legacyValue, reservedRef.current, allowSlashToken || legacyValue,
+            )).length - 1,
+            canonical.length,
+        )
+        if (canonical !== value) {
+            lastEmittedRef.current = canonical
+            onChangeRef.current(canonical, canonicalCaret)
+        }
+        setDraftCaret(root, canonicalCaret)
         resize()
         scrollToActivePosition(root)
 
@@ -239,13 +287,13 @@ export function SkillDraftEditor({
         if (!currentEntry || currentEntry.value !== value) {
             pushHistory(value, nextCaret, true)
         }
-    }, [value, autoResize, maxHeight, minHeight])
+    }, [value, autoResize, maxHeight, minHeight, trigger, legacyValue, allowSlashToken, references])
 
     const emitFromDom = (forceNewHistory: boolean = false) => {
         const root = rootRef.current
         if (!root) return
         const read = readDraftDom(root)
-        const parts = parseSkillDraft(read.text, skillsRef.current, read.cursor)
+        const parts = foldLiveParts(read.parts, skillsRef.current, triggerRef.current, read.cursor, reservedRef.current)
         const next = serializeSkillDraft(parts)
         const domNeedsTrailingZwsp =
             next.endsWith('\n') && !root.lastChild?.textContent?.endsWith(ZWSP)
@@ -343,6 +391,7 @@ export function SkillDraftEditor({
                 onChangeRef.current(lastEmittedRef.current, caretSerializedOffset(root))
             }}
             onKeyDown={(event) => {
+                if (composingRef.current || event.nativeEvent?.isComposing || event.keyCode === 229) return
                 if (isUndoShortcut(event)) {
                     event.preventDefault()
                     handleUndo()
@@ -382,27 +431,29 @@ export function SkillDraftEditor({
                     insertNewline()
                 }
             }}
-            onCopy={(event) => handleClipboardCopy(event, rootRef.current)}
+            onCopy={(event) => handleClipboardCopy(event, rootRef.current, trigger)}
             onCut={(event) => {
                 if (disabled) return
                 const root = rootRef.current
                 if (!root) return
                 const { start, end } = getSelectionOffsets(root)
                 if (start === end) return
-                const currentText = readDraftDom(root).text
-                const cutText = currentText.slice(start, end)
+                const selection = window.getSelection()
+                const selected = selection?.rangeCount ? selection.getRangeAt(0).cloneContents() : null
+                const selectedParts = selected ? partsFromDom(selected) : []
                 if (event.clipboardData) {
-                    event.clipboardData.setData('text/plain', cutText)
+                    writeSkillDraftClipboard(event.clipboardData, selectedParts, trigger)
                 }
                 event.preventDefault()
-                const nextText = currentText.slice(0, start) + currentText.slice(end)
-                pushHistory(nextText, start, true)
-                const parts = parseSkillDraft(nextText, skillsRef.current, start)
+                const parts = replaceDraftParts(partsFromDom(root), start, end, '', skillsRef.current, triggerRef.current, false, reservedRef.current)
+                const canonical = serializeSkillDraft(parts)
+                const canonicalCursor = Math.min(start, canonical.length)
+                pushHistory(canonical, canonicalCursor, true, skillReferencesFromParts(parts))
                 writeDraftDom(root, parts)
-                setDraftCaret(root, start)
+                setDraftCaret(root, canonicalCursor)
                 resize()
-                lastEmittedRef.current = nextText
-                onChangeRef.current(nextText, start)
+                lastEmittedRef.current = canonical
+                onChangeRef.current(canonical, canonicalCursor)
             }}
             onPaste={(event) => {
                 if (disabled) return
@@ -419,19 +470,18 @@ export function SkillDraftEditor({
                 const currentText = readDraftDom(root).text
                 const { start, end } = getSelectionOffsets(root)
 
-                const nextText = currentText.slice(0, start) + normalized + currentText.slice(end)
-                const nextCursor = start + normalized.length
-
-                pushHistory(nextText, nextCursor, true)
-
-                const parts = parseSkillDraft(nextText, skillsRef.current)
+                const clipboardParts = readSkillClipboard(event.clipboardData, normalized, skillsRef.current)
+                const parts = replaceDraftParts(partsFromDom(root), start, end, normalized, skillsRef.current, triggerRef.current, false, reservedRef.current, clipboardParts)
+                const canonical = serializeSkillDraft(parts)
+                const canonicalCursor = canonical.length - currentText.slice(end).length
+                pushHistory(canonical, canonicalCursor, true, skillReferencesFromParts(parts))
                 writeDraftDom(root, parts)
-                setDraftCaret(root, nextCursor)
+                setDraftCaret(root, canonicalCursor)
                 resize()
                 scrollToActivePosition(root)
 
-                lastEmittedRef.current = nextText
-                onChangeRef.current(nextText, Math.min(nextCursor, nextText.length))
+                lastEmittedRef.current = canonical
+                onChangeRef.current(canonical, Math.min(canonicalCursor, canonical.length))
             }}
             onMouseDown={(event) => {
                 const chip = skillChipFromTarget(event.target)
@@ -509,6 +559,97 @@ function scrollToActivePosition(root: HTMLElement | null): void {
     if (typeof requestAnimationFrame === 'function') {
         requestAnimationFrame(doScroll)
     }
+}
+
+function sameReferences(
+    left: readonly { start: number; name: string }[],
+    right: readonly { start: number; name: string }[],
+): boolean {
+    return left.length === right.length && left.every((ref, index) =>
+        ref.start === right[index]?.start && ref.name === right[index]?.name)
+}
+
+function replaceDraftParts(
+    parts: readonly SkillDraftPart[],
+    start: number,
+    end: number,
+    inserted: string,
+    skills: readonly SkillNameRef[],
+    trigger: SkillTrigger,
+    allowLegacy = false,
+    reservedSlashNames: readonly string[] = [],
+    insertedParts?: readonly SkillDraftPart[],
+): SkillDraftPart[] {
+    const before: SkillDraftPart[] = []
+    const after: SkillDraftPart[] = []
+    let offset = 0
+    for (const part of parts) {
+        const length = part.type === 'skill' ? part.name.length + 1 : part.text.length
+        if (offset + length <= start) before.push(part)
+        else if (offset >= end) after.push(part)
+        else if (part.type === 'text') {
+            if (start > offset) before.push({ type: 'text', text: part.text.slice(0, start - offset) })
+            if (end < offset + length) after.push({ type: 'text', text: part.text.slice(end - offset) })
+        }
+        offset += length
+    }
+    const prefix = before.at(-1)?.type === 'text' ? before.pop() as { type: 'text'; text: string } : null
+    const suffix = after[0]?.type === 'text' ? after.shift() as { type: 'text'; text: string } : null
+    if (insertedParts) {
+        return [...before, ...(prefix ? [prefix] : []), ...insertedParts,
+            ...(suffix ? [suffix] : []), ...after]
+    }
+    const segments: SkillDraftPart[] = [
+        ...(prefix ? [prefix] : []),
+        ...(insertedParts ?? [{ type: 'text' as const, text: inserted }]),
+        ...(suffix ? [suffix] : []),
+    ]
+    const middle: SkillDraftPart[] = []
+    for (const segment of segments) {
+        if (segment.type === 'skill') {
+            middle.push(segment)
+            continue
+        }
+        const previous = middle.at(-1)
+        if (previous?.type === 'text') previous.text += segment.text
+        else middle.push({ ...segment })
+    }
+    const folded = middle.flatMap((part, index) => part.type === 'skill' ? [part] : parseSkillDraft(
+        part.text, skills, undefined, trigger, allowLegacy,
+        index === 0 && before.every((previous) => previous.type === 'text' && !previous.text.trim())
+            ? reservedSlashNames : [], false,
+    ))
+    return [...before, ...folded, ...after]
+}
+
+function foldLiveParts(
+    parts: readonly SkillDraftPart[],
+    skills: readonly SkillNameRef[],
+    trigger: SkillTrigger,
+    cursor?: number,
+    reservedSlashNames: readonly string[] = [],
+): SkillDraftPart[] {
+    let offset = 0
+    let hasLeadingContent = false
+    return parts.flatMap((part) => {
+        if (part.type === 'skill') {
+            offset += part.name.length + 1
+            hasLeadingContent = true
+            return [part]
+        }
+        const parsed = parseSkillDraft(
+            part.text,
+            skills,
+            cursor == null ? undefined : cursor - offset,
+            trigger,
+            false,
+            hasLeadingContent ? [] : reservedSlashNames,
+            false,
+        )
+        offset += part.text.length
+        if (part.text.trim()) hasLeadingContent = true
+        return parsed
+    })
 }
 
 function partsChanged(
@@ -628,7 +769,11 @@ function isEditorEmpty(root: HTMLElement | null, value: string): boolean {
     return !hasContent(root)
 }
 
-function partsFromDom(root: HTMLElement): SkillDraftPart[] {
+export function readSkillDraftParts(root: HTMLElement | null): SkillDraftPart[] {
+    return root ? partsFromDom(root) : []
+}
+
+function partsFromDom(root: Node): SkillDraftPart[] {
     if (!hasContent(root)) {
         return []
     }
@@ -771,20 +916,53 @@ function serializeNode(node: Node): string {
     return out
 }
 
+function readSkillClipboard(
+    clipboard: DataTransfer | undefined,
+    text: string,
+    skills: readonly SkillNameRef[],
+): SkillDraftPart[] | undefined {
+    const serialized = clipboard?.getData(SKILL_DRAFT_CLIPBOARD_MIME)
+    if (!serialized) return undefined
+    try {
+        const payload = JSON.parse(serialized) as {
+            text?: unknown
+            trigger?: unknown
+            parts?: unknown
+        }
+        if (payload.text !== text || !['$', '#', '/'].includes(String(payload.trigger)) ||
+            !Array.isArray(payload.parts) || payload.parts.length > text.length + 1) return undefined
+        const parts: SkillDraftPart[] = []
+        for (const part of payload.parts) {
+            if (part?.type === 'text' && typeof part.text === 'string') {
+                parts.push({ type: 'text', text: part.text })
+            } else if (part?.type === 'skill' && typeof part.name === 'string') {
+                const match = skills.find((skill) => skill.name.toLowerCase() === part.name.toLowerCase())
+                if (!match) return undefined
+                parts.push({ type: 'skill', name: match.name, displayName: formatSkillDisplayName(match.name) })
+            } else return undefined
+        }
+        if (formatSkillDraftForClipboard(parts, payload.trigger as SkillTrigger) !== text) return undefined
+        return parts
+    } catch {
+        return undefined
+    }
+}
+
 function handleClipboardCopy(
     event: ClipboardEvent<HTMLDivElement>,
     root: HTMLElement | null,
+    trigger: SkillTrigger,
 ): void {
     if (!root) return
     const selection = window.getSelection()
     if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return
     const range = selection.getRangeAt(0)
     if (!root.contains(range.commonAncestorContainer)) return
-    const serialized = serializeNode(range.cloneContents())
-    if (!serialized.includes('$')) return
+    const selected = range.cloneContents()
+    if (!selected.querySelector('[data-skill-name]')) return
     if (!event.clipboardData) return
     event.preventDefault()
-    event.clipboardData.setData('text/plain', serialized)
+    writeSkillDraftClipboard(event.clipboardData, partsFromDom(selected), trigger)
 }
 
 function isUndoShortcut(event: KeyboardEvent<HTMLElement>): boolean {

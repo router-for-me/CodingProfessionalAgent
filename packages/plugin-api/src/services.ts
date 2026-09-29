@@ -286,14 +286,21 @@ export interface SubagentsSettings {
 
 export type SkillMode = 'auto' | 'explicit' | 'disabled'
 export type SkillItemMode = 'default' | 'auto' | 'explicit' | 'disabled'
+export type SkillTrigger = '$' | '#' | '/'
+export interface SkillReference {
+  start: number
+  name: string
+}
 
 export interface SkillsSettings {
   defaultMode: SkillMode
+  trigger?: SkillTrigger
   skills?: Record<string, SkillItemMode>
 }
 
 export const DEFAULT_SKILLS_SETTINGS: SkillsSettings = Object.freeze({
   defaultMode: 'auto',
+  trigger: '$',
   skills: Object.freeze({}),
 })
 
@@ -472,6 +479,7 @@ export interface NotificationInput {
 }
 
 export interface ScheduledTaskItem {
+    skillReferences?: SkillReference[]
     id: string
     title: string
     schedule: string
@@ -550,7 +558,8 @@ export interface UiService {
     emitEvent?(eventName: string, payload?: unknown): void
     writeClipboard?(text: string): Promise<void>
     getComposerDraft?(key: string): string | undefined
-    setComposerDraft?(key: string, draft: string): void
+    getComposerDraftReferences?(key: string): SkillReference[] | undefined
+    setComposerDraft?(key: string, draft: string, references?: readonly SkillReference[]): void
     clearComposerDraft?(key: string): void
     openRightPanelTab?(tabId: string, options?: { activate?: boolean; params?: Record<string, unknown> }): void
     closeRightPanelTab?(tabId: string): void
@@ -785,6 +794,7 @@ export interface SessionMetricsService {
 
 export interface ChatSendPayload {
     text: string
+    skillReferences?: SkillReference[]
     sessionId: string
     editMessageId?: string
     userEntryId?: string

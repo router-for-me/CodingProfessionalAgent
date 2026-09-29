@@ -335,7 +335,7 @@ export class ScheduledTaskScheduler {
                     }
                 }
 
-                const acceptedSessionId = await sendFn({ text: task.prompt, sessionId, ...context })
+                const acceptedSessionId = await sendFn({ text: task.prompt, skillReferences: task.skillReferences, sessionId, ...context })
                 if (!acceptedSessionId) throw new Error('Agent did not accept the scheduled task')
             }
 

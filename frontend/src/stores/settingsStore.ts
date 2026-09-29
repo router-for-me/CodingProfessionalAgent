@@ -567,6 +567,12 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       }
       if (partial.skills) {
         settings.skills = {
+          trigger:
+            partial.skills.trigger === '#' || partial.skills.trigger === '/'
+              ? partial.skills.trigger
+              : partial.skills.trigger === '$'
+                ? '$'
+                : (state.settings.skills?.trigger ?? DEFAULT_SKILLS_SETTINGS.trigger),
           defaultMode:
             partial.skills.defaultMode === 'explicit' ||
             partial.skills.defaultMode === 'disabled' ||

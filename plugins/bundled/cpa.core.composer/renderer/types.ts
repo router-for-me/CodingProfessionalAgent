@@ -29,6 +29,7 @@ export type DimensionProbe = (
 
 export interface ComposerSendPayload {
     text: string
+    skillReferences?: { start: number; name: string }[]
     images: ComposerImage[]
     attachments?: ComposerAttachment[]
     expandedText?: string

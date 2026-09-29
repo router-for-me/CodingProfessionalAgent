@@ -198,6 +198,31 @@ describe('ScheduledCreateDrawer', () => {
         expect(screen.getByText('Important updates')).toBeInTheDocument()
     })
 
+    it('preserves multiple selected # cards and literal text in a scheduled prompt', async () => {
+        const user = userEvent.setup()
+        hostServices.settings!.getSnapshot = () => ({ skills: { defaultMode: 'auto', trigger: '#' } }) as any
+        render(
+            <HostServicesProvider services={hostServices}>
+                <ScheduledCreateDrawer open onClose={onCloseMock} models={mockModels}
+                    skills={[{ name: 'demo', description: 'Demo skill' }, { name: 'model', description: 'Model skill' }]} />
+            </HostServicesProvider>,
+        )
+        await user.type(screen.getByPlaceholderText('Scheduled task title'), 'Test')
+        const input = screen.getByTestId('scheduled-prompt-input')
+        await user.type(input, '$demo #de')
+        expect(screen.getByTestId('scheduled-skill-menu')).toBeInTheDocument()
+        fireEvent.keyDown(input, { key: 'Enter' })
+        expect(screen.getByTestId('composer-skill-chip')).toBeInTheDocument()
+        await user.type(input, '#mo')
+        await user.click(screen.getByRole('option', { name: /Model.*model/i }))
+        expect(input.querySelectorAll('[data-skill-name]')).toHaveLength(2)
+        await user.click(screen.getByRole('button', { name: 'Create' }))
+        const task = useScheduledTasksStore.getState().tasks[0]
+        expect(task).toMatchObject({ prompt: '$demo $demo $model', skillReferences: [
+            { start: 6, name: 'demo' }, { start: 12, name: 'model' },
+        ] })
+    })
+
     it('disables create button until title and prompt are filled', async () => {
         const user = userEvent.setup()
         render(

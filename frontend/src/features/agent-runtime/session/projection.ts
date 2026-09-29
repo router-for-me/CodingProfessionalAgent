@@ -74,6 +74,7 @@ function projectUser(entry: UserEntry): DisplayChatMessage {
         sessionId: entry.sessionId,
         role: 'user',
         content: text,
+        ...(entry.skillReferences ? { skillReferences: entry.skillReferences } : {}),
         parts: parts.length > 0 ? parts : [{ type: 'text', text }],
         createdAt: entry.createdAt,
         ...(entry.pendingStatus ? { pendingStatus: entry.pendingStatus } : {}),

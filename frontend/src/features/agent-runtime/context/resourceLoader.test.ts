@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { RendererRegistry as ExtensionRegistry, rendererRegistry } from '@/plugins/platform/rendererRegistry'
 import { FakeNativeBridge } from '../native/fakeNativeBridge'
-import { expandSkillCommand, expandPromptTemplate } from '@cpa/plugin-sdk'
+import { expandSkillCommand, expandPromptTemplate, expandUserSkillEntry } from '@cpa/plugin-sdk'
 import { expandSnapshotCommand, loadResourcesFromProviders } from './resourceLoader'
 import { formatWorktreeModePrompt } from './worktreeMode'
 import { resourcesAgentEntry } from '../../../../../plugins/bundled/cpa.core.resources/agent/index'
@@ -205,6 +205,17 @@ describe('loadResourcesFromProviders', () => {
             'ORIGINAL_BODY\n\nUser: z',
         )
         expect(expandSnapshotCommand('/p x', snapshot)).toBe('TEMPLATE x ORIGINAL')
+    })
+
+    it('expands only referenced new skill tokens while retaining old unmarked commands', () => {
+        const skills = [{ name: 's', body: 'BODY' }] as any
+        const entry = (text: string, skillReferences?: { start: number; name: string }[]) => ({
+            kind: 'user', content: [{ type: 'text', text }], skillReferences,
+        })
+        expect(expandUserSkillEntry(entry('$s', []), skills)).toEqual(entry('$s', []))
+        expect(expandUserSkillEntry(entry('/skill:s', []), skills)).toEqual(entry('/skill:s', []))
+        expect(expandUserSkillEntry(entry('$s', [{ start: 0, name: 's' }]), skills).content[0].text).toBe('BODY')
+        expect(expandUserSkillEntry(entry('$s', undefined), skills).content[0].text).toBe('BODY')
     })
 
     it('loads global-only resources when cwd is undefined or invalid', async () => {

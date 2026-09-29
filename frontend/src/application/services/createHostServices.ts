@@ -1242,8 +1242,12 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
             return useUiStore.getState().composerDrafts[key]
         },
 
-        setComposerDraft(key: string, draft: string): void {
-            useUiStore.getState().setComposerDraftForSession?.(key, draft)
+        getComposerDraftReferences(key: string) {
+            return useUiStore.getState().composerDraftReferences[key]
+        },
+
+        setComposerDraft(key: string, draft: string, references = []): void {
+            useUiStore.getState().setComposerDraftForSession?.(key, draft, references)
         },
 
         clearComposerDraft(key: string): void {

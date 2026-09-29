@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import type { SkillReference } from '@cpa/plugin-api'
 import { createId } from '@/lib/id'
 import { isMobileBrowser } from '@/lib/platform'
 import { useSessionStore } from '@/stores/sessionStore'
@@ -115,6 +116,7 @@ interface UiState {
   searchOpen: boolean
   composerDraft: string
   composerDrafts: Record<string, string>
+  composerDraftReferences: Record<string, SkillReference[]>
   pendingSessionContext: PendingSessionContext
   toasts: ToastItem[]
   toggleGroup: (key: string) => void
@@ -143,7 +145,7 @@ interface UiState {
   setSearchOpen: (open: boolean) => void
   toggleSearchOpen: () => void
   setComposerDraft: (draft: string) => void
-  setComposerDraftForSession: (sessionId: string | null, draft: string) => void
+  setComposerDraftForSession: (sessionId: string | null, draft: string, references?: readonly SkillReference[]) => void
   setPendingSessionContext: (context: PendingSessionContext) => void
   pushToast: (message: string, action?: ToastItem['action']) => string
   dismissToast: (id: string) => void
@@ -182,6 +184,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   searchOpen: false,
   composerDraft: '',
   composerDrafts: {},
+  composerDraftReferences: {},
   pendingSessionContext: { projectId: null, branch: null },
   toasts: [],
 
@@ -392,12 +395,16 @@ export const useUiStore = create<UiState>((set, get) => ({
 
   setComposerDraft: (draft) => set({ composerDraft: draft }),
 
-  setComposerDraftForSession: (sessionId, draft) =>
+  setComposerDraftForSession: (sessionId, draft, references = []) =>
     set((state) => ({
       composerDraft: draft,
       composerDrafts: {
         ...state.composerDrafts,
         [getComposerDraftKey(sessionId)]: draft,
+      },
+      composerDraftReferences: {
+        ...state.composerDraftReferences,
+        [getComposerDraftKey(sessionId)]: references.map((ref) => ({ ...ref })),
       },
     })),
 

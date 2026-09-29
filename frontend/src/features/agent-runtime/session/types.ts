@@ -74,6 +74,7 @@ export interface DisplayChatMessage {
     sessionId: string
     role: 'user' | 'assistant'
     content: string
+    skillReferences?: { start: number; name: string }[]
     parts?: DisplayMessagePart[]
     status?: EntryStatus
     pendingStatus?: UserPendingStatus

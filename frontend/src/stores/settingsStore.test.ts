@@ -23,6 +23,15 @@ describe('settingsStore', () => {
     expect(useSettingsStore.getState().settings.preventSleep).toBe(true)
   })
 
+  it('defaults and hydrates the configured skill trigger', () => {
+    useSettingsStore.getState().hydrate({ skills: { defaultMode: 'auto', trigger: '#' } })
+    expect(useSettingsStore.getState().settings.skills?.trigger).toBe('#')
+    useSettingsStore.getState().hydrate({ skills: { defaultMode: 'auto', trigger: 'invalid' as any } })
+    expect(useSettingsStore.getState().settings.skills?.trigger).toBe('#')
+    useSettingsStore.getState().setSkillsSettings({ trigger: '/' })
+    expect(useSettingsStore.getState().settings.skills?.trigger).toBe('/')
+  })
+
   it('hydrates preventSleep properly', () => {
     useSettingsStore.getState().hydrate({ preventSleep: false })
     expect(useSettingsStore.getState().settings.preventSleep).toBe(false)

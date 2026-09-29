@@ -2369,8 +2369,15 @@ export class SessionDatabaseService {
       }
     }
 
-    for (const text of userTexts) {
-      const dollarMatches = Array.from(text.matchAll(/\$([a-zA-Z0-9_-]+)/g))
+    if (Array.isArray(userEntry?.skillReferences)) {
+      const text = userTexts[0] ?? ''
+      for (const ref of userEntry.skillReferences) {
+        if (typeof ref?.start === 'number' && typeof ref.name === 'string' &&
+            text.startsWith(`$${ref.name}`, ref.start)) skills.add(ref.name)
+      }
+    } else {
+      for (const text of userTexts) {
+        const dollarMatches = Array.from(text.matchAll(/\$([a-zA-Z0-9_-]+)/g))
       for (const match of dollarMatches) {
         const name = match[1]
         if (name && !/^\d+$/.test(name)) {
@@ -2378,11 +2385,12 @@ export class SessionDatabaseService {
         }
       }
 
-      const slashMatches = Array.from(text.matchAll(/\/skill:([a-zA-Z0-9_-]+)/g))
-      for (const match of slashMatches) {
-        const name = match[1]
-        if (name) {
-          skills.add(name)
+        const slashMatches = Array.from(text.matchAll(/\/skill:([a-zA-Z0-9_-]+)/g))
+        for (const match of slashMatches) {
+          const name = match[1]
+          if (name) {
+            skills.add(name)
+          }
         }
       }
     }

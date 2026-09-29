@@ -46,6 +46,17 @@ describe('projectConversation', () => {
         ])
     })
 
+    it('projects explicit skill references without turning literal dollar text into chips', () => {
+        const entries: ConversationEntry[] = [{
+            id: 'u1', sessionId: 's1', createdAt: 1, kind: 'user',
+            content: [{ type: 'text', text: '$demo $demo' }],
+            skillReferences: [{ start: 6, name: 'demo' }],
+        }]
+        expect(projectConversation(entries)[0]).toMatchObject({
+            content: '$demo $demo', skillReferences: [{ start: 6, name: 'demo' }],
+        })
+    })
+
     it('associates adjacent tool results onto tool call cards', () => {
         const entries: ConversationEntry[] = [
             {

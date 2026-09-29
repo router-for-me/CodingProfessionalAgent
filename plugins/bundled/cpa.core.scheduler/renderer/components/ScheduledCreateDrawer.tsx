@@ -19,11 +19,14 @@ import {
     buildSkillSuggestions,
     cn,
     getSkillQuery,
-    insertSkillAtCaret,
+    insertSkillInParts,
+    normalizeSkillDraft,
+    readSkillDraftParts,
     SkillDraftEditor,
     SkillMenu,
     useHostServices,
     useSkillUsageCounts,
+    useSettings,
     useTranslation,
     useWorkspaceVisible,
     type SkillSuggestion,
@@ -653,6 +656,9 @@ export function ScheduledCreateDrawer({
     const navigate = useNavigate()
     const hostServices = useHostServices()
     const usageCounts = useSkillUsageCounts()
+    const trigger = useSettings().skills?.trigger ?? '$'
+    const promptEditorRef = useRef<HTMLDivElement>(null)
+    const [initialReferences, setInitialReferences] = useState<{ start: number; name: string }[] | undefined>()
     const reactId = useId()
     const skillListboxId = `skill-menu-${reactId.replace(/:/g, '')}`
 
@@ -791,6 +797,7 @@ export function ScheduledCreateDrawer({
             const resolvedEditingProject = findScheduledTaskProject(editingTask, projects)
             setTitle(editingTask.title)
             setPrompt(editingTask.prompt)
+            setInitialReferences(editingTask.skillReferences)
             setRunIn((editingTask.runIn as any) || 'existing-chat')
             setChatSessionId(editingTask.chatSessionId || null)
             setChatTitle(editingTask.chatTitle || '')
@@ -823,6 +830,7 @@ export function ScheduledCreateDrawer({
         } else {
             setTitle('')
             setPrompt('')
+            setInitialReferences(undefined)
             setRunIn('existing-chat')
             setChatSessionId(null)
             setChatTitle('')
@@ -884,7 +892,7 @@ export function ScheduledCreateDrawer({
         return projects.find((p) => p.id === projectId) ?? projects[0]
     }, [projects, projectId])
 
-    const skillQuery = getSkillQuery(prompt, promptCursor)
+    const skillQuery = getSkillQuery(prompt, promptCursor, trigger)
     const skillSuggestions = useMemo(() => {
         if (skillQuery === null) return [] as SkillSuggestion[]
         return buildSkillSuggestions({
@@ -918,7 +926,9 @@ export function ScheduledCreateDrawer({
 
     const handleSelectSkill = (suggestion: SkillSuggestion | string) => {
         const skillName = typeof suggestion === 'string' ? suggestion : suggestion.name
-        const inserted = insertSkillAtCaret(prompt, skillName, promptCursor)
+        const inserted = insertSkillInParts(readSkillDraftParts(promptEditorRef.current), skillName, promptCursor, trigger)
+        if (!inserted) return
+        setInitialReferences(inserted.references)
         setPrompt(inserted.text)
         setPromptCursor(inserted.cursor)
         setSkillMenuOpen(false)
@@ -958,7 +968,8 @@ export function ScheduledCreateDrawer({
 
     const handleSave = () => {
         const finalTitle = title.trim()
-        const finalPrompt = prompt.trim()
+        const normalized = normalizeSkillDraft(readSkillDraftParts(promptEditorRef.current), skills, trigger)
+        const finalPrompt = normalized.text.trim()
         if (!finalTitle || !finalPrompt) return
 
         let scheduleStr = 'daily ' + time
@@ -974,6 +985,9 @@ export function ScheduledCreateDrawer({
         const taskData = {
             title: finalTitle,
             prompt: finalPrompt,
+            skillReferences: normalized.references.map((ref) => ({
+                ...ref, start: ref.start - (normalized.text.length - normalized.text.trimStart().length),
+            })).filter((ref) => ref.start >= 0),
             schedule: scheduleStr,
             runIn,
             chatSessionId: runIn === 'existing-chat' ? (chatSessionId === 'new-chat' ? null : chatSessionId) : null,
@@ -1156,6 +1170,10 @@ export function ScheduledCreateDrawer({
                         )}
                     >
                         <SkillDraftEditor
+                            editorRef={promptEditorRef}
+                            trigger={trigger}
+                            references={initialReferences}
+                            legacyValue={Boolean(editingTask && !editingTask.skillReferences)}
                             value={prompt}
                             cursor={promptCursor}
                             skills={skills}
@@ -1164,6 +1182,7 @@ export function ScheduledCreateDrawer({
                                 'Describe what CPA should do',
                             )}
                             onChange={(val, cur) => {
+                                setInitialReferences(undefined)
                                 setPrompt(val)
                                 setPromptCursor(cur)
                             }}

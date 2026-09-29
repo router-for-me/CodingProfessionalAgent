@@ -136,6 +136,16 @@ describe('SkillsSection', () => {
         )
     })
 
+    it('offers exactly the three supported trigger shortcuts', async () => {
+        renderComponent()
+        const select = screen.getByRole('combobox', { name: '技能触发快捷键' })
+        expect(select).toHaveTextContent('$')
+        fireEvent.click(select)
+        expect(screen.getAllByRole('option').map((item) => item.textContent)).toEqual(['$', '#', '/'])
+        fireEvent.click(screen.getByRole('option', { name: '#' }))
+        expect(mockSetSkillsSettings).toHaveBeenCalledWith(expect.objectContaining({ trigger: '#' }))
+    })
+
     it('lists all skills with name, description, and directory', () => {
         renderComponent()
 

@@ -174,14 +174,16 @@ export function collectInvokedSkills(
     if (entry.kind !== 'user') continue
     for (const block of entry.content) {
       if (block.type !== 'text') continue
-      const parts = parseSkillDraft(block.text, skills)
+      const parts = entry.skillReferences
+        ? entry.skillReferences.map((ref) => ({ type: 'skill' as const, name: ref.name, displayName: formatSkillDisplayName(ref.name) }))
+        : parseSkillDraft(block.text, skills)
       let foundInline = false
       for (const part of parts) {
         if (part.type !== 'skill') continue
         foundInline = true
         add(part.name, part.displayName)
       }
-      if (foundInline) continue
+      if (foundInline || entry.skillReferences) continue
       const presentation = matchSkillPresentation(block.text, skills)
       if (!presentation) continue
       add(presentation.name, presentation.displayName, presentation.args)

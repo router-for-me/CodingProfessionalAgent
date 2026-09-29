@@ -155,5 +155,15 @@ describe('cpa.core.composer Renderer Entry', () => {
             } as any,
         )
         expect((expanded as any).text).toBe('Expanded with arg1')
+
+        const shifted = (promptPrep!.value as any).preprocess(
+            { text: '\n/unknown $test', skillReferences: [{ start: 10, name: 'test' }] },
+            { prompts: [] } as any,
+        )
+        expect(shifted).toMatchObject({
+            text: '/unknown $test', skillReferences: [{ start: 9, name: 'test' }],
+        })
+        const skillPrep = preprocessors.find((p) => p.id === 'skill-preprocessor')
+        expect((skillPrep!.value as any).preprocess(shifted, {})).toBe(shifted)
     })
 })

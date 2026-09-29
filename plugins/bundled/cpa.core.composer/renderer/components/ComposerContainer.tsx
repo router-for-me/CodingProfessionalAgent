@@ -85,6 +85,7 @@ export function ComposerContainer() {
                 void services.chatMessages
                     .send({
                         text: payload.text,
+                        skillReferences: payload.skillReferences,
                         images: payload.images,
                         projectId: payload.projectId,
                         branch: payload.branch,

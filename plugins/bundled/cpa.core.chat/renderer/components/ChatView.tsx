@@ -188,12 +188,13 @@ export function ChatView(props: ChatViewProps) {
     }, [chatService, sessionId])
 
     const handleEditMessage = useCallback(
-        async (messageId: string, text: string) => {
+        async (messageId: string, text: string, skillReferences?: { start: number; name: string }[]) => {
             if (!chatService?.send) return
             const editedSessionId = await chatService.send({
                 text,
                 sessionId,
                 editMessageId: messageId,
+                skillReferences,
             })
             if (!editedSessionId) {
                 throw new Error(

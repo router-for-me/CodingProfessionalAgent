@@ -90,6 +90,7 @@ export interface SessionDelegateRunRequest {
     editMessageId?: string
     userEntryId?: string
     userEntryCreatedAt?: number
+    skillReferences?: { start: number; name: string }[]
     followUpMode?: 'steer' | 'queue'
 }
 

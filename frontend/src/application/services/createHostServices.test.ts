@@ -337,17 +337,20 @@ describe('createHostServices', () => {
 
     it('stores composer drafts under already-normalized keys', () => {
         const services = createHostServices()
-        useUiStore.setState({ composerDraft: '', composerDrafts: {} })
+        useUiStore.setState({ composerDraft: '', composerDrafts: {}, composerDraftReferences: {} })
 
         services.ui?.setComposerDraft?.('new-chat', 'New chat draft')
-        services.ui?.setComposerDraft?.('session:sess-1', 'Session draft')
+        services.ui?.setComposerDraft?.('session:sess-1', '$demo', [{ start: 0, name: 'demo' }])
 
         expect(services.ui?.getComposerDraft?.('new-chat')).toBe('New chat draft')
-        expect(services.ui?.getComposerDraft?.('session:sess-1')).toBe('Session draft')
+        expect(services.ui?.getComposerDraft?.('session:sess-1')).toBe('$demo')
+        expect(services.ui?.getComposerDraftReferences?.('session:sess-1')).toEqual([{ start: 0, name: 'demo' }])
         expect(useUiStore.getState().composerDrafts).toEqual({
             'new-chat': 'New chat draft',
-            'session:sess-1': 'Session draft',
+            'session:sess-1': '$demo',
         })
+        services.ui?.clearComposerDraft?.('session:sess-1')
+        expect(services.ui?.getComposerDraftReferences?.('session:sess-1')).toEqual([])
     })
 
     it('delegates schedule operations through ScheduleService', async () => {

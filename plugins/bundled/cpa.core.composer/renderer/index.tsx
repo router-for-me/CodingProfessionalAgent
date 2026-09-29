@@ -14,7 +14,7 @@ import { ContextUsageRing } from './components/ContextUsageRing.js'
 import {
     AttachControl,
 } from './components/ComposerToolbarControls.js'
-import { expandPromptTemplate } from './utils/promptTemplates.js'
+import { expandPromptTemplateWithReferences, trimTextWithSkillReferences } from './utils/promptTemplates.js'
 import { isBuiltinSlashCommand } from './utils/slashCommands.js'
 import {
     executeCycleReasoningEffort,
@@ -105,17 +105,20 @@ export const composerRendererEntry = definePluginEntry({
                 id: 'prompt-preprocessor',
                 order: 10,
                 preprocess: (payload, ctx) => {
-                    const text = payload.text || ''
-                    const trimmed = text.trim()
+                    const trimmed = trimTextWithSkillReferences(
+                        payload.text || '',
+                        Array.isArray(payload.skillReferences) ? payload.skillReferences : [],
+                    )
                     if (
-                        trimmed.startsWith('/') &&
-                        !isBuiltinSlashCommand(trimmed)
+                        trimmed.text.startsWith('/') &&
+                        !isBuiltinSlashCommand(trimmed.text)
                     ) {
                         const prompts = (ctx as any)?.prompts || []
-                        const expanded = expandPromptTemplate(trimmed, prompts)
+                        const expanded = expandPromptTemplateWithReferences(trimmed.text, trimmed.references, prompts)
                         return {
                             ...payload,
-                            text: expanded,
+                            text: expanded.text,
+                            skillReferences: expanded.references,
                         }
                     }
                     return payload

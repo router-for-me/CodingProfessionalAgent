@@ -30,6 +30,8 @@ export interface BuildSlashSuggestionsInput {
     modelDescription?: string
     modelName?: string
     actions?: readonly ActionContribution[]
+    includeSkills?: boolean
+    skillsOnly?: boolean
 }
 
 export interface BuildSlashSuggestionsResult {
@@ -92,7 +94,7 @@ export function buildSlashSuggestionsWithDiagnostics(
     let hasCompact = false
     let hasModel = false
 
-    for (const action of slashActions) {
+    for (const action of input.skillsOnly ? [] : slashActions) {
         const rawName = action.id.startsWith('/') ? action.id.slice(1) : action.id
         const commandBody =
             rawName === 'composer.compact'
@@ -138,7 +140,7 @@ export function buildSlashSuggestionsWithDiagnostics(
     }
 
     // 1. Register builtin Compact command if not already registered via actions
-    if (!hasCompact) {
+    if (!hasCompact && !input.skillsOnly) {
         const compactName = (input.compactName || 'compact').trim()
         const compactDesc =
             input.compactDescription ?? 'Compact conversation context'
@@ -164,7 +166,7 @@ export function buildSlashSuggestionsWithDiagnostics(
     }
 
     // 2. Register builtin Model command if not already registered via actions
-    if (!hasModel) {
+    if (!hasModel && !input.skillsOnly) {
         const modelName = (input.modelName || 'model').trim()
         const modelDesc = input.modelDescription ?? 'Open model selector'
         const modelCmd = `/${modelName}`
@@ -189,7 +191,7 @@ export function buildSlashSuggestionsWithDiagnostics(
     }
 
     // 3. Register template commands
-    const prompts = [...input.prompts].sort((a, b) =>
+    const prompts = [...(input.skillsOnly ? [] : input.prompts)].sort((a, b) =>
         a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }),
     )
     for (const prompt of prompts) {
@@ -204,6 +206,19 @@ export function buildSlashSuggestionsWithDiagnostics(
         }
         if (matchesQuery(query, commandBody, prompt.description)) {
             if (claim(commandBody, 'template', suggestion)) optionIndex += 1
+        }
+    }
+
+    if (input.includeSkills) {
+        for (const skill of input.skills) {
+            if (!matchesQuery(query, skill.name, skill.description ?? '')) continue
+            items.push({
+                id: slashOptionId('skill', skill.name, optionIndex++),
+                group: 'skill',
+                command: `/${skill.name}`,
+                description: skill.description ?? '',
+                insertText: `/skill:${skill.name} `,
+            })
         }
     }
 
@@ -298,6 +313,11 @@ export function SlashMenu({
         >
             {suggestions.map((item, index) => {
                 const selected = index === safeIndex
+                const groupLabel = item.group === 'skill'
+                    ? t('slash.group.skill', { defaultValue: 'Skills' })
+                    : item.group === 'template'
+                        ? t('slash.group.template', { defaultValue: 'Templates' })
+                        : t('slash.group.builtin', { defaultValue: 'Commands' })
                 return (
                     <button
                         key={item.id}
@@ -317,6 +337,7 @@ export function SlashMenu({
                                 : 'text-[var(--text-secondary)] hover:bg-[var(--bg-sidebar-hover)] hover:text-[var(--text-primary)]',
                         )}
                     >
+                        <span className="shrink-0 text-[11px] text-[var(--text-muted)]">{groupLabel}</span>
                         <span className="shrink-0 font-mono text-[13px]">{item.command}</span>
                         {item.description ? (
                             <span className="min-w-0 flex-1 truncate text-right text-[11px] text-[var(--text-muted)]">
@@ -331,7 +352,8 @@ export function SlashMenu({
 }
 
 export function getSlashQuery(text: string): string | null {
-    if (!text.startsWith('/')) return null
-    if (/[\s\u3000]/.test(text)) return null
-    return text.slice(1)
+    const command = text.trimStart()
+    if (!command.startsWith('/')) return null
+    if (/[\s\u3000]/.test(command)) return null
+    return command.slice(1)
 }

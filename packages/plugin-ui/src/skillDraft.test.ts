@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest'
 import {
     formatSkillDisplayName,
     getSkillQuery,
+    formatSkillDraftForClipboard,
+    insertSkillInParts,
+    normalizeSkillDraft,
+    parseReferencedSkillDraft,
     insertSkillAtCaret,
     parseSkillDraft,
     replaceSkillToken,
@@ -65,6 +69,70 @@ describe('skillDraftHasChip', () => {
     it('detects whether any skill chip parts are present', () => {
         expect(skillDraftHasChip(parseSkillDraft('plain', skills))).toBe(false)
         expect(skillDraftHasChip(parseSkillDraft('$demo', skills))).toBe(true)
+    })
+})
+
+describe('configured skill triggers and stored references', () => {
+    const loaded = [{ name: 'demo' }]
+
+    it('recognizes only the selected trigger and never treats Markdown headings as tokens', () => {
+        expect(getSkillQuery('use #de', undefined, '#')).toBe('de')
+        expect(getSkillQuery('use $de', undefined, '#')).toBeNull()
+        expect(getSkillQuery('# title', undefined, '#')).toBeNull()
+        expect(getSkillQuery('##demo', undefined, '#')).toBeNull()
+        expect(parseSkillDraft('#demo $demo /skill:demo', loaded, undefined, '#', false, [], false)).toEqual([
+            { type: 'skill', name: 'demo', displayName: 'Demo' },
+            { type: 'text', text: ' $demo /skill:demo' },
+        ])
+    })
+
+    it('keeps literal dollar text separate from canonical chips in alternate modes', () => {
+        const parts = [
+            { type: 'text' as const, text: '$demo ' },
+            { type: 'skill' as const, name: 'demo', displayName: 'Demo' },
+        ]
+        const result = normalizeSkillDraft(parts, loaded, '#')
+        expect(result).toEqual({ text: '$demo $demo', references: [{ start: 6, name: 'demo' }] })
+        expect(parseReferencedSkillDraft(result.text, result.references)).toEqual(parts)
+        expect(formatSkillDraftForClipboard(parts, '#')).toBe('$demo #demo')
+        expect(formatSkillDraftForClipboard(parts, '/')).toBe('$demo /skill:demo')
+    })
+
+    it('inserts at the caret without reinterpreting literal text or an existing chip', () => {
+        const parts = [
+            { type: 'text' as const, text: 'use #de tail ' },
+            { type: 'skill' as const, name: 'demo', displayName: 'Demo' },
+            { type: 'text' as const, text: ' $demo' },
+        ]
+        expect(insertSkillInParts(parts, 'model', 7, '#')).toEqual({
+            text: 'use $model  tail $demo $demo', cursor: 11,
+            references: [{ start: 4, name: 'model' }, { start: 17, name: 'demo' }],
+        })
+    })
+
+    it('reserves slash controls after leading whitespace without blocking inline slash skills', () => {
+        const commands = [{ name: 'model' }, { name: 'compact' }, { name: 'review' }]
+        for (const text of [' /model hi', '\n/compact focus', '\t/review file']) {
+            expect(parseSkillDraft(text, commands, undefined, '/', false, ['model', 'compact', 'review'], false))
+                .toEqual([{ type: 'text', text }])
+            expect(normalizeSkillDraft([{ type: 'text', text }], commands, '/', ['model', 'compact', 'review']))
+                .toEqual({ text, references: [] })
+        }
+        expect(normalizeSkillDraft([
+            { type: 'text', text: '\n' }, { type: 'text', text: '/compact focus' },
+        ], commands, '/', ['model', 'compact']))
+            .toEqual({ text: '\n/compact focus', references: [] })
+        expect(normalizeSkillDraft([{ type: 'text', text: 'use /model hi' }], commands, '/', ['model']))
+            .toEqual({ text: 'use $model hi', references: [{ start: 4, name: 'model' }] })
+    })
+
+    it('reserves direct slash commands while allowing explicit skill tokens', () => {
+        expect(normalizeSkillDraft([{ type: 'text', text: '/model ' }], [{ name: 'model' }], '/', ['model']))
+            .toEqual({ text: '/model ', references: [] })
+        expect(parseSkillDraft('/skill:model ', [{ name: 'model' }], undefined, '/', false, [], true)).toEqual([
+            { type: 'skill', name: 'model', displayName: 'Model' },
+            { type: 'text', text: ' ' },
+        ])
     })
 })
 

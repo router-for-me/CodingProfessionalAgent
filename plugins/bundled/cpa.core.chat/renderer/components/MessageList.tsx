@@ -28,7 +28,7 @@ export interface MessageListProps {
   messages: DisplayMessage[]
   onApproveTool: (toolId: string) => void
   onRejectTool: (toolId: string) => void
-  onEditMessage?: (messageId: string, text: string) => void | Promise<void>
+  onEditMessage?: (messageId: string, text: string, references?: { start: number; name: string }[]) => void | Promise<void>
   onRetryMessage?: (messageId: string) => void | Promise<void>
   onForkMessage?: (messageId: string) => void | Promise<void>
   onExecuteHook?: (messageId: string) => void | Promise<void>
@@ -487,7 +487,7 @@ function renderCompactTurns(
 interface CompactTurnHandlers {
   onApproveTool: (toolId: string) => void
   onRejectTool: (toolId: string) => void
-  onEditMessage?: (messageId: string, text: string) => void | Promise<void>
+  onEditMessage?: (messageId: string, text: string, references?: { start: number; name: string }[]) => void | Promise<void>
   onRetryMessage?: (messageId: string) => void | Promise<void>
   onForkMessage?: (messageId: string) => void | Promise<void>
   onExecuteHook?: (messageId: string) => void | Promise<void>

@@ -98,6 +98,7 @@ export type UserPendingStatus = 'steer' | 'queue'
 
 export interface UserEntry extends EntryBase {
     kind: 'user'
+    skillReferences?: { start: number; name: string }[]
     content: ContentBlock[]
     pendingStatus?: UserPendingStatus
     /** Dynamic reasoning effort applied for this user turn. */

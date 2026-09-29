@@ -1251,6 +1251,8 @@ export class CLIProxyAPIAgentService implements AgentService {
                 DEFAULT_SUBAGENT_SETTINGS
 
             const skillsSettings: SkillsSettings = {
+                trigger: input.skillsSettings?.trigger ??
+                    this.latestSnapshot?.skillsSettings?.trigger ?? DEFAULT_SKILLS_SETTINGS.trigger,
                 defaultMode:
                     input.skillsSettings?.defaultMode ??
                     this.latestSnapshot?.skillsSettings?.defaultMode ??

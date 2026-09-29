@@ -92,6 +92,7 @@ export function useAgentService(): AgentService | null {
 
 export type AgentSendPayload = {
     text: string
+    skillReferences?: { start: number; name: string }[]
     images?: readonly ComposerImage[]
     kind?: QuickActionKind
     /** Pending project selection — hook creates session after preflight only. */
@@ -1117,6 +1118,7 @@ async function executeDelegateRun(
             editMessageId: req.editMessageId,
             userEntryId: req.userEntryId,
             userEntryCreatedAt: req.userEntryCreatedAt,
+            skillReferences: req.skillReferences,
             followUpMode: req.followUpMode,
             onRunFinish: markDelegateRunFinished,
         })
@@ -1576,6 +1578,7 @@ function buildUserEntry(
     text: string,
     images: readonly ComposerImage[],
     reasoningEffort?: string,
+    skillReferences?: { start: number; name: string }[],
 ): UserEntry {
     const content: ContentBlock[] = []
     const trimmed = text.trim()
@@ -1595,11 +1598,12 @@ function buildUserEntry(
         createdAt: Date.now(),
         kind: 'user',
         content,
+        ...(skillReferences ? { skillReferences } : {}),
         ...(reasoningEffort ? { reasoningEffort } : {}),
     }
 }
 
-function replaceUserEntryText(entry: UserEntry, text: string): UserEntry {
+function replaceUserEntryText(entry: UserEntry, text: string, skillReferences?: { start: number; name: string }[]): UserEntry {
     const nextContent: UserEntry['content'] = entry.content.filter(
         (block) => block.type !== 'text',
     )
@@ -1608,6 +1612,7 @@ function replaceUserEntryText(entry: UserEntry, text: string): UserEntry {
         ...entry,
         createdAt: Date.now(),
         content: nextContent,
+        skillReferences,
     }
 }
 
@@ -2416,7 +2421,7 @@ export function useAgentStream(
 
                 if (effectiveFollowUpMode === 'steer') {
                     const steerEntry: UserEntry = {
-                        ...buildUserEntry(targetSessionId, trimmed, images, effectiveEffort),
+                        ...buildUserEntry(targetSessionId, trimmed, images, effectiveEffort, payload.skillReferences),
                         pendingStatus: 'steer',
                     }
                     if (payload.userEntryId) {
@@ -2466,7 +2471,7 @@ export function useAgentStream(
                     return targetSessionId
                 } else {
                     const queueEntry: UserEntry = {
-                        ...buildUserEntry(targetSessionId, trimmed, images, effectiveEffort),
+                        ...buildUserEntry(targetSessionId, trimmed, images, effectiveEffort, payload.skillReferences),
                         pendingStatus: 'queue',
                     }
                     if (payload.userEntryId) {
@@ -2517,7 +2522,7 @@ export function useAgentStream(
                         rt.sessionQueues.set(targetSessionId, queue)
                     }
                     queue.push({
-                        entry: buildUserEntry(targetSessionId, payload.text, payload.images ?? []),
+                        entry: buildUserEntry(targetSessionId, payload.text, payload.images ?? [], undefined, payload.skillReferences),
                         payload,
                         options: opts,
                     })
@@ -2778,7 +2783,7 @@ export function useAgentStream(
 
                     userEntry =
                         activatedUserEntries[0] ?? {
-                            ...buildUserEntry(sessionId, trimmed, images),
+                            ...buildUserEntry(sessionId, trimmed, images, undefined, payload.skillReferences),
                             createdAt: executionStartTime,
                         }
                     if (activatedUserEntries.length === 0) {
@@ -2798,7 +2803,7 @@ export function useAgentStream(
                         )
                     }
                     userEntry = {
-                        ...replaceUserEntryText(target, trimmed),
+                        ...replaceUserEntryText(target, trimmed, payload.skillReferences),
                         reasoningEffort: effectiveEffort,
                     }
                     priorEntries = existingEntries.slice(0, targetIndex)
@@ -2834,7 +2839,7 @@ export function useAgentStream(
                     pruneHistoricalSubAgents(service, sessionId, keptEntries)
                 } else {
                     priorEntries = existingEntries
-                    userEntry = buildUserEntry(sessionId, trimmed, images, effectiveEffort)
+                    userEntry = buildUserEntry(sessionId, trimmed, images, effectiveEffort, payload.skillReferences)
                     if (payload.userEntryId) {
                         userEntry.id = payload.userEntryId
                     }
@@ -3226,6 +3231,7 @@ export function useAgentStream(
                     ? { text: input, images: [], kind: opts?.kind, onSessionAccepted: opts?.onSessionAccepted }
                     : {
                           text: input.text,
+                          skillReferences: input.skillReferences,
                           images: input.images ?? [],
                           kind: input.kind ?? opts?.kind,
                           projectId: input.projectId,
@@ -3375,14 +3381,14 @@ export function useAgentStream(
                     const target = existingEntries[targetIndex]
                     if (target && target.kind === 'user') {
                         userEntry = {
-                            ...replaceUserEntryText(target, trimmed),
+                            ...replaceUserEntryText(target, trimmed, payload.skillReferences),
                             reasoningEffort: effectiveEffort,
                         }
                         const priorEntries = existingEntries.slice(0, targetIndex)
                         const keptEntries = [...priorEntries, userEntry]
                         useMessageStore.getState().replaceSessionEntries(sessionId, keptEntries, { historyMutation: 'truncate' })
                     } else {
-                        userEntry = buildUserEntry(sessionId, trimmed, images, effectiveEffort)
+                        userEntry = buildUserEntry(sessionId, trimmed, images, effectiveEffort, payload.skillReferences)
                         useMessageStore.getState().appendEntry(userEntry)
                     }
                 } else if (
@@ -3409,7 +3415,7 @@ export function useAgentStream(
                     const keptEntries = [...priorEntries, userEntry]
                     useMessageStore.getState().replaceSessionEntries(sessionId, keptEntries, { historyMutation: 'truncate' })
                 } else {
-                    userEntry = buildUserEntry(sessionId, trimmed, images, effectiveEffort)
+                    userEntry = buildUserEntry(sessionId, trimmed, images, effectiveEffort, payload.skillReferences)
                     if (payload.userEntryId) {
                         userEntry.id = payload.userEntryId
                     }
@@ -3460,6 +3466,7 @@ export function useAgentStream(
                             editMessageId: payload.editMessageId,
                             userEntryId: userEntry.id,
                             userEntryCreatedAt: userEntry.createdAt,
+                            skillReferences: userEntry.skillReferences,
                             followUpMode: payload.followUpMode,
                         })
                     } catch (error) {

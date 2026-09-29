@@ -240,8 +240,11 @@ export function expandUserEntrySkills(
     if (skills.length === 0) return entry
     let changed = false
 
-    const newContent = entry.content.map((block: any) => {
+    const newContent = entry.content.map((block: any, index: number) => {
         if (!block || block.type !== 'text') return block
+        if (entry.skillReferences &&
+            (index !== 0 || !entry.skillReferences.some((ref: { start: number; name: string }) =>
+                ref.start === 0 && block.text.startsWith(`$${ref.name}`)))) return block
         const expanded = expandSkillCommand(block.text, skills)
         if (expanded !== block.text) {
             changed = true

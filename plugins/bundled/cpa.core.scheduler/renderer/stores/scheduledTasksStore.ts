@@ -31,6 +31,7 @@ export interface ScheduledTasksState {
         schedule: string
         description?: string
         prompt: string
+        skillReferences?: { start: number; name: string }[]
         enabled?: boolean
         status?: 'active' | 'paused' | 'completed'
         unread?: boolean
@@ -156,6 +157,7 @@ export const useScheduledTasksStore = createStore<ScheduledTasksState>((set) => 
             schedule: taskData.schedule.trim(),
             description: taskData.description?.trim() || undefined,
             prompt: taskData.prompt.trim(),
+            skillReferences: taskData.skillReferences,
             enabled: isEnabled,
             status: taskData.status ?? (isEnabled ? 'active' : 'paused'),
             unread: taskData.unread ?? true,

@@ -242,6 +242,19 @@ describe('uiStore - right panel tabs', () => {
     expect(session?.pinnedSummaryVisible).toBe(true)
   })
 
+  it('keeps canonical draft references isolated per session and clears them with the text', () => {
+    useUiStore.setState({ composerDraft: '', composerDrafts: {}, composerDraftReferences: {} })
+    const store = useUiStore.getState()
+    store.setComposerDraftForSession('a', '$demo', [{ start: 0, name: 'demo' }])
+    store.setComposerDraftForSession('b', '$demo')
+    expect(useUiStore.getState().composerDraftReferences).toEqual({
+      'session:a': [{ start: 0, name: 'demo' }],
+      'session:b': [],
+    })
+    store.setComposerDraftForSession('a', '$demo edited')
+    expect(useUiStore.getState().composerDraftReferences['session:a']).toEqual([])
+  })
+
   it('does not sync pinnedSummaryVisible to sessionStore when syncSession is false', () => {
     const sessionId = useSessionStore.getState().createSession({ title: 'No Sync Test' })
     useSessionStore.getState().setCurrentSession(sessionId)

@@ -1,5 +1,6 @@
-import { isBuiltinSlashCommand } from './slashCommands.js'
+import type { SkillReference } from '@cpa/plugin-api'
 import type { PromptTemplate } from '../types.js'
+import { isBuiltinSlashCommand } from './slashCommands.js'
 
 export function parseCommandArgs(argsString: string): string[] {
     const input = typeof argsString === 'string' ? argsString : ''
@@ -143,6 +144,74 @@ export function substituteArgs(content: string, args: string[]): string {
             return ''
         },
     )
+}
+
+export function trimTextWithSkillReferences(
+    text: string,
+    references: readonly SkillReference[],
+): { text: string; references: SkillReference[] } {
+    const leading = text.length - text.trimStart().length
+    const trimmed = text.trim()
+    const end = leading + trimmed.length
+    const adjusted: SkillReference[] = []
+    let previousEnd = leading
+    for (const ref of [...references].sort((a, b) => a.start - b.start)) {
+        const token = `$${ref.name}`
+        if (!Number.isInteger(ref.start) || ref.start < previousEnd ||
+            ref.start + token.length > end || !text.startsWith(token, ref.start)) continue
+        adjusted.push({ start: ref.start - leading, name: ref.name })
+        previousEnd = ref.start + token.length
+    }
+    return { text: trimmed, references: adjusted }
+}
+
+export function expandPromptTemplateWithReferences(
+    text: string,
+    references: readonly SkillReference[],
+    templates: readonly PromptTemplate[],
+): { text: string; references: SkillReference[] } {
+    const expanded = expandPromptTemplate(text, templates)
+    const valid = [...references].sort((a, b) => a.start - b.start)
+        .filter((ref) => text.startsWith(`$${ref.name}`, ref.start))
+    if (expanded === text) return { text, references: valid }
+    if (valid.length === 0) return { text: expanded, references: [] }
+
+    const source = text + templates.map((template) => template.content).join('')
+    let salt = 0
+    while (source.includes(`\uE000CPA_SKILL_${salt}_`)) salt += 1
+    const markers = valid.map((_ref, index) => `\uE000CPA_SKILL_${salt}_${index}\uE001`)
+    let marked = text
+    for (let index = valid.length - 1; index >= 0; index -= 1) {
+        const ref = valid[index]!
+        marked = marked.slice(0, ref.start) + markers[index] +
+            marked.slice(ref.start + ref.name.length + 1)
+    }
+
+    const result = expandPromptTemplate(marked, templates)
+    let mapped = ''
+    let position = 0
+    const mappedReferences: SkillReference[] = []
+    while (position < result.length) {
+        let next = -1
+        let markerIndex = -1
+        for (let index = 0; index < markers.length; index += 1) {
+            const found = result.indexOf(markers[index]!, position)
+            if (found !== -1 && (next === -1 || found < next)) {
+                next = found
+                markerIndex = index
+            }
+        }
+        if (next === -1) break
+        mapped += result.slice(position, next)
+        const name = valid[markerIndex]!.name
+        mappedReferences.push({ start: mapped.length, name })
+        mapped += `$${name}`
+        position = next + markers[markerIndex]!.length
+    }
+    mapped += result.slice(position)
+    return mapped === expanded
+        ? { text: mapped, references: mappedReferences }
+        : { text: expanded, references: [] }
 }
 
 export function expandPromptTemplate(text: string, templates: readonly PromptTemplate[] = []): string {

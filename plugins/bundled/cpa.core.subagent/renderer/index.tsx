@@ -252,6 +252,12 @@ export const subagentRendererEntry = definePluginEntry({
                         keywords: ['skill default mode', 'mode'],
                     },
                     {
+                        id: 'skillTrigger',
+                        labelKey: 'settings.skills.trigger',
+                        descriptionKey: 'settings.skills.triggerDesc',
+                        keywords: ['skill trigger', 'shortcut', '$', '#', '/'],
+                    },
+                    {
                         id: 'skillList',
                         labelKey: 'settings.skills.listSection',
                         keywords: ['skill list', 'skills'],

@@ -16,6 +16,7 @@ import type {
     SkillItemMode,
     SkillMode,
     SkillsSettings,
+    SkillTrigger,
 } from '@cpa/plugin-api'
 import { DEFAULT_SKILLS_SETTINGS, getAppConfigDirName } from '@cpa/plugin-api'
 
@@ -390,6 +391,22 @@ export function SkillsSection() {
                                         label: t('settings.skills.mode.disabled', '禁用'),
                                     },
                                 ]}
+                            />
+                        }
+                    />
+                    <SettingsRow
+                        id="skillTrigger"
+                        title={t('settings.skills.trigger', '技能触发快捷键')}
+                        description={t('settings.skills.triggerDesc', '输入所选符号以查找技能。')}
+                        control={
+                            <CustomSelect<SkillTrigger>
+                                value={skillsSettings.trigger ?? '$'}
+                                onChange={(trigger) => updateSkillsSettings((prev) => ({ ...prev, trigger }))}
+                                ariaLabel={t('settings.skills.trigger', '技能触发快捷键')}
+                                options={['$', '#', '/'].map((trigger) => ({
+                                    value: trigger as SkillTrigger,
+                                    label: trigger,
+                                }))}
                             />
                         }
                         last

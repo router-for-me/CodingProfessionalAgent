@@ -57,6 +57,12 @@ function createClipboardData(): DataTransfer & { store: Record<string, string> }
     } as unknown as DataTransfer & { store: Record<string, string> }
 }
 
+function createClipboardDataWithText(text: string): DataTransfer {
+    const data = createClipboardData()
+    data.setData('text/plain', text)
+    return data
+}
+
 function installImageBitmapMock(): void {
     vi.stubGlobal(
         'createImageBitmap',
@@ -95,6 +101,7 @@ let projectsState: Project[]
 let activeRunsState: Record<string, any>
 let worktreeSetupsState: Record<string, any>
 let composerDraftsState: Record<string, string>
+let composerDraftReferencesState: Record<string, { start: number; name: string }[]>
 let pendingSessionContextState: any
 let toastsState: string[]
 let usageCountsState: Record<string, number>
@@ -122,6 +129,7 @@ function notifyUi() {
     cachedUiSnapshot = {
         composerDraft: composerDraftsState['new-chat'] ?? '',
         composerDrafts: { ...composerDraftsState },
+        composerDraftReferences: { ...composerDraftReferencesState },
         pendingSessionContext: { ...pendingSessionContextState },
         toasts: [...toastsState],
     }
@@ -170,6 +178,7 @@ function resetTestServices() {
     activeRunsState = {}
     worktreeSetupsState = {}
     composerDraftsState = {}
+    composerDraftReferencesState = {}
     pendingSessionContextState = { projectId: null, branch: null }
     toastsState = []
     usageCountsState = {}
@@ -178,6 +187,7 @@ function resetTestServices() {
     cachedUiSnapshot = {
         composerDraft: '',
         composerDrafts: {},
+        composerDraftReferences: {},
         pendingSessionContext: { projectId: null, branch: null },
         toasts: [],
     }
@@ -290,8 +300,10 @@ function resetTestServices() {
                 notifyUi()
             }),
             getComposerDraft: (key: string) => composerDraftsState[key],
-            setComposerDraft: vi.fn((key: string, draft: string) => {
+            getComposerDraftReferences: (key: string) => composerDraftReferencesState[key],
+            setComposerDraft: vi.fn((key: string, draft: string, references: { start: number; name: string }[] = []) => {
                 composerDraftsState[key] = draft
+                composerDraftReferencesState[key] = references.map((ref) => ({ ...ref }))
                 notifyUi()
             }),
             pushToast: vi.fn((msg: string) => {
@@ -461,6 +473,57 @@ describe('Composer pending session context', () => {
 })
 
 describe('Composer per-session drafts', () => {
+    it.each(['#', '/'] as const)('restores selected cards and literal text with %s after session switches and remount', async (trigger) => {
+        const user = userEvent.setup()
+        settingsState = { ...settingsState, skills: { defaultMode: 'auto', trigger } }
+        notifySettings()
+        sessionsState = [
+            { id: 'sess-a', title: 'A', pinned: false, createdAt: 1, updatedAt: 1 },
+            { id: 'sess-b', title: 'B', pinned: false, createdAt: 2, updatedAt: 2 },
+        ]
+        const skills = [{ name: 'demo', description: 'Demo skill' }] as any
+        const onSend = vi.fn(async (_payload: ComposerSendPayload) => undefined)
+        const view = render(<Composer sessionId="sess-a" skills={skills} onSend={onSend} />)
+        const input = screen.getByTestId('composer-input')
+        await user.type(input, `$demo ${trigger}de`)
+        fireEvent.keyDown(input, { key: 'Enter' })
+        expect(input.querySelectorAll('[data-skill-name]')).toHaveLength(1)
+
+        view.rerender(<Composer sessionId="sess-b" skills={skills} onSend={onSend} />)
+        expectComposerValue('')
+        view.rerender(<Composer sessionId="sess-a" skills={skills} onSend={onSend} />)
+        expectComposerValue('$demo $demo ')
+        expect(screen.getByTestId('composer-input').querySelectorAll('[data-skill-name]')).toHaveLength(1)
+        view.unmount()
+
+        const restoredView = render(<Composer sessionId="sess-a" skills={skills} onSend={onSend} />)
+        const restored = screen.getByTestId('composer-input')
+        expect(restored.querySelectorAll('[data-skill-name]')).toHaveLength(1)
+        const range = document.createRange()
+        range.selectNodeContents(restored)
+        const selection = window.getSelection()!
+        selection.removeAllRanges()
+        selection.addRange(range)
+        const clipboard = createClipboardData()
+        fireEvent.copy(restored, { clipboardData: clipboard })
+        expect(clipboard.getData('text/plain')).toBe(`$demo ${trigger === '/' ? '/skill:demo' : '#demo'} `)
+
+        const insertAtStart = document.createRange()
+        insertAtStart.setStart(restored.firstChild!, 0)
+        insertAtStart.collapse(true)
+        selection.removeAllRanges()
+        selection.addRange(insertAtStart)
+        fireEvent.paste(restored, { clipboardData: createClipboardDataWithText('hi ') })
+        expectComposerValue('hi $demo $demo ')
+        restoredView.rerender(<Composer sessionId="sess-b" skills={skills} onSend={onSend} />)
+        restoredView.rerender(<Composer sessionId="sess-a" skills={skills} onSend={onSend} />)
+        expect(screen.getByTestId('composer-input').querySelectorAll('[data-skill-name]')).toHaveLength(1)
+        await user.click(screen.getByRole('button', { name: 'Send' }))
+        expect(onSend).toHaveBeenCalledWith(expect.objectContaining({
+            text: 'hi $demo $demo', skillReferences: [{ start: 9, name: 'demo' }],
+        }))
+    })
+
     it('keeps unsent input isolated when switching between sessions', async () => {
         const user = userEvent.setup()
         sessionsState = [
@@ -479,7 +542,7 @@ describe('Composer per-session drafts', () => {
         rerender(<Composer sessionId="sess-b" onSend={() => undefined} />)
         expectComposerValue('')
 
-        await user.type(input, 'Draft for session B')
+        await user.type(screen.getByTestId('composer-input'), 'Draft for session B')
         expectComposerValue('Draft for session B')
 
         rerender(<Composer sessionId="sess-a" onSend={() => undefined} />)
@@ -488,7 +551,7 @@ describe('Composer per-session drafts', () => {
         rerender(<Composer sessionId={null} onSend={() => undefined} />)
         expectComposerValue('')
 
-        await user.type(input, 'Draft for new session')
+        await user.type(screen.getByTestId('composer-input'), 'Draft for new session')
         expectComposerValue('Draft for new session')
 
         rerender(<Composer sessionId="sess-b" onSend={() => undefined} />)
@@ -500,6 +563,71 @@ describe('Composer per-session drafts', () => {
 })
 
 describe('Composer slash commands', () => {
+    it('keeps whitespace-prefixed slash controls ahead of equally named skills', async () => {
+        const user = userEvent.setup()
+        settingsState = { ...settingsState, skills: { defaultMode: 'auto', trigger: '/' } }
+        notifySettings()
+        const onSend = vi.fn()
+        render(<Composer onSend={onSend} skills={[{ name: 'model' }] as any} />)
+
+        const input = screen.getByTestId('composer-input')
+        fireEvent.paste(input, { clipboardData: createClipboardDataWithText(' /model hi') })
+        expect(input.querySelectorAll('[data-skill-name]')).toHaveLength(0)
+        await user.click(screen.getByRole('button', { name: 'Send' }))
+        expect(onSend).not.toHaveBeenCalled()
+        expect(screen.getByRole('listbox', { name: /model/i })).toBeInTheDocument()
+    })
+
+    it('keeps a typed whitespace-prefixed model control ahead of the same skill', async () => {
+        const user = userEvent.setup()
+        settingsState = { ...settingsState, skills: { defaultMode: 'auto', trigger: '/' } }
+        notifySettings()
+        const onSend = vi.fn()
+        render(<Composer onSend={onSend} skills={[{ name: 'model' }] as any} />)
+        const input = screen.getByTestId('composer-input')
+        await user.type(input, ' /model hi')
+        expect(input.querySelectorAll('[data-skill-name]')).toHaveLength(0)
+        await user.click(screen.getByRole('button', { name: 'Send' }))
+        expect(screen.getByRole('listbox', { name: /model/i })).toBeInTheDocument()
+        expect(onSend).not.toHaveBeenCalled()
+    })
+
+    it('keeps a newline-prefixed compact control ahead of an equally named skill', async () => {
+        const user = userEvent.setup()
+        settingsState = { ...settingsState, skills: { defaultMode: 'auto', trigger: '/' } }
+        notifySettings()
+        const onSend = vi.fn()
+        const onCompact = vi.fn(async () => undefined)
+        render(<Composer onSend={onSend} onCompact={onCompact} skills={[{ name: 'compact' }] as any} />)
+        const input = screen.getByTestId('composer-input')
+        fireEvent.paste(input, { clipboardData: createClipboardDataWithText('\n/compact focus') })
+        expect(input.querySelectorAll('[data-skill-name]')).toHaveLength(0)
+        await user.click(screen.getByRole('button', { name: 'Send' }))
+        expect(onCompact).toHaveBeenCalledWith('focus')
+        expect(onSend).not.toHaveBeenCalled()
+    })
+
+    it('expands a whitespace-prefixed template ahead of an equally named skill, but allows inline skills', async () => {
+        const user = userEvent.setup()
+        settingsState = { ...settingsState, skills: { defaultMode: 'auto', trigger: '/' } }
+        notifySettings()
+        const onSend = vi.fn(async (_payload: ComposerSendPayload) => undefined)
+        render(<Composer onSend={onSend} skills={[{ name: 'review' }] as any}
+            prompts={[{ name: 'review', description: '', filePath: '', content: 'Template $1' }]} />)
+        const input = screen.getByTestId('composer-input')
+        fireEvent.paste(input, { clipboardData: createClipboardDataWithText(' /review file') })
+        expect(input.querySelectorAll('[data-skill-name]')).toHaveLength(0)
+        await user.click(screen.getByRole('button', { name: 'Send' }))
+        expect(onSend).toHaveBeenCalledWith(expect.objectContaining({ text: 'Template file', skillReferences: [] }))
+
+        await user.type(input, 'use /review ')
+        expect(input.querySelectorAll('[data-skill-name]')).toHaveLength(1)
+        await user.click(screen.getByRole('button', { name: 'Send' }))
+        expect(onSend).toHaveBeenLastCalledWith(expect.objectContaining({
+            text: 'use $review', skillReferences: [{ start: 4, name: 'review' }],
+        }))
+    })
+
     it('calls onCompact for /compact and never onSend', async () => {
         const user = userEvent.setup()
         const onSend = vi.fn()
@@ -719,7 +847,7 @@ describe('Composer slash commands', () => {
         expect(onCompact).not.toHaveBeenCalled()
     })
 
-    it('keeps /skill:name folded on send instead of expanding the body', async () => {
+    it('keeps newly typed legacy slash text literal instead of invoking a skill', async () => {
         const user = userEvent.setup()
         let sent: ComposerSendPayload | null = null
 
@@ -742,7 +870,7 @@ describe('Composer slash commands', () => {
         await user.type(textarea, '/skill:demo extra')
         await user.click(screen.getByRole('button', { name: 'Send' }))
 
-        expect(sent).toMatchObject({ text: '$demo extra' })
+        expect(sent).toMatchObject({ text: '/skill:demo extra', skillReferences: [] })
     })
 
     it('expands prompt templates and leaves unknown slash as plain text', async () => {
@@ -772,6 +900,145 @@ describe('Composer slash commands', () => {
         await user.type(textarea, '/unknown something')
         await user.click(screen.getByRole('button', { name: 'Send' }))
         expect(sent[1]).toBe('/unknown something')
+    })
+})
+
+describe('Composer configured skill trigger', () => {
+    const skills = [
+        { name: 'demo', description: 'Demo skill' },
+        { name: 'model', description: 'Model skill' },
+    ] as any
+
+    it('switches existing inputs to # immediately and keeps literal $ text out of skill references', async () => {
+        const user = userEvent.setup()
+        const sent = vi.fn()
+        render(<Composer onSend={sent} skills={skills} />)
+        act(() => { settingsState = { ...settingsState, skills: { defaultMode: 'auto', trigger: '#' } }; notifySettings() })
+        const input = screen.getByTestId('composer-input')
+        await user.type(input, '$demo ')
+        expect(screen.queryByTestId('composer-skill-chip')).toBeNull()
+        expect(screen.queryByTestId('composer-skill-menu')).toBeNull()
+        await user.type(input, '#de')
+        expect(screen.getByRole('listbox', { name: 'Skills' })).toBeInTheDocument()
+        fireEvent.keyDown(input, { key: 'Enter' })
+        expect(screen.getByTestId('composer-skill-chip')).toBeInTheDocument()
+        await user.click(screen.getByRole('button', { name: 'Send' }))
+        expect(sent.mock.calls[0]?.[0]).toMatchObject({
+            text: '$demo $demo', skillReferences: [{ start: 6, name: 'demo' }],
+        })
+    })
+
+    it.each(['#', '/'] as const)('preserves both selected cards with %s and leaves literal dollar text alone', async (trigger) => {
+        const user = userEvent.setup()
+        const sent = vi.fn()
+        settingsState = { ...settingsState, skills: { defaultMode: 'auto', trigger } }
+        render(<Composer onSend={sent} skills={skills} />)
+        const input = screen.getByTestId('composer-input')
+        await user.type(input, `$demo ${trigger}de`)
+        fireEvent.keyDown(input, { key: 'Enter' })
+        await user.type(input, `${trigger}mo`)
+        const modelOption = screen.getByRole('option', { name: trigger === '/' ? /Skills.*\/model/ : /Model.*model/i })
+        await user.click(modelOption)
+        expect(input.querySelectorAll('[data-skill-name]')).toHaveLength(2)
+        await user.click(screen.getByRole('button', { name: 'Send' }))
+        expect(sent.mock.calls[0]?.[0]).toMatchObject({
+            text: '$demo $demo $model',
+            skillReferences: [{ start: 6, name: 'demo' }, { start: 12, name: 'model' }],
+        })
+    })
+
+    it.each([
+        ['\n$1', '$test', [{ start: 0, name: 'test' }]],
+        ['\n$1 \n', '$test', [{ start: 0, name: 'test' }]],
+        ['\n$1\n$1 \n', '$test\n$test', [{ start: 0, name: 'test' }, { start: 6, name: 'test' }]],
+    ])('trims expanded template %j with its selected skill references before sending', async (content, text, references) => {
+        const user = userEvent.setup()
+        const sent = vi.fn()
+        settingsState = { ...settingsState, skills: { defaultMode: 'auto', trigger: '#' } }
+        render(<Composer onSend={sent} skills={[{ name: 'test', description: 'Test skill' }] as any}
+            prompts={[{ name: 'demo', description: '', content, filePath: '' }]} />)
+        const input = screen.getByTestId('composer-input')
+        await user.type(input, '/demo #te')
+        fireEvent.keyDown(input, { key: 'Enter' })
+        expect(input.querySelectorAll('[data-skill-name]')).toHaveLength(1)
+        await user.click(screen.getByRole('button', { name: 'Send' }))
+        expect(sent).toHaveBeenCalledWith(expect.objectContaining({ text, skillReferences: references }))
+    })
+
+    it.each([
+        ['\n/unknown $1', [], '/unknown $test', 9],
+        ['\n/inner $1', [{ name: 'inner', description: '', content: 'prefix $1', filePath: '' }], 'prefix $test', 7],
+    ])('keeps selected card references through the registered prompt preprocessor for %j', async (content, additionalPrompts, text, start) => {
+        const user = userEvent.setup()
+        const sent = vi.fn()
+        settingsState = { ...settingsState, skills: { defaultMode: 'auto', trigger: '#' } }
+        render(<Composer onSend={sent} skills={[{ name: 'test', description: 'Test skill' }] as any}
+            prompts={[{ name: 'demo', description: '', content, filePath: '' }, ...additionalPrompts]} />)
+        const input = screen.getByTestId('composer-input')
+        await user.type(input, '/demo #te')
+        fireEvent.keyDown(input, { key: 'Enter' })
+        expect(input.querySelectorAll('[data-skill-name]')).toHaveLength(1)
+        await user.click(screen.getByRole('button', { name: 'Send' }))
+        expect(sent).toHaveBeenCalledWith(expect.objectContaining({
+            text, skillReferences: [{ start, name: 'test' }],
+        }))
+    })
+
+    it('remaps skill references through moved, repeated, and deleted template arguments', async () => {
+        const user = userEvent.setup()
+        const sent = vi.fn()
+        settingsState = { ...settingsState, skills: { defaultMode: 'auto', trigger: '#' } }
+        render(<Composer onSend={sent} skills={skills} prompts={[
+            { name: 'p', description: 'Prompt', content: '$1' },
+            { name: 'repeat', description: 'Prompt', content: '$2 $1 $1' },
+            { name: 'drop', description: 'Prompt', content: '$2' },
+        ] as any} />)
+        const input = screen.getByTestId('composer-input')
+        const send = async (text: string) => {
+            await user.type(input, text)
+            fireEvent.keyDown(input, { key: 'Enter' })
+            await user.click(screen.getByRole('button', { name: 'Send' }))
+        }
+        await send('/p #de')
+        expect(sent.mock.calls[0]?.[0]).toMatchObject({ text: '$demo', skillReferences: [{ start: 0, name: 'demo' }] })
+        await user.type(input, '/repeat #de')
+        fireEvent.keyDown(input, { key: 'Enter' })
+        await user.type(input, ' plain')
+        await user.click(screen.getByRole('button', { name: 'Send' }))
+        expect(sent.mock.calls[1]?.[0]).toMatchObject({ text: 'plain $demo $demo', skillReferences: [
+            { start: 6, name: 'demo' }, { start: 12, name: 'demo' },
+        ] })
+        await user.type(input, '/drop #de')
+        fireEvent.keyDown(input, { key: 'Enter' })
+        await user.type(input, ' plain')
+        await user.click(screen.getByRole('button', { name: 'Send' }))
+        expect(sent.mock.calls[2]?.[0]).toMatchObject({ text: 'plain', skillReferences: [] })
+    })
+
+    it('merges initial slash commands, templates, and skills without hiding same-name options', async () => {
+        const user = userEvent.setup()
+        const sent = vi.fn()
+        settingsState = { ...settingsState, skills: { defaultMode: 'auto', trigger: '/' } }
+        render(<Composer onSend={sent} skills={skills} prompts={[{ name: 'model', description: 'Same name template', body: 'template' }] as any} />)
+        const input = screen.getByTestId('composer-input')
+        await user.type(input, '/model')
+        const menu = screen.getByRole('listbox', { name: 'Slash commands' })
+        expect(within(menu).getAllByText('/model').length).toBeGreaterThan(1)
+        expect(within(menu).getByText('Skills')).toBeInTheDocument()
+        await user.click(within(menu).getByRole('option', { name: /Skills.*\/model/ }))
+        expect(screen.getByTestId('composer-skill-chip')).toBeInTheDocument()
+        await user.click(screen.getByRole('button', { name: 'Send' }))
+        expect(sent.mock.calls[0]?.[0]).toMatchObject({ text: '$model', skillReferences: [{ start: 0, name: 'model' }] })
+    })
+
+    it('shows only skills after a slash in the middle of a sentence', async () => {
+        const user = userEvent.setup()
+        settingsState = { ...settingsState, skills: { defaultMode: 'auto', trigger: '/' } }
+        render(<Composer onSend={vi.fn()} skills={skills} />)
+        await user.type(screen.getByTestId('composer-input'), 'use /de')
+        const menu = screen.getByRole('listbox', { name: 'Slash commands' })
+        expect(within(menu).getByText('/demo')).toBeInTheDocument()
+        expect(within(menu).queryByText('/compact')).not.toBeInTheDocument()
     })
 })
 
@@ -1870,14 +2137,11 @@ describe('Focus, context bar, and attach menu integration', () => {
 
     it('focuses composer input when switching from existing session to new session (null)', async () => {
         const { rerender } = render(<Composer sessionId="session-1" onSend={() => undefined} />)
-        const textarea = screen.getByTestId('composer-input')
-        const focusSpy = vi.spyOn(textarea, 'focus')
-
         act(() => {
             rerender(<Composer sessionId={null} onSend={() => undefined} />)
         })
 
-        expect(focusSpy).toHaveBeenCalled()
+        expect(screen.getByTestId('composer-input')).toHaveFocus()
     })
 
     it('shows environment picker when work location is switched to new worktree', async () => {

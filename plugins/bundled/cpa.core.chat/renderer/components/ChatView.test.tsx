@@ -211,6 +211,7 @@ describe('ChatView', () => {
                 text: 'updated message',
                 sessionId: 'test-session-1',
                 editMessageId: 'u1',
+                skillReferences: [],
             })
         })
     })

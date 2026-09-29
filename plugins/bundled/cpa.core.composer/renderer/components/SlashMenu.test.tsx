@@ -61,6 +61,22 @@ describe('buildSlashSuggestions', () => {
         expect(items.some((item) => item.command.startsWith('/skill:'))).toBe(false)
     })
 
+    it('shows colliding skill choices alongside commands and templates only in slash mode', () => {
+        const input = {
+            query: '',
+            skills: [{ name: 'compact', description: 'Compact skill' }, { name: 'review', description: 'Review skill' }],
+            prompts: [{ name: 'review', description: 'Review template' }],
+            includeSkills: true,
+        }
+        const suggestions = buildSlashSuggestions(input)
+        expect(suggestions.filter((item) => item.command === '/compact').map((item) => item.group))
+            .toEqual(['builtin', 'skill'])
+        expect(suggestions.filter((item) => item.command === '/review').map((item) => item.group))
+            .toEqual(['template', 'skill'])
+        expect(buildSlashSuggestions({ ...input, skillsOnly: true }).map((item) => item.group))
+            .toEqual(['skill', 'skill'])
+    })
+
     it('filters by the current slash token and keeps group order', () => {
         const items = buildSlashSuggestions({
             query: 'c',

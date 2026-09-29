@@ -23,7 +23,10 @@ import {
     FileText,
     Folder,
     getSkillQuery,
-    insertSkillAtCaret,
+    insertSkillInParts,
+    normalizeSkillDraft,
+    readSkillDraftParts,
+    skillReferencesFromParts,
     Play,
     SkillDraftEditor,
     SkillMenu,
@@ -42,7 +45,7 @@ import {
     type SkillSuggestion,
 } from '@cpa/plugin-ui'
 import { getEffectiveSkillMode } from '@cpa/plugin-sdk'
-import { DEFAULT_SKILLS_SETTINGS, type SkillsSettings } from '@cpa/plugin-api'
+import { DEFAULT_SKILLS_SETTINGS, type SkillReference } from '@cpa/plugin-api'
 import type {
     ComposerAttachment,
     ComposerImage,
@@ -62,8 +65,8 @@ import {
     detectImageMimeType,
     type SupportedImageMimeType,
 } from '../utils/image.js'
-import { expandPromptTemplate } from '../utils/promptTemplates.js'
-import { parseSlashCommand } from '../utils/slashCommands.js'
+import { expandPromptTemplateWithReferences, trimTextWithSkillReferences } from '../utils/promptTemplates.js'
+import { COMPACT_COMMAND_ALIASES, MODEL_COMMAND_ALIASES, parseSlashCommand } from '../utils/slashCommands.js'
 import {
     filterCatalogModels,
     normalizeModelPreferences,
@@ -235,18 +238,7 @@ const BaseComposer = memo(function BaseComposer({
         hostServices?.ui?.setPendingSessionContext?.(ctx)
     }
 
-    const [skillsSettings, setSkillsSettings] = useState<SkillsSettings>(() => {
-        return hostServices?.settings?.getSnapshot?.()?.skills ?? DEFAULT_SKILLS_SETTINGS
-    })
-
-    useEffect(() => {
-        if (!hostServices?.settings?.subscribe) return
-        return hostServices.settings.subscribe((appSettings: any) => {
-            if (appSettings?.skills) {
-                setSkillsSettings(appSettings.skills)
-            }
-        })
-    }, [hostServices?.settings])
+    const skillsSettings = settings.skills ?? DEFAULT_SKILLS_SETTINGS
 
     const activeSkills = useMemo(() => {
         return skills.filter((skill) => {
@@ -292,10 +284,15 @@ const BaseComposer = memo(function BaseComposer({
         hostServices?.ui?.getComposerDraft?.(effectiveSessionId || 'new-chat') ??
         (initialComposerDraftKeyRef.current === composerDraftKey ? legacyDraft : '')
 
-    const setComposerDraft = (nextDraft: string) => {
-        hostServices?.ui?.setComposerDraft?.(composerDraftKey, nextDraft)
+    const draftReferences =
+        uiState?.composerDraftReferences?.[composerDraftKey] ??
+        hostServices?.ui?.getComposerDraftReferences?.(composerDraftKey) ??
+        []
+
+    const setComposerDraft = (nextDraft: string, references: readonly SkillReference[] = []) => {
+        hostServices?.ui?.setComposerDraft?.(composerDraftKey, nextDraft, references)
         if (effectiveSessionId) {
-            hostServices?.ui?.setComposerDraft?.(effectiveSessionId, nextDraft)
+            hostServices?.ui?.setComposerDraft?.(effectiveSessionId, nextDraft, references)
         }
     }
 
@@ -370,7 +367,9 @@ const BaseComposer = memo(function BaseComposer({
     const [modelPickerActiveIndex, setModelPickerActiveIndex] = useState(0)
     const [modelPickerQuery, setModelPickerQuery] = useState('')
     const [modelPickerCursor, setModelPickerCursor] = useState(0)
-    const [draftCursor, setDraftCursor] = useState(draft.length)
+    const [cursorState, setCursorState] = useState({ key: composerDraftKey, cursor: draft.length })
+    const draftCursor = cursorState.key === composerDraftKey ? cursorState.cursor : draft.length
+    const setDraftCursor = (cursor: number) => setCursorState({ key: composerDraftKey, cursor })
 
     const workLocation: WorkLocation = currentSession
         ? (currentSession.workLocation ?? 'local')
@@ -629,7 +628,10 @@ const BaseComposer = memo(function BaseComposer({
     const controlsLocked = isRunning || sending
     const isProcessingAttachments = processingCount > 0
 
-    const slashQuery = getSlashQuery(draft)
+    const skillTrigger = skillsSettings.trigger ?? '$'
+    const commandQuery = getSlashQuery(draft)
+    const slashQuery = commandQuery ?? (skillTrigger === '/' ? getSkillQuery(draft, draftCursor, '/') : null)
+    const slashSkillsOnly = commandQuery === null
     const compactName = t('slash.compact.name', { defaultValue: 'compact' })
     const compactDescription = t('slash.compact.description', { defaultValue: 'Compact conversation context' })
     const modelName = t('slash.model.name', { defaultValue: 'model' })
@@ -641,8 +643,10 @@ const BaseComposer = memo(function BaseComposer({
             ? { suggestions: [] as SlashSuggestion[], diagnostics: [] as string[] }
             : buildSlashSuggestionsWithDiagnostics({
                   query: slashQuery,
-                  skills: previewResources.skills,
-                  prompts: previewResources.prompts,
+                  skills: skillTrigger === '/' ? previewResources.skills : [],
+                  prompts: slashSkillsOnly ? [] : previewResources.prompts,
+                  includeSkills: skillTrigger === '/',
+                  skillsOnly: slashSkillsOnly,
                   compactName,
                   compactDescription,
                   modelName,
@@ -671,8 +675,10 @@ const BaseComposer = memo(function BaseComposer({
                 ? previewBuild
                 : buildSlashSuggestionsWithDiagnostics({
                       query: slashQuery,
-                      skills: finalResources.skills,
-                      prompts: finalResources.prompts,
+                      skills: skillTrigger === '/' ? finalResources.skills : [],
+                      prompts: slashSkillsOnly ? [] : finalResources.prompts,
+                      includeSkills: skillTrigger === '/',
+                      skillsOnly: slashSkillsOnly,
                       compactName,
                       compactDescription,
                       modelName,
@@ -700,7 +706,7 @@ const BaseComposer = memo(function BaseComposer({
           ]?.id
         : undefined
 
-    const skillQuery = showSlashMenu ? null : getSkillQuery(draft, draftCursor)
+    const skillQuery = showSlashMenu || skillTrigger === '/' ? null : getSkillQuery(draft, draftCursor, skillTrigger)
     const previewSkillResources = skillFrozenRef.current ?? activeSkills
     const storeUsageCounts = useSkillUsageCounts()
     const effectiveUsageCounts = skillUsageCountsProp ?? storeUsageCounts
@@ -839,13 +845,19 @@ const BaseComposer = memo(function BaseComposer({
     const expandSendText = (
         raw: string,
         promptsSnap: readonly PromptTemplate[],
+        references: readonly { start: number; name: string }[],
     ): {
         text: string
+        references: { start: number; name: string }[]
         isCompact: boolean
         focus: string
         isModel: boolean
     } => {
         const trimmed = raw.trim()
+        const leadingWhitespace = raw.length - raw.trimStart().length
+        const trimmedReferences = references.map((ref) => ({
+            ...ref, start: ref.start - leadingWhitespace,
+        })).filter((ref) => ref.start >= 0 && trimmed.startsWith(`$${ref.name}`, ref.start))
         const parsed = parseSlashCommand(trimmed, {
             compact: [compactName],
             model: [modelName],
@@ -854,6 +866,7 @@ const BaseComposer = memo(function BaseComposer({
         if (parsed.type === 'compact') {
             return {
                 text: trimmed,
+                references: trimmedReferences,
                 isCompact: true,
                 focus: parsed.focus,
                 isModel: false,
@@ -863,6 +876,7 @@ const BaseComposer = memo(function BaseComposer({
         if (parsed.type === 'model') {
             return {
                 text: trimmed,
+                references: trimmedReferences,
                 isCompact: false,
                 focus: '',
                 isModel: true,
@@ -872,6 +886,7 @@ const BaseComposer = memo(function BaseComposer({
         if (trimmed.startsWith('/skill:') || trimmed.startsWith('$')) {
             return {
                 text: trimmed,
+                references: trimmedReferences,
                 isCompact: false,
                 focus: '',
                 isModel: false,
@@ -880,7 +895,7 @@ const BaseComposer = memo(function BaseComposer({
 
         if (trimmed.startsWith('/')) {
             return {
-                text: expandPromptTemplate(trimmed, promptsSnap),
+                ...expandPromptTemplateWithReferences(trimmed, trimmedReferences, promptsSnap),
                 isCompact: false,
                 focus: '',
                 isModel: false,
@@ -889,6 +904,7 @@ const BaseComposer = memo(function BaseComposer({
 
         return {
             text: trimmed,
+            references: trimmedReferences,
             isCompact: false,
             focus: '',
             isModel: false,
@@ -898,7 +914,11 @@ const BaseComposer = memo(function BaseComposer({
     const handleSubmit = async (overrideFollowUpMode?: 'steer' | 'queue') => {
         if (sending || imagesBlocked || isProcessingAttachments || isWorktreeBlocked) return
 
-        const raw = draft
+        const normalized = normalizeSkillDraft(
+            readSkillDraftParts(textareaRef.current), activeSkills, skillTrigger,
+            [...COMPACT_COMMAND_ALIASES, ...MODEL_COMMAND_ALIASES, compactName, modelName, ...prompts.map((prompt) => prompt.name)],
+        )
+        const raw = normalized.text
         const trimmed = raw.trim()
         if (!trimmed && attachments.length === 0) return
 
@@ -908,7 +928,7 @@ const BaseComposer = memo(function BaseComposer({
                 : prompts
         ).slice() as PromptTemplate[]
 
-        const expanded = expandSendText(raw, promptsSnap)
+        const expanded = expandSendText(raw, promptsSnap, normalized.references)
         if (expanded.isModel) {
             handleOpenModelSelector()
             return
@@ -957,6 +977,7 @@ const BaseComposer = memo(function BaseComposer({
 
         const payload: ComposerSendPayload = {
             text: sendText,
+            skillReferences: expanded.references,
             images: images.map((image) => ({ ...image })),
             attachments: attachments.map((att) => ({ ...att })),
             projectId,
@@ -975,16 +996,14 @@ const BaseComposer = memo(function BaseComposer({
             )
 
             const executeSend = (resolvedPayload: ComposerSendPayload) => {
-                const dollarMatches = (resolvedPayload.text || sendText).matchAll(
-                    /\$([a-zA-Z0-9_-]+)/g,
+                const trimmedPayload = trimTextWithSkillReferences(
+                    resolvedPayload.text, resolvedPayload.skillReferences ?? [],
                 )
-                for (const match of dollarMatches) {
-                    const skillName = match[1]
-                    if (skillName && !/^\d+$/.test(skillName)) {
-                        hostServices?.skillUsage?.recordUsage?.(skillName)
-                    }
+                const finalPayload = { ...resolvedPayload, text: trimmedPayload.text, skillReferences: trimmedPayload.references }
+                for (const ref of finalPayload.skillReferences) {
+                    hostServices?.skillUsage?.recordUsage?.(ref.name)
                 }
-                return onSend(resolvedPayload)
+                return onSend(finalPayload)
             }
 
             if (preprocessed && typeof (preprocessed as any).then === 'function') {
@@ -1142,7 +1161,20 @@ const BaseComposer = memo(function BaseComposer({
         }
     }
 
+    const insertSelectedSkill = (name: string) => {
+        const inserted = insertSkillInParts(readSkillDraftParts(textareaRef.current), name, draftCursor, skillTrigger)
+        if (!inserted) return
+        setComposerDraft(inserted.text, inserted.references)
+        setDraftCursor(inserted.cursor)
+        textareaRef.current?.focus()
+    }
+
     const applySlashSuggestion = (item: SlashSuggestion) => {
+        if (item.group === 'skill') {
+            insertSelectedSkill(item.command.slice(1))
+            setSlashOpen(false)
+            return
+        }
         if (item.action === 'model') {
             handleOpenModelSelector()
             return
@@ -1154,11 +1186,8 @@ const BaseComposer = memo(function BaseComposer({
 
     const applySkillSuggestion = (item: SkillSuggestion) => {
         hostServices?.skillUsage?.recordUsage?.(item.name)
-        const inserted = insertSkillAtCaret(draft, item.name, draftCursor)
-        setComposerDraft(inserted.text)
-        setDraftCursor(inserted.cursor)
+        insertSelectedSkill(item.name)
         setSkillOpen(false)
-        textareaRef.current?.focus()
     }
 
     const processSelectedNativeItems = (
@@ -1761,10 +1790,14 @@ const BaseComposer = memo(function BaseComposer({
 
                     <div className="flex w-full items-start gap-1.5 px-4 pb-2 pt-3">
                         <SkillDraftEditor
+                            key={composerDraftKey}
                             editorRef={textareaRef}
                             value={quickModelPickerOpen ? modelPickerQuery : draft}
                             cursor={quickModelPickerOpen ? modelPickerCursor : draftCursor}
                             skills={activeSkills}
+                            trigger={skillTrigger}
+                            references={quickModelPickerOpen ? [] : draftReferences}
+                            reservedSlashNames={[...COMPACT_COMMAND_ALIASES, ...MODEL_COMMAND_ALIASES, compactName, modelName, ...prompts.map((prompt) => prompt.name)]}
                             disabled={sending || isWorktreeBlocked}
                             maxHeight={TEXTAREA_MAX_HEIGHT}
                             placeholder={
@@ -1808,7 +1841,7 @@ const BaseComposer = memo(function BaseComposer({
                                     setModelPickerQuery(next)
                                     setModelPickerCursor(cursor)
                                 } else {
-                                    setComposerDraft(next)
+                                    setComposerDraft(next, skillReferencesFromParts(readSkillDraftParts(textareaRef.current)))
                                     setDraftCursor(cursor)
                                 }
                             }}
