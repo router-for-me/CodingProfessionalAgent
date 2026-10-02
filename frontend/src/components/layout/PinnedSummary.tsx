@@ -15,6 +15,7 @@ import {
   syncFileChangesFromEntries,
   EMPTY_SESSION_CHANGES,
 } from '@/stores/fileChangeStore'
+import { useToolOverlayStore } from '@/stores/toolOverlayStore'
 import { useUiStore } from '@/stores/uiStore'
 import { useWorktreeSetupStore } from '@/stores/worktreeSetupStore'
 import { usePanelTabs } from '@/plugins/registry/usePanelTabs'
@@ -29,6 +30,99 @@ export interface TodoItem {
   status: TodoStatus
 }
 
+const TODO_TOOL_NAMES = new Set(['todo', 'manage_todo_list'])
+
+function parseTodoArguments(rawArgs: unknown): Record<string, unknown> | null {
+  if (typeof rawArgs === 'string') {
+    try {
+      rawArgs = JSON.parse(rawArgs)
+    } catch {
+      return null
+    }
+  }
+  if (!rawArgs || typeof rawArgs !== 'object' || Array.isArray(rawArgs)) {
+    return null
+  }
+  return rawArgs as Record<string, unknown>
+}
+
+function validateTodoList(rawList: readonly unknown[]): TodoItem[] {
+  const validatedTodos: TodoItem[] = []
+  for (let index = 0; index < rawList.length; index++) {
+    const item = rawList[index]
+    if (!item || typeof item !== 'object') continue
+    const raw = item as Record<string, unknown>
+    const id = typeof raw.id === 'number' ? raw.id : index + 1
+    const title =
+      typeof raw.title === 'string' && raw.title.trim().length > 0
+        ? raw.title.trim()
+        : `Task ${id}`
+    const description = typeof raw.description === 'string' ? raw.description : ''
+    const statusStr = String(raw.status ?? '').toLowerCase()
+    const status: TodoStatus =
+      statusStr === 'completed' ||
+      statusStr === 'in-progress' ||
+      statusStr === 'not-started'
+        ? statusStr
+        : 'not-started'
+    validatedTodos.push({ id, title, description, status })
+  }
+  return validatedTodos
+}
+
+function todosFromWriteArguments(rawArgs: unknown): TodoItem[] | null {
+  const argsObj = parseTodoArguments(rawArgs)
+  if (!argsObj || argsObj.operation !== 'write' || !Array.isArray(argsObj.todoList)) {
+    return null
+  }
+  return validateTodoList(argsObj.todoList)
+}
+
+function todosFromContentBlocks(
+  entry: Record<string, unknown>,
+  errorToolCallIds: ReadonlySet<string>,
+): TodoItem[] | null {
+  const content = (entry.content ?? entry.parts) as unknown[] | undefined
+  if (!Array.isArray(content)) return null
+
+  for (let index = content.length - 1; index >= 0; index--) {
+    const block = content[index] as Record<string, unknown> | undefined
+    if (!block) continue
+    const callId = String(block.id ?? '')
+    if (callId && errorToolCallIds.has(callId)) continue
+    const blockType = block.type
+    const name = block.name ?? block.toolName
+    if (
+      (blockType !== 'toolCall' && blockType !== 'tool_call') ||
+      !TODO_TOOL_NAMES.has(String(name))
+    ) {
+      continue
+    }
+    const todos = todosFromWriteArguments(block.arguments ?? block.args)
+    if (todos !== null) return todos
+  }
+  return null
+}
+
+function todosFromNestedTools(entry: Record<string, unknown>): TodoItem[] | null {
+  const metadata = entry.displayMetadata
+  if (!metadata || typeof metadata !== 'object') return null
+  const nested = (metadata as Record<string, unknown>).nestedTools
+  if (!Array.isArray(nested)) return null
+
+  for (let index = nested.length - 1; index >= 0; index--) {
+    const record = nested[index]
+    if (!record || typeof record !== 'object') continue
+    const raw = record as Record<string, unknown>
+    const name = raw.name ?? raw.toolName
+    if (!TODO_TOOL_NAMES.has(String(name))) continue
+    if (String(raw.status ?? '') === 'error') continue
+    const todos = todosFromWriteArguments(raw.args ?? raw.arguments)
+    if (todos !== null) return todos
+  }
+  return null
+}
+
 function extractTodosFromEntries(
   entries: readonly ConversationEntry[] | undefined | null
 ): TodoItem[] | null {
@@ -36,81 +130,63 @@ function extractTodosFromEntries(
     return null
   }
   const errorToolCallIds = new Set<string>()
-  for (let i = 0; i < entries.length; i++) {
-    const entry = entries[i] as Record<string, unknown> | undefined
-    if (!entry) continue
-    if (entry.kind === 'toolResult') {
-      const toolCallId = String(entry.toolCallId || '')
-      if (entry.isError === true && toolCallId) {
-        errorToolCallIds.add(toolCallId)
-      }
+  for (let index = 0; index < entries.length; index++) {
+    const entry = entries[index] as Record<string, unknown> | undefined
+    if (!entry || entry.kind !== 'toolResult') continue
+    const toolCallId = String(entry.toolCallId || '')
+    if (entry.isError === true && toolCallId) {
+      errorToolCallIds.add(toolCallId)
     }
   }
 
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const entry = entries[i] as Record<string, unknown> | undefined
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index] as Record<string, unknown> | undefined
     if (!entry || entry.status === 'streaming') continue
 
-    const content = (entry.content ?? entry.parts) as unknown[] | undefined
-    if (!Array.isArray(content)) continue
-
-    for (let j = content.length - 1; j >= 0; j--) {
-      const block = content[j] as Record<string, unknown> | undefined
-      if (!block) continue
-
-      const blockType = block.type
-      const name = block.name ?? block.toolName
-      const callId = String(block.id ?? '')
-
-      if (callId && errorToolCallIds.has(callId)) continue
-      if (
-        (blockType === 'toolCall' || blockType === 'tool_call') &&
-        (name === 'todo' || name === 'manage_todo_list')
-      ) {
-        let rawArgs = block.arguments ?? block.args
-        if (typeof rawArgs === 'string') {
-          try {
-            rawArgs = JSON.parse(rawArgs)
-          } catch {
-            rawArgs = null
-          }
-        }
-        if (rawArgs && typeof rawArgs === 'object') {
-          const argsObj = rawArgs as Record<string, unknown>
-          if (argsObj.operation === 'write' && Array.isArray(argsObj.todoList)) {
-            const rawList = argsObj.todoList
-            const validatedTodos: TodoItem[] = []
-            for (let k = 0; k < rawList.length; k++) {
-              const item = rawList[k]
-              if (!item || typeof item !== 'object') continue
-              const raw = item as Record<string, unknown>
-              const id = typeof raw.id === 'number' ? raw.id : k + 1
-              const title =
-                typeof raw.title === 'string' && raw.title.trim().length > 0
-                  ? raw.title.trim()
-                  : `Task ${id}`
-              const description =
-                typeof raw.description === 'string' ? raw.description : ''
-              const statusStr = String(raw.status ?? '').toLowerCase()
-              const status: TodoStatus =
-                statusStr === 'completed' ||
-                statusStr === 'in-progress' ||
-                statusStr === 'not-started'
-                  ? statusStr
-                  : 'not-started'
-              validatedTodos.push({ id, title, description, status })
-            }
-            return validatedTodos
-          }
-        }
-      }
-    }
+    const fromContent = todosFromContentBlocks(entry, errorToolCallIds)
+    if (fromContent !== null) return fromContent
+    const fromNested = todosFromNestedTools(entry)
+    if (fromNested !== null) return fromNested
   }
   return null
 }
 
+function normalizeToolCallId(id: string): string {
+  return id.split('|', 1)[0] ?? id
+}
+
+function extractTodosFromLiveOverlays(
+  entries: readonly ConversationEntry[] | undefined | null,
+  overlays: Readonly<Record<string, unknown>> | undefined | null,
+): TodoItem[] | null {
+  if (!overlays) return null
+  const settled = new Set<string>()
+  if (Array.isArray(entries)) {
+    for (const entry of entries) {
+      const record = entry as Record<string, unknown>
+      if (record.kind !== 'toolResult') continue
+      const toolCallId = String(record.toolCallId || '')
+      if (toolCallId) settled.add(normalizeToolCallId(toolCallId))
+    }
+  }
+
+  let best: { at: number; todos: TodoItem[] } | null = null
+  for (const overlay of Object.values(overlays)) {
+    if (!overlay || typeof overlay !== 'object') continue
+    const raw = overlay as Record<string, unknown>
+    const toolCallId = String(raw.toolCallId || '')
+    if (!toolCallId || settled.has(normalizeToolCallId(toolCallId))) continue
+    const todos = todosFromNestedTools({ displayMetadata: raw.details })
+    if (todos === null) continue
+    const at = Number(raw.updatedAt) || 0
+    if (!best || at >= best.at) best = { at, todos }
+  }
+  return best ? best.todos : null
+}
+
 const EMPTY_ENTRIES: ConversationEntry[] = []
 const EMPTY_TODOS: TodoItem[] = []
+const EMPTY_OVERLAYS: Readonly<Record<string, unknown>> = Object.freeze({})
 
 function rectsOverlap(a: DOMRectReadOnly, b: DOMRectReadOnly): boolean {
   return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top
@@ -142,6 +218,9 @@ export function PinnedSummary({ sessionId }: { sessionId: string | null }) {
     sessionId
       ? (state.entriesBySession[sessionId] ?? EMPTY_ENTRIES)
       : EMPTY_ENTRIES,
+  )
+  const overlays = useToolOverlayStore((state) =>
+    sessionId ? (state.bySession[sessionId] ?? EMPTY_OVERLAYS) : EMPTY_OVERLAYS,
   )
   const invokedSkills = useMemo(
     () => collectInvokedSkills(entries, skills),
@@ -219,7 +298,13 @@ export function PinnedSummary({ sessionId }: { sessionId: string | null }) {
       ? (state.changesBySession[sessionId] ?? EMPTY_SESSION_CHANGES)
       : EMPTY_SESSION_CHANGES,
   )
-  const todos = useMemo(() => extractTodosFromEntries(entries) ?? EMPTY_TODOS, [entries])
+  const todos = useMemo(
+    () =>
+      extractTodosFromLiveOverlays(entries, overlays) ??
+      extractTodosFromEntries(entries) ??
+      EMPTY_TODOS,
+    [entries, overlays],
+  )
   const currentStep = useMemo(() => {
     const totalCount = todos.length
     if (totalCount === 0) return 0

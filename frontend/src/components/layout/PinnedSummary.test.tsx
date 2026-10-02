@@ -9,6 +9,7 @@ import { useProjectStore } from '@/stores/projectStore'
 import { useSessionStore } from '@/stores/sessionStore'
 import { agentsForParent, useSubAgentStore } from '@/stores/subAgentStore'
 import { useFileChangeStore } from '@/stores/fileChangeStore'
+import { __resetToolOverlayStoreForTests, useToolOverlayStore } from '@/stores/toolOverlayStore'
 import { useUiStore } from '@/stores/uiStore'
 import { rendererRegistry } from '@/plugins/platform/rendererRegistry'
 import { PinnedSummary } from './PinnedSummary'
@@ -195,6 +196,7 @@ beforeEach(async () => {
   })
 
   useMessageStore.setState({ entriesBySession: {} })
+  __resetToolOverlayStoreForTests()
   useProjectStore.setState({
     projects: [
       {
@@ -489,6 +491,118 @@ describe('PinnedSummary', () => {
     expect(screen.getByTestId('todo-status-completed')).toBeInTheDocument()
     expect(screen.getByTestId('todo-status-in-progress')).toBeInTheDocument()
     expect(screen.getByTestId('todo-status-not-started')).toBeInTheDocument()
+  })
+
+  it('renders todos written by a nested Code Mode todo call', () => {
+    useMessageStore.setState({
+      entriesBySession: {
+        ...useMessageStore.getState().entriesBySession,
+        'sess-1': [
+          {
+            id: 'msg-exec',
+            sessionId: 'sess-1',
+            createdAt: Date.now(),
+            kind: 'assistant',
+            status: 'done',
+            content: [
+              {
+                type: 'toolCall',
+                id: 'call-exec',
+                name: 'exec',
+                arguments: { source: 'await tools.todo({ operation: "write", todoList: [] })' },
+              },
+            ],
+          } as any,
+          {
+            id: 'res-exec',
+            sessionId: 'sess-1',
+            createdAt: Date.now(),
+            kind: 'toolResult',
+            toolCallId: 'call-exec',
+            toolName: 'exec',
+            isError: false,
+            content: [{ type: 'text', text: 'Cell completed.' }],
+            displayMetadata: {
+              nestedTools: [
+                {
+                  id: 'nested-todo',
+                  type: 'tool_call',
+                  name: 'todo',
+                  status: 'done',
+                  args: {
+                    operation: 'write',
+                    todoList: [
+                      { id: 1, title: 'Inspect contract', description: '', status: 'completed' },
+                      { id: 2, title: 'Apply the fix', description: '', status: 'in-progress' },
+                    ],
+                  },
+                },
+              ],
+            },
+          } as any,
+        ],
+      },
+    })
+    render(<PinnedSummary sessionId="sess-1" />)
+
+    expect(screen.getByTestId('pinned-summary-todos')).toBeInTheDocument()
+    expect(screen.getByText('Inspect contract')).toBeInTheDocument()
+    expect(screen.getByText('Apply the fix')).toBeInTheDocument()
+    expect(screen.getByTestId('pinned-summary-todo-progress').textContent).toBe('2/2')
+  })
+
+  it('renders nested todos from a running exec overlay before the tool result exists', () => {
+    useMessageStore.setState({
+      entriesBySession: {
+        'sess-1': [
+          {
+            id: 'msg-exec',
+            sessionId: 'sess-1',
+            createdAt: Date.now(),
+            kind: 'assistant',
+            status: 'done',
+            content: [
+              {
+                type: 'toolCall',
+                id: 'call_exec|fc',
+                name: 'exec',
+                arguments: { source: 'await tools.todo({})' },
+              },
+            ],
+          } as any,
+        ],
+      },
+    })
+    useToolOverlayStore.getState().upsert({
+      sessionId: 'sess-1',
+      runId: 'run-1',
+      toolCallId: 'call_exec',
+      status: 'running',
+      updatedAt: 5,
+      details: {
+        nestedTools: [
+          {
+            id: 'nested-todo',
+            type: 'tool_call',
+            name: 'todo',
+            status: 'done',
+            args: {
+              operation: 'write',
+              todoList: [
+                { id: 1, title: 'Inspect contract', description: '', status: 'completed' },
+                { id: 2, title: 'Apply the fix', description: '', status: 'in-progress' },
+              ],
+            },
+          },
+        ],
+      },
+    })
+    render(<PinnedSummary sessionId="sess-1" />)
+
+    expect(screen.getByTestId('pinned-summary-todos')).toBeInTheDocument()
+    expect(screen.getByText('Inspect contract')).toBeInTheDocument()
+    expect(screen.getByText('Apply the fix')).toBeInTheDocument()
+    expect(screen.getByTestId('pinned-summary-todo-progress').textContent).toBe('2/2')
   })
 
   it('starts counting steps from 1 when all todos are not-started', () => {

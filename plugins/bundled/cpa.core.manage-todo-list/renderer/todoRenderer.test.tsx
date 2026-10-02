@@ -287,6 +287,66 @@ describe('cpa.core.manage-todo-list renderer entry and TodoProgressBar', () => {
         ])
     })
 
+    it('shows nested todo progress while the parent exec is still running', async () => {
+        const entries = [
+            {
+                id: 'm-exec',
+                kind: 'assistant',
+                status: 'done',
+                content: [
+                    {
+                        type: 'toolCall',
+                        id: 'call_exec|fc',
+                        name: 'exec',
+                        arguments: { source: 'await tools.todo({})' },
+                    },
+                ],
+            },
+        ]
+        const overlays = {
+            call_exec: {
+                toolCallId: 'call_exec',
+                updatedAt: 5,
+                details: {
+                    nestedTools: [
+                        {
+                            name: 'todo',
+                            status: 'done',
+                            args: {
+                                operation: 'write',
+                                todoList: [
+                                    { id: 1, title: 'First', description: '', status: 'completed' },
+                                    { id: 2, title: 'Second', description: '', status: 'in-progress' },
+                                ],
+                            },
+                        },
+                    ],
+                },
+            },
+        }
+        const chatMessages = {
+            getEntries: vi.fn(() => entries),
+            getToolOverlays: vi.fn(() => overlays),
+            ensureSessionLoaded: vi.fn(async () => undefined),
+            subscribeMessages: vi.fn(() => () => {}),
+            subscribeToolOverlays: vi.fn(() => () => {}),
+        }
+
+        render(
+            <HostServicesProvider services={{ chatMessages } as any}>
+                <TodoProgressBar sessionId="sess-live" />
+            </HostServicesProvider>,
+        )
+
+        expect(await screen.findByTestId('todo-progress-pill')).toBeInTheDocument()
+        expect(screen.getByTestId('todo-pill-text-step')).toHaveTextContent('Step 2 / 2')
+        expect(chatMessages.subscribeToolOverlays).toHaveBeenCalledWith('sess-live', expect.any(Function))
+        expect(useTodoListStore.getState().getTodos('sess-live')).toEqual([
+            { id: 1, title: 'First', description: '', status: 'completed' },
+            { id: 2, title: 'Second', description: '', status: 'in-progress' },
+        ])
+    })
+
     it('renders file changes independently when no todos exist', () => {
         const fileChanges: SessionFileChanges = {
             files: {

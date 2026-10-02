@@ -77,6 +77,15 @@ describe('Code Mode tools and exposure policy', () => {
         expect(() => structuredClone(start)).not.toThrow()
         client.dispose()
     })
+    it('does not let another session preparation replace this session nested tools', async () => {
+        const { exec, tools, client, capability } = setup()
+        await exec.prepareToolSet!(tools, preparationContext())
+        await exec.prepareToolSet!([ordinary('bash'), exec], { sessionId: 'child', signal: new AbortController().signal })
+        await exec.execute('id', { source: 'text(1)', description: 'keep parent tools' }, { sessionId: 'session', dispatchNestedTool: vi.fn(async () => ({ content: [] })) })
+        const start = vi.mocked(capability.invoke).mock.calls.map((call) => call[1]?.[0] as { type?: string; input?: { tools?: Array<{ name: string }> } }).find((command) => command?.type === 'start')
+        expect(start?.input?.tools?.map((tool) => tool.name)).toEqual(['read'])
+        client.dispose()
+    })
     it('dispatches nested requests through the injected host callback', async () => {
         const { exec, tools, client, capability } = setup()
         await exec.prepareToolSet!(tools, preparationContext())

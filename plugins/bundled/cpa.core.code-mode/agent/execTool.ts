@@ -9,6 +9,8 @@ import type { CellClient } from './client'
 export function createExecTool(client: CellClient, settings: SettingsService, initial: Partial<AppSettings>): AgentTool {
     let config = codeModeConfiguration(initial)
     let specifications = selectNestedTools([]).tools
+    // Sub-agent runs share this tool object and must not replace the parent's nested list.
+    const specificationsBySession = new Map<string, typeof specifications>()
     const tool: AgentTool = {
         name: 'exec', label: 'Execute Code', description: renderExecDescription('code', [], { locale: initial.locale }),
         parameters: execParametersForLocale(initial.locale), exposure: 'direct', needsNestedDispatcher: true, toolPolicyId: 'code-only',
@@ -30,6 +32,7 @@ export function createExecTool(client: CellClient, settings: SettingsService, in
                 throw new Error(`Code Mode executor unavailable (fail closed): ${String(error)}`)
             }
             specifications = selectNestedTools(ordinary, { ...config, warn: console.warn }).tools
+            if (context.sessionId) specificationsBySession.set(context.sessionId, specifications)
             const names = new Set(specifications.map((item) => item.name))
             tool.nestedToolNames = [...names]
             tool.parameters = execParametersForLocale(snapshot.locale)
@@ -56,7 +59,8 @@ export function createExecTool(client: CellClient, settings: SettingsService, in
             if (config.toolMode === 'direct') { await client.cancel(context.sessionId); throw new Error('Code Mode is disabled') }
             const parsed = parseExecSource(args.source as string, { yieldTimeMs: config.defaultExecYieldMs, maxOutputTokens: config.maxOutputTokens })
             // Electron structured clone rejects functions on AgentTool. Send data only.
-            const tools = specifications.map(({ name, identifier, description }) => ({ name, identifier, description }))
+            const active = specificationsBySession.get(context.sessionId) ?? specifications
+            const tools = active.map(({ name, identifier, description }) => ({ name, identifier, description }))
             return client.observe('start', { sessionId: context.sessionId, source: parsed.source, tools, yieldTimeMs: parsed.yieldTimeMs, maxOutputTokens: parsed.maxOutputTokens }, context)
         },
     }

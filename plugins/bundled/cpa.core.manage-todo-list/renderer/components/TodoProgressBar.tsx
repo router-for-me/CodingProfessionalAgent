@@ -184,16 +184,23 @@ export function TodoProgressBar({
         const syncFromEntries = () => {
             if (cancelled) return
             const entries = chat.getEntries(effectiveSessionId)
-            if (!entries || entries.length === 0) {
+            const overlays = chat.getToolOverlays?.(effectiveSessionId)
+            const hasEntries = Boolean(entries && entries.length > 0)
+            const hasOverlays = Boolean(overlays && Object.keys(overlays).length > 0)
+            if (!hasEntries && !hasOverlays) {
                 // Session may still be hydrating; do not clear an in-progress restore.
                 return
             }
 
             if (!propTodos) {
-                syncTodosFromEntries(effectiveSessionId, entries as readonly Record<string, unknown>[])
+                syncTodosFromEntries(
+                    effectiveSessionId,
+                    (entries ?? []) as readonly Record<string, unknown>[],
+                    overlays,
+                )
             }
 
-            if (!propFileChanges) {
+            if (!propFileChanges && hasEntries) {
                 setDerivedFileChanges(
                     extractFileChangesFromEntries(entries as readonly Record<string, unknown>[]) ??
                         EMPTY_SESSION_CHANGES
@@ -211,9 +218,11 @@ export function TodoProgressBar({
         })()
 
         const unsubscribe = chat.subscribeMessages?.(effectiveSessionId, syncFromEntries)
+        const unsubscribeOverlays = chat.subscribeToolOverlays?.(effectiveSessionId, syncFromEntries)
         return () => {
             cancelled = true
             unsubscribe?.()
+            unsubscribeOverlays?.()
         }
     }, [effectiveSessionId, propTodos, propFileChanges, services?.chatMessages])
 

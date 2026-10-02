@@ -92,6 +92,7 @@ describe('subagentRendererEntry', () => {
         expect(chatRenderers[0].value.groupKey).toBe('subagent')
         expect(chatRenderers[0].value.matches?.({ type: 'tool_call', name: 'spawn_agent' })).toBe(true)
         expect(chatRenderers[0].value.matches?.({ type: 'tool_call', name: 'delegate_agent' })).toBe(true)
+        expect(chatRenderers[0].value.matches?.({ type: 'tool_call', name: 'send_message' })).toBe(false)
         expect(chatRenderers[0].value.matches?.({ type: 'tool_call', name: 'other' })).toBe(false)
 
         const settings = harness.getRegistered<SettingsSectionContribution>('settings')

@@ -24,12 +24,21 @@ function fallbackName(part: SpawnToolPart): string {
   if (typeof prompt === 'string' && prompt.trim()) {
     return prompt.trim().slice(0, 18)
   }
-  return 'Agent'
+  return agentIdentifier(part.args) ?? 'Agent'
 }
 
 function hasNonEmptyPrompt(args: Record<string, unknown> | undefined): boolean {
   const prompt = args?.prompt
   return typeof prompt === 'string' && prompt.trim().length > 0
+}
+
+function isSendMessageName(name: string): boolean {
+  return name === 'send_message' || name === 'send_input'
+}
+
+function agentIdentifier(args: Record<string, unknown> | undefined): string | undefined {
+  const raw = args?.agent_id ?? args?.agentId ?? args?.target
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined
 }
 
 function isInFlightSpawnStatus(status: unknown): boolean {
@@ -86,9 +95,61 @@ function shouldShowSpawnPill(
   record: { id: string } | undefined,
   resolvedStatus?: unknown,
 ): boolean {
+  if (isSendMessageName(part.name)) return false
   if (record) return true
   const effectiveStatus = resolvedStatus ?? part.status
-  return isInFlightSpawnStatus(effectiveStatus) && hasNonEmptyPrompt(part.args)
+  if (!isInFlightSpawnStatus(effectiveStatus)) return false
+  return hasNonEmptyPrompt(part.args)
+}
+
+function sameAgent(record: { id: string; sessionId?: string; name: string }, identifier: string): boolean {
+  const target = identifier.toLowerCase()
+  return (
+    record.id === identifier ||
+    record.sessionId === identifier ||
+    record.name.toLowerCase() === target
+  )
+}
+
+function followUpTargetsAgent(
+  record: { id: string; sessionId?: string; name: string } | undefined,
+  overlays: Readonly<Record<string, any>> | undefined,
+): boolean {
+  if (!record || !overlays) return false
+  for (const overlay of Object.values(overlays)) {
+    const nested = overlay?.details?.nestedTools
+    if (!Array.isArray(nested)) continue
+    for (const item of nested) {
+      if (!item || typeof item !== 'object') continue
+      if (!isSendMessageName(String(item.name ?? item.toolName ?? ''))) continue
+      if (!isToolRunning(item.status)) continue
+      const identifier = agentIdentifier(item.args ?? item.arguments)
+      if (identifier && sameAgent(record, identifier)) return true
+    }
+  }
+  return false
+}
+
+function dedupeSubagentPills<T extends { part: SpawnToolPart; record?: { id: string }; isRunning: boolean; isQueued: boolean }>(
+  pills: readonly T[],
+): T[] {
+  const order: string[] = []
+  const byKey = new Map<string, T>()
+  for (const pill of pills) {
+    const key = pill.record?.id ?? `part:${pill.part.id}`
+    const previous = byKey.get(key)
+    if (!previous) {
+      order.push(key)
+      byKey.set(key, pill)
+      continue
+    }
+    byKey.set(key, {
+      ...previous,
+      isRunning: previous.isRunning || pill.isRunning,
+      isQueued: previous.isQueued || pill.isQueued,
+    })
+  }
+  return order.map((key) => byKey.get(key)!)
 }
 
 export function SubAgentPills(props: {
@@ -157,11 +218,12 @@ export function SubAgentPills(props: {
     const isQueued = record?.status === 'queued'
 
     const isRunning =
-      !isTerminal &&
-      (record?.status === 'running' ||
-        isQueued ||
-        isToolRunning(resolvedStatus) ||
-        Boolean(streaming))
+      followUpTargetsAgent(record, effectiveOverlays) ||
+      (!isTerminal &&
+        (record?.status === 'running' ||
+          isQueued ||
+          isToolRunning(resolvedStatus) ||
+          Boolean(streaming)))
 
     return [{
       part,
@@ -172,14 +234,15 @@ export function SubAgentPills(props: {
     }]
   })
 
-  if (pills.length === 0) return null
+  const visiblePills = dedupeSubagentPills(pills)
+  if (visiblePills.length === 0) return null
 
   return (
     <div
       className={cn('my-2 flex flex-wrap items-center gap-2 first:mt-0', className)}
       data-testid="subagent-pills"
     >
-      {pills.map((pill) => (
+      {visiblePills.map((pill) => (
         <button
           key={pill.part.id}
           type="button"

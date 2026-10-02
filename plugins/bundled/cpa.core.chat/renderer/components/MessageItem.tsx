@@ -53,6 +53,7 @@ import {
     skillPresentationCommand,
 } from '../utils/skillPresentation.js'
 import {
+    expandNestedSubagentParts,
     groupCompactActivityParts,
     hasVisibleTurnContent,
     trailingAssistantText,
@@ -1153,8 +1154,9 @@ function renderParts(
         citations?: MemoryCitation
     },
 ) {
+    const visibleParts = expandNestedSubagentParts(parts, opts.toolOverlays)
     if (opts.compactActivity) {
-        const segments = groupCompactActivityParts(parts, {
+        const segments = groupCompactActivityParts(visibleParts, {
             renderers: opts.chatRenderers,
         })
         return segments.map((segment, index) => {
@@ -1195,8 +1197,8 @@ function renderParts(
         })
     }
 
-    return parts.map((part, index) => {
-        const isLast = index === parts.length - 1
+    return visibleParts.map((part, index) => {
+        const isLast = index === visibleParts.length - 1
         const fallbackNode =
             part.type === 'tool_call' ? (
                 <ToolCard

@@ -872,4 +872,63 @@ describe('SubAgentPills', () => {
     const button = pill.closest('button')
     expect(button).toHaveClass('text-[var(--text-muted)]')
   })
+
+  it('reactivates the original badge from a nested send_message instead of adding another', () => {
+    const mockAgents: readonly SubAgentRecord[] = [
+      {
+        id: 'ag-1',
+        name: 'Ada',
+        color: '#9b7dff',
+        icon: 'sparkle',
+        parentSessionId: 'sess-1',
+        sessionId: 'ag-1',
+        modelId: 'm',
+        status: 'completed',
+        createdAt: 1,
+        updatedAt: 2,
+        parentToolCallId: 'nested-spawn',
+      },
+    ]
+    render(
+      <HostServicesProvider services={{ subAgents: { getAgents: () => mockAgents } } as any}>
+        <SubAgentPills
+          parentSessionId="sess-1"
+          toolOverlays={{
+            call_exec: {
+              toolCallId: 'call_exec',
+              status: 'running',
+              details: {
+                nestedTools: [
+                  {
+                    id: 'nested-send',
+                    name: 'send_message',
+                    status: 'running',
+                    args: { agent_id: 'ag-1', message: 'continue' },
+                  },
+                ],
+              },
+            },
+          }}
+          parts={[
+            {
+              id: 'nested-spawn',
+              name: 'spawn_agent',
+              args: { name: 'Ada', prompt: 'review' },
+              status: 'done',
+            },
+            {
+              id: 'nested-send',
+              name: 'send_message',
+              args: { agent_id: 'ag-1', message: 'continue' },
+              status: 'running',
+            },
+          ]}
+        />
+      </HostServicesProvider>,
+    )
+
+    const pills = screen.getAllByRole('button')
+    expect(pills).toHaveLength(1)
+    expect(screen.getByText('Ada')).toHaveClass('animate-text-shimmer')
+  })
 })

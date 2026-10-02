@@ -19,6 +19,12 @@ export interface ToolOverlayImage {
 export interface ToolOverlayDetails {
   diff?: string
   patch?: string
+  cellId?: string
+  status?: string
+  nestedTools?: unknown[]
+  nestedToolsTruncated?: boolean
+  additions?: number
+  deletions?: number
 }
 
 export interface ToolLiveOverlay {
@@ -106,20 +112,44 @@ function isTerminalToolStatus(status: DisplayToolStatus | undefined): boolean {
   )
 }
 
-/** Cycle-safe shallow details clone; only keeps string diff/patch fields. */
+const LIVE_DETAIL_KEYS = [
+  'diff',
+  'patch',
+  'cellId',
+  'status',
+  'nestedTools',
+  'nestedToolsTruncated',
+  'additions',
+  'deletions',
+] as const
+
+function cloneJsonValue<T>(value: T): T | undefined {
+  try {
+    return JSON.parse(JSON.stringify(value)) as T
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Cycle-safe details clone for live tool cards.
+ * Keeps diff metadata plus Code Mode fields so nested calls can render
+ * before the parent tool result is committed.
+ */
 export function cloneOverlayDetails(
   value: unknown,
 ): ToolOverlayDetails | undefined {
   if (!value || typeof value !== 'object') return undefined
-  try {
-    const record = value as Record<string, unknown>
-    const out: ToolOverlayDetails = {}
-    if (typeof record.diff === 'string') out.diff = record.diff
-    if (typeof record.patch === 'string') out.patch = record.patch
-    return out.diff !== undefined || out.patch !== undefined ? out : undefined
-  } catch {
-    return undefined
+  const record = value as Record<string, unknown>
+  const out: ToolOverlayDetails = {}
+  for (const key of LIVE_DETAIL_KEYS) {
+    if (record[key] === undefined) continue
+    const cloned = cloneJsonValue(record[key])
+    if (cloned !== undefined) {
+      ;(out as Record<string, unknown>)[key] = cloned
+    }
   }
+  return Object.keys(out).length > 0 ? out : undefined
 }
 
 /**

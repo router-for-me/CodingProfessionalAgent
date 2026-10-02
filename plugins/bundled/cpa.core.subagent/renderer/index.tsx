@@ -43,7 +43,11 @@ export {
 export type { SubAgentPanelContentProps, SubagentRole }
 
 function isSpawnAgentName(name?: string): boolean {
-    return name === 'spawn_agent' || name === 'delegate_agent' || name === 'subagent'
+    return (
+        name === 'spawn_agent' ||
+        name === 'delegate_agent' ||
+        name === 'subagent'
+    )
 }
 
 const DEFAULT_RIGHT_SIDEBAR_WIDTH = 280

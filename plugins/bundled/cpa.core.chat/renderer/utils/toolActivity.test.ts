@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { DisplayMessagePart } from '../types.js'
 import {
+  expandNestedSubagentParts,
   groupCompactActivityParts,
   hasVisibleTurnContent,
   isSkillRead,
@@ -393,5 +394,54 @@ describe('turn content helpers', () => {
       { type: 'text', text: 'final answer' },
     ]
     expect(trailingAssistantText(parts)).toBe('final answer')
+  })
+})
+
+describe('expandNestedSubagentParts', () => {
+  it('lifts a running nested spawn but leaves send_message inside the exec', () => {
+    const parts: DisplayMessagePart[] = [
+      {
+        type: 'tool_call',
+        id: 'call_exec|fc',
+        name: 'exec',
+        args: { source: 'await tools.spawn_agent({})' },
+        status: 'running',
+      },
+    ]
+    const expanded = expandNestedSubagentParts(parts, {
+      call_exec: {
+        toolCallId: 'call_exec',
+        details: {
+          nestedTools: [
+            {
+              id: 'nested-spawn',
+              name: 'spawn_agent',
+              status: 'running',
+              args: { name: 'Ada', prompt: 'review the diff' },
+            },
+            {
+              id: 'nested-send',
+              name: 'send_message',
+              status: 'running',
+              args: { agent_id: 'ag-1', message: 'continue' },
+            },
+            {
+              id: 'nested-read',
+              name: 'read',
+              status: 'done',
+              args: { path: 'a.go' },
+            },
+          ],
+        },
+      },
+    })
+    expect(expanded.map((part) => (part.type === 'tool_call' ? part.name : part.type))).toEqual([
+      'exec',
+      'spawn_agent',
+    ])
+    expect(groupCompactActivityParts(expanded).map((segment) => segment.type)).toEqual([
+      'tools',
+      'spawns',
+    ])
   })
 })

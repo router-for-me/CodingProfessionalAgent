@@ -1,4 +1,4 @@
-import { useTodoListStore, extractTodosFromEntries } from './todoStore.js'
+import { useTodoListStore, extractTodosFromEntries, extractTodosFromLiveOverlays } from './todoStore.js'
 import type { TodoItem } from './types.js'
 
 const clearTimerBySession = new Map<string, ReturnType<typeof setTimeout>>()
@@ -53,17 +53,20 @@ export function resetTodoOrchestration(): void {
 
 /**
  * Synchronizes the in-memory TodoListStore for a session from its conversation entries.
+ * Live Code Mode overlays win while their parent tool is still running.
  */
 export function syncTodosFromEntries(
     sessionId: string,
-    entries: readonly (Record<string, unknown>)[] | undefined | null
+    entries: readonly (Record<string, unknown>)[] | undefined | null,
+    overlays?: Readonly<Record<string, unknown>> | null,
 ): void {
     if (!sessionId) return
-    if (!entries || entries.length === 0) {
+    const live = extractTodosFromLiveOverlays(entries, overlays)
+    if ((!entries || entries.length === 0) && live === null) {
         clearSessionTodos(sessionId)
         return
     }
-    const extracted = extractTodosFromEntries(entries)
+    const extracted = live ?? extractTodosFromEntries(entries)
     if (extracted !== null) {
         const isAllCompleted =
             extracted.length > 0 && extracted.every((t) => t.status === 'completed')

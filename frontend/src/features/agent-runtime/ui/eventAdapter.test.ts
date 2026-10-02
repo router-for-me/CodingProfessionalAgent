@@ -1617,6 +1617,66 @@ describe('createAgentEventAdapter', () => {
     expect(tool.content.some((b) => b.type === 'image')).toBe(true)
   })
 
+  it('keeps nested code-mode tools on the live overlay before tool-end', () => {
+    const adapter = createAgentEventAdapter(useMessageStore)
+    adapter.apply({ type: 'agent-start', runId: 'r1', sessionId: 's1' })
+    adapter.apply({
+      type: 'tool-start',
+      runId: 'r1',
+      sessionId: 's1',
+      toolCallId: 'call_exec|fc',
+      toolName: 'exec',
+      args: { source: 'await tools.todo({})' },
+    })
+    adapter.apply({
+      type: 'tool-update',
+      runId: 'r1',
+      sessionId: 's1',
+      toolCallId: 'call_exec|fc',
+      toolName: 'exec',
+      result: {
+        content: [],
+        details: {
+          cellId: 'cell-1',
+          status: 'running',
+          nestedTools: [
+            {
+              id: 'nested-todo',
+              type: 'tool_call',
+              name: 'todo',
+              status: 'done',
+              args: {
+                operation: 'write',
+                todoList: [{ id: 1, title: 'Live task', description: '', status: 'in-progress' }],
+              },
+            },
+          ],
+          partialJson: 'drop-me',
+        },
+      },
+    })
+
+    const overlay = useToolOverlayStore.getState().getOverlay('s1', 'call_exec')
+    expect(overlay?.status).toBe('running')
+    expect(overlay?.details).toEqual({
+      cellId: 'cell-1',
+      status: 'running',
+      nestedTools: [
+        {
+          id: 'nested-todo',
+          type: 'tool_call',
+          name: 'todo',
+          status: 'done',
+          args: {
+            operation: 'write',
+            todoList: [{ id: 1, title: 'Live task', description: '', status: 'in-progress' }],
+          },
+        },
+      ],
+    })
+    expect(useMessageStore.getState().getEntries('s1')).toHaveLength(0)
+  })
+
   it('classifies rejected/aborted tool-end deterministically and clears overlay on agent-start', () => {
     expect(
       classifyToolEndStatus(

@@ -1,11 +1,37 @@
 import { useHostServices, useTranslation, PluginSurface } from '@cpa/plugin-ui'
 
+function normalizeToolCallId(id?: string): string {
+    if (!id) return ''
+    return id.split('|', 1)[0] ?? id
+}
+
+function findOverlay(toolOverlays: Readonly<Record<string, any>> | undefined, id?: string): any {
+    if (!toolOverlays || !id) return undefined
+    const normalized = normalizeToolCallId(id)
+    return (
+        toolOverlays[id] ??
+        toolOverlays[normalized] ??
+        toolOverlays['call_' + normalized] ??
+        Object.values(toolOverlays).find((item: any) => normalizeToolCallId(item?.toolCallId || '') === normalized)
+    )
+}
+
+function mergeDetails(canonical: Record<string, any> | undefined, live: Record<string, any> | undefined): Record<string, any> {
+    const base = canonical ?? {}
+    const current = live ?? {}
+    return {
+        ...base,
+        ...current,
+        nestedTools: Array.isArray(current.nestedTools) ? current.nestedTools : base.nestedTools,
+    }
+}
+
 export function ExecToolCard(props: any) {
     const services = useHostServices()
     const { t } = useTranslation()
     const part = props.part ?? props.value ?? {}
-    const overlay = props.toolOverlays?.[part.id] ?? props.toolOverlays?.[String(part.id).split('|')[0]]
-    const details = props.details ?? part.details ?? overlay?.details ?? {}
+    const overlay = findOverlay(props.toolOverlays, part.id)
+    const details = mergeDetails(props.details ?? part.details, overlay?.details)
     const result = part.result ?? overlay?.partialOutput ?? props.partialOutput ?? ''
     const status = details.status ?? (/\bterminated\b/.test(result) ? 'terminated' : /\byielded\b/.test(result) ? 'yielded' : /\bmissing\b|\bfailed\b/.test(result) ? 'failed' : part.status === 'done' ? 'completed' : part.status === 'error' ? 'failed' : 'running')
     const nested = Array.isArray(details.nestedTools) ? details.nestedTools : []

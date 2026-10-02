@@ -41,6 +41,14 @@ describe('Code Mode settings and cards', () => {
         expect(document.querySelector('details')).not.toHaveAttribute('open')
         expect(host.rendererContributions.selectChatRenderer).toHaveBeenCalled()
     })
+    it('renders nested tools from the live overlay before exec finishes', async () => {
+        await i18n.changeLanguage('en')
+        const host = services()
+        render(<HostServicesProvider services={host}><ExecToolCard value={{ type: 'tool_call', id: 'call_exec|fc', name: 'exec', args: { source: 'await tools.todo({})' }, status: 'running' }} toolOverlays={{ call_exec: { toolCallId: 'call_exec', details: { cellId: 'cell-1', status: 'running', nestedTools: [{ type: 'tool_call', id: 'nested', name: 'todo', status: 'done', result: 'updated' }] } } }} /></HostServicesProvider>)
+        expect(screen.getByText('Running')).toBeInTheDocument()
+        expect(screen.getByText('todo nested card')).toBeInTheDocument()
+        expect(screen.getByText('cell_id: cell-1')).toBeInTheDocument()
+    })
     it('shows wait identity and termination intent', async () => {
         await i18n.changeLanguage('en')
         render(<HostServicesProvider services={services()}><ExecToolCard value={{ id: 'wait', name: 'wait', args: { cell_id: 'cell-2', terminate: true }, status: 'done', result: 'Cell cell-2 terminated.' }} /></HostServicesProvider>)

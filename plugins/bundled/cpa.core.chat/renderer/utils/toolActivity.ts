@@ -1,4 +1,4 @@
-import type { DisplayMessagePart } from '../types.js'
+import type { DisplayMessagePart, ToolCardStatus } from '../types.js'
 
 export type TFunction = (key: string, options?: any) => string
 
@@ -112,8 +112,45 @@ export function normalizeToolCallId(id: string): string {
   return id.split('|', 1)[0] ?? id
 }
 
+const SUBAGENT_BADGE_NAMES = new Set([
+  'spawn_agent',
+  'delegate_agent',
+  'subagent',
+])
+
 export function isSpawnAgentName(name: string): boolean {
-  return name === 'spawn_agent'
+  return SUBAGENT_BADGE_NAMES.has(name)
+}
+
+/**
+ * Code Mode keeps spawn_agent inside the parent exec details.
+ * Lift those nested calls into real parts so sub-agent badges can render
+ * before the parent tool result is the only thing on screen.
+ * send_message stays on the original badge and must not create another one.
+ */
+export function expandNestedSubagentParts(
+  parts: readonly DisplayMessagePart[],
+  overlays?: Readonly<Record<string, { toolCallId?: string; details?: unknown }>>,
+): DisplayMessagePart[] {
+  const seen = new Set<string>()
+  for (const part of parts) {
+    if (part.type === 'tool_call' && part.id) seen.add(normalizeToolCallId(part.id))
+  }
+
+  const expanded: DisplayMessagePart[] = []
+  for (const part of parts) {
+    expanded.push(part)
+    if (part.type !== 'tool_call') continue
+    for (const record of nestedSubagentRecords(part, overlays)) {
+      const synthetic = nestedRecordToPart(record)
+      if (!synthetic) continue
+      const key = normalizeToolCallId(synthetic.id)
+      if (!key || seen.has(key)) continue
+      seen.add(key)
+      expanded.push(synthetic)
+    }
+  }
+  return expanded
 }
 
 export function isSkillRead(
@@ -473,6 +510,81 @@ export function groupCompactActivityParts(
 function isCompactActivityGap(part: DisplayMessagePart): boolean {
   if (part.type === 'thinking') return true
   return part.type === 'text' && !part.text.trim()
+}
+
+function nestedSubagentRecords(
+  part: Extract<DisplayMessagePart, { type: 'tool_call' }>,
+  overlays?: Readonly<Record<string, { toolCallId?: string; details?: unknown }>>,
+): readonly unknown[] {
+  const overlay = findActivityOverlay(overlays, part.id)
+  const live = nestedToolsOf(overlay?.details)
+  if (live.length > 0) return live
+  return nestedToolsOf(part.details)
+}
+
+function findActivityOverlay(
+  overlays: Readonly<Record<string, { toolCallId?: string; details?: unknown }>> | undefined,
+  id: string,
+): { toolCallId?: string; details?: unknown } | undefined {
+  if (!overlays || !id) return undefined
+  const normalized = normalizeToolCallId(id)
+  return (
+    overlays[id] ??
+    overlays[normalized] ??
+    overlays[`call_${normalized}`] ??
+    Object.values(overlays).find(
+      (overlay) => normalizeToolCallId(overlay?.toolCallId || '') === normalized,
+    )
+  )
+}
+
+function nestedToolsOf(details: unknown): readonly unknown[] {
+  if (!details || typeof details !== 'object') return []
+  const nested = (details as { nestedTools?: unknown }).nestedTools
+  return Array.isArray(nested) ? nested : []
+}
+
+function nestedRecordToPart(record: unknown): Extract<DisplayMessagePart, { type: 'tool_call' }> | null {
+  if (!record || typeof record !== 'object') return null
+  const raw = record as Record<string, unknown>
+  const name = String(raw.name ?? raw.toolName ?? '')
+  if (!isSpawnAgentName(name)) return null
+  const id = String(raw.id ?? '')
+  if (!id) return null
+  return {
+    type: 'tool_call',
+    id,
+    name,
+    args: recordArgs(raw.args ?? raw.arguments),
+    status: nestedToolStatus(raw.status),
+  }
+}
+
+function recordArgs(value: unknown): Record<string, unknown> {
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value)
+    } catch {
+      return {}
+    }
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  return value as Record<string, unknown>
+}
+
+function nestedToolStatus(status: unknown): ToolCardStatus {
+  if (
+    status === 'queued' ||
+    status === 'running' ||
+    status === 'awaiting_approval' ||
+    status === 'done' ||
+    status === 'error' ||
+    status === 'rejected' ||
+    status === 'aborted'
+  ) {
+    return status
+  }
+  return 'done'
 }
 
 function stringArg(
