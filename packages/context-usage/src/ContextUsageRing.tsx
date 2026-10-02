@@ -34,6 +34,7 @@ export interface ContextUsageRingProps {
     disabled?: boolean
     isRunning?: boolean
     forceShow?: boolean
+    onClick?: (e: React.MouseEvent<HTMLSpanElement>) => void
 }
 
 export function ContextUsageRing(props: ContextUsageRingProps): ReactElement | null {
@@ -60,6 +61,7 @@ function ContextUsageRingInner({
     className,
     testId = 'context-usage-ring',
     settings,
+    onClick,
 }: ContextUsageRingInnerProps): ReactElement {
     const { t } = useTranslation()
     const tooltipId = useId()
@@ -242,7 +244,8 @@ function ContextUsageRingInner({
                 onFocus={handleOpen}
                 onBlur={handleClose}
                 onClick={(e) => {
-                    e.stopPropagation()
+                    setOpen(false)
+                    onClick?.(e)
                 }}
             >
                 <UsageRing

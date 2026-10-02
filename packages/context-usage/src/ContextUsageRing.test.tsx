@@ -345,4 +345,24 @@ describe('ContextUsageRing Component', () => {
 
         mockServices.settings.getSnapshot = originalGetSnapshot
     })
+
+    it('bubbles click events to parent container and invokes custom onClick if provided', async () => {
+        const handleParentClick = vi.fn()
+        const handleRingClick = vi.fn()
+
+        render(
+            <div onClick={handleParentClick}>
+                <ContextUsageRing sessionId="s1" onClick={handleRingClick} />
+            </div>,
+        )
+        const ring = screen.getByTestId('context-usage-ring')
+
+        fireEvent.mouseEnter(ring)
+        expect(await screen.findByRole('tooltip')).toBeInTheDocument()
+
+        fireEvent.click(ring)
+        expect(handleRingClick).toHaveBeenCalledTimes(1)
+        expect(handleParentClick).toHaveBeenCalledTimes(1)
+        expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
+    })
 })

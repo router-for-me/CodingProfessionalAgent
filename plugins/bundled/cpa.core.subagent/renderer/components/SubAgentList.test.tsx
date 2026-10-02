@@ -1,5 +1,5 @@
 import i18n from '@/i18n'
-import { act, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import '@/i18n'
 import type { SubAgentRecord, ModelCatalogEntry } from '@cpa/plugin-api'
@@ -267,5 +267,26 @@ describe('SubAgentList elapsed status', () => {
     )
 
     expect(screen.queryByTestId('context-usage-ring')).not.toBeInTheDocument()
+  })
+
+  it('triggers onSelect when clicking the ContextUsageRing inside a subagent row', () => {
+    const onSelect = vi.fn()
+    render(
+      <HostServicesProvider services={mockServices}>
+        <SubAgentList agents={[agent()]} onSelect={onSelect} />
+      </HostServicesProvider>,
+    )
+
+    const ring = screen.getByTestId('context-usage-ring')
+    fireEvent.click(ring)
+
+    expect(onSelect).toHaveBeenCalledTimes(1)
+    expect(onSelect).toHaveBeenCalledWith('ag-1')
+
+    // Also assert clicking the inner SVG / circles bubbles up to onSelect
+    const svg = ring.querySelector('svg')
+    expect(svg).toBeInTheDocument()
+    fireEvent.click(svg!)
+    expect(onSelect).toHaveBeenCalledTimes(2)
   })
 })

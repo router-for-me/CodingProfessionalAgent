@@ -63,7 +63,7 @@ export const UsageRing = forwardRef<HTMLSpanElement, UsageRingProps>(
                     width={size}
                     height={size}
                     viewBox={`0 0 ${size} ${size}`}
-                    className="rotate-[-90deg] overflow-visible"
+                    className="rotate-[-90deg] overflow-visible pointer-events-none"
                     aria-hidden
                 >
                     {/* Background track circle */}
