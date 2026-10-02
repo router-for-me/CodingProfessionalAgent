@@ -1,8 +1,11 @@
 import i18n from '@/i18n'
 import { render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import userEvent from '@testing-library/user-event'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import '@/i18n'
-import { TitleBarLeftContribution } from './TitleBarContributions'
+import { useUiStore } from '@/stores/uiStore'
+import { createHostServices } from '@/application/services/createHostServices'
+import { TitleBarLeftContribution, TitleBarRightContribution } from './TitleBarContributions'
 
 describe('TitleBarLeftContribution', () => {
   beforeEach(async () => {
@@ -70,5 +73,54 @@ describe('TitleBarLeftContribution', () => {
     expect(trafficSpacer).toBeNull()
     const toggleWrapper = screen.getByRole('button', { name: /sidebar/i }).parentElement
     expect(toggleWrapper?.className).toContain('pl-2.5')
+  })
+})
+
+describe('TitleBarRightContribution', () => {
+  beforeEach(async () => {
+    createHostServices()
+    await i18n.changeLanguage('en')
+    useUiStore.setState({ pinnedSummaryVisible: false })
+  })
+
+  it('renders nothing when showPinnedSummaryToggle is false', () => {
+    const { container } = render(
+      <TitleBarRightContribution showPinnedSummaryToggle={false} />,
+    )
+    expect(screen.queryByTestId('pinned-summary-toggle')).not.toBeInTheDocument()
+    expect(container.firstChild).toBeInTheDocument()
+  })
+
+  it('renders toggle button with unselected state when pinnedSummaryVisible is false', () => {
+    useUiStore.setState({ pinnedSummaryVisible: false })
+    render(<TitleBarRightContribution showPinnedSummaryToggle={true} />)
+
+    const toggle = screen.getByTestId('pinned-summary-toggle')
+    expect(toggle).toBeInTheDocument()
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    expect(toggle).toHaveAttribute('title', 'Show pinned summary')
+    expect(toggle.className).not.toContain('bg-[var(--bg-sidebar-hover)] text-[var(--text-primary)]')
+  })
+
+  it('renders toggle button with selected state when pinnedSummaryVisible is true', () => {
+    useUiStore.setState({ pinnedSummaryVisible: true })
+    render(<TitleBarRightContribution showPinnedSummaryToggle={true} />)
+
+    const toggle = screen.getByTestId('pinned-summary-toggle')
+    expect(toggle).toBeInTheDocument()
+    expect(toggle).toHaveAttribute('aria-pressed', 'true')
+    expect(toggle).toHaveAttribute('title', 'Hide pinned summary')
+    expect(toggle.className).toContain('bg-[var(--bg-sidebar-hover)] text-[var(--text-primary)]')
+  })
+
+  it('toggles pinnedSummaryVisible on click', async () => {
+    const user = userEvent.setup()
+    useUiStore.setState({ pinnedSummaryVisible: false })
+    render(<TitleBarRightContribution showPinnedSummaryToggle={true} />)
+
+    const toggle = screen.getByTestId('pinned-summary-toggle')
+    await user.click(toggle)
+
+    expect(useUiStore.getState().pinnedSummaryVisible).toBe(true)
   })
 })

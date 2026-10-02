@@ -193,13 +193,19 @@ export function MessageList({
         data-testid="message-list-scroller"
       >
         <div
-          ref={contentRef}
-          data-testid={contentTestId}
-          className={
-            contentClassName ??
-            'mx-auto flex min-h-full w-full max-w-3xl flex-col gap-4 px-6 pb-44 pt-8'
-          }
+          className="w-full min-h-full transition-[padding] duration-200 ease-out motion-reduce:transition-none"
+          style={{
+            paddingRight: 'var(--pinned-summary-shift, 0px)',
+          }}
         >
+          <div
+            ref={contentRef}
+            data-testid={contentTestId}
+            className={
+              contentClassName ??
+              'mx-auto flex min-h-full w-full max-w-3xl flex-col gap-4 px-6 pb-44 pt-8'
+            }
+          >
           {compactActivity
             ? renderCompactTurns(
                 messages,
@@ -304,6 +310,7 @@ export function MessageList({
           {!compactActivity && isCompacting ? (
             <CompactionDivider pending />
           ) : null}
+          </div>
         </div>
       </div>
     </div>

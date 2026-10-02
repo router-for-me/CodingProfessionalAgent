@@ -128,6 +128,182 @@ describe('AppShell host slot skeleton', () => {
         expect(screen.getByTestId('pinned-summary')).toBeInTheDocument()
     })
 
+    it('does not shift workspace content when workspace is wide enough and PinnedSummary does not obscure content', () => {
+        mockPathname = '/chat/session-123'
+        useSessionStore.setState({
+            sessions: [
+                {
+                    id: 'session-123',
+                    title: 'Session Title',
+                    pinned: false,
+                    createdAt: 1,
+                    updatedAt: 1,
+                },
+            ],
+        })
+        useUiStore.setState({ pinnedSummaryVisible: true })
+
+        vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+            width: 1400,
+            height: 800,
+            top: 0,
+            left: 0,
+            bottom: 800,
+            right: 1400,
+            x: 0,
+            y: 0,
+            toJSON: () => ({}),
+        })
+
+        render(<AppShell />)
+
+        const contentContainer = screen.getByTestId('workspace-content-container')
+        expect(contentContainer.parentElement?.style.getPropertyValue('--pinned-summary-shift')).toBe('0px')
+    })
+
+    it('shifts workspace content by exact overlap amount when PinnedSummary obscures content on medium width', () => {
+        mockPathname = '/chat/session-123'
+        useSessionStore.setState({
+            sessions: [
+                {
+                    id: 'session-123',
+                    title: 'Session Title',
+                    pinned: false,
+                    createdAt: 1,
+                    updatedAt: 1,
+                },
+            ],
+        })
+        useUiStore.setState({ pinnedSummaryVisible: true })
+
+        vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+            width: 1200,
+            height: 800,
+            top: 0,
+            left: 0,
+            bottom: 800,
+            right: 1200,
+            x: 0,
+            y: 0,
+            toJSON: () => ({}),
+        })
+
+        render(<AppShell />)
+
+        const contentContainer = screen.getByTestId('workspace-content-container')
+        // Width 1200: overlap = 984 - 908 = 76px -> shift = 2 * 76 = 152px
+        expect(contentContainer.parentElement?.style.getPropertyValue('--pinned-summary-shift')).toBe('152px')
+    })
+
+    it('keeps workspace content at 0px shift when workspace is narrow and cannot fit both side-by-side', () => {
+        mockPathname = '/chat/session-123'
+        useSessionStore.setState({
+            sessions: [
+                {
+                    id: 'session-123',
+                    title: 'Session Title',
+                    pinned: false,
+                    createdAt: 1,
+                    updatedAt: 1,
+                },
+            ],
+        })
+        useUiStore.setState({ pinnedSummaryVisible: true })
+
+        vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+            width: 900,
+            height: 800,
+            top: 0,
+            left: 0,
+            bottom: 800,
+            right: 900,
+            x: 0,
+            y: 0,
+            toJSON: () => ({}),
+        })
+
+        render(<AppShell />)
+
+        const contentContainer = screen.getByTestId('workspace-content-container')
+        expect(contentContainer.parentElement?.style.getPropertyValue('--pinned-summary-shift')).toBe('0px')
+    })
+
+    it('dynamically adapts workspace content shift when container resizes via ResizeObserver', () => {
+        mockPathname = '/chat/session-123'
+        useSessionStore.setState({
+            sessions: [
+                {
+                    id: 'session-123',
+                    title: 'Session Title',
+                    pinned: false,
+                    createdAt: 1,
+                    updatedAt: 1,
+                },
+            ],
+        })
+        useUiStore.setState({ pinnedSummaryVisible: true })
+
+        let resizeCallback: ((entries: Array<{ target: Element; contentRect: { width: number } }>) => void) | null = null
+
+        class MockResizeObserver {
+            constructor(cb: (entries: Array<{ target: Element; contentRect: { width: number } }>) => void) {
+                resizeCallback = cb
+            }
+            observe() {}
+            unobserve() {}
+            disconnect() {}
+        }
+
+        const origResizeObserver = window.ResizeObserver
+        window.ResizeObserver = MockResizeObserver as unknown as typeof ResizeObserver
+
+        try {
+            vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+                width: 1400,
+                height: 800,
+                top: 0,
+                left: 0,
+                bottom: 800,
+                right: 1400,
+                x: 0,
+                y: 0,
+                toJSON: () => ({}),
+            })
+
+            render(<AppShell />)
+
+            const contentContainer = screen.getByTestId('workspace-content-container')
+            // At 1400px: no overlap -> 0px
+            expect(contentContainer.parentElement?.style.getPropertyValue('--pinned-summary-shift')).toBe('0px')
+
+            // Simulate window resize to 1200px (overlap 76px -> 152px shift)
+            act(() => {
+                resizeCallback?.([
+                    {
+                        target: contentContainer.parentElement as Element,
+                        contentRect: { width: 1200 },
+                    },
+                ])
+            })
+
+            expect(contentContainer.parentElement?.style.getPropertyValue('--pinned-summary-shift')).toBe('152px')
+
+            // Simulate window resize down to 900px (cannot fit -> 0px shift)
+            act(() => {
+                resizeCallback?.([
+                    {
+                        target: contentContainer.parentElement as Element,
+                        contentRect: { width: 900 },
+                    },
+                ])
+            })
+
+            expect(contentContainer.parentElement?.style.getPropertyValue('--pinned-summary-shift')).toBe('0px')
+        } finally {
+            window.ResizeObserver = origResizeObserver
+        }
+    })
+
     it('renders SubAgentPanel when chat session has subagents', () => {
         mockPathname = '/chat/session-123'
         useSubAgentStore.setState({

@@ -1502,10 +1502,13 @@ const BaseComposer = memo(function BaseComposer({
     return (
         <div
             className={cn(
-                'pointer-events-none absolute inset-x-0 bottom-0 flex justify-center px-6 pb-6',
+                'pointer-events-none absolute inset-x-0 bottom-0 flex justify-center px-6 pb-6 transition-[padding] duration-200 ease-out motion-reduce:transition-none',
                 hasAnyMenuOpen ? 'z-[60]' : 'z-20',
                 className,
             )}
+            style={{
+                paddingRight: 'var(--pinned-summary-shift, 0px)',
+            }}
         >
             <div
                 data-element="composer-container"

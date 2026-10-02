@@ -1,4 +1,4 @@
-import { cn, useHostService, useTranslation, FileText, PanelLeft } from '@cpa/plugin-ui'
+import { cn, useHostService, useTranslation, useUiState, FileText, PanelLeft } from '@cpa/plugin-ui'
 import { UiServiceToken } from '@cpa/plugin-api'
 import { isBrowserEnvironment, isWindowsPlatform } from '../utils/platform.js'
 
@@ -78,11 +78,16 @@ export function TitleBarRightContribution({
 }: TitleBarSlotProps) {
     const { t } = useTranslation()
     const uiService = useHostService(UiServiceToken)
+    const pinnedSummaryVisible = useUiState((state: any) => Boolean(state?.pinnedSummaryVisible))
 
     const handlePinnedToggle = (e: any) => {
         e.stopPropagation?.()
         uiService?.togglePinnedSummaryVisible?.()
     }
+
+    const label = pinnedSummaryVisible
+        ? t('nav.hidePinnedSummary')
+        : t('nav.showPinnedSummary')
 
     return (
         <div className="flex shrink-0 items-center">
@@ -90,13 +95,16 @@ export function TitleBarRightContribution({
                 <button
                     type="button"
                     data-testid="pinned-summary-toggle"
-                    aria-label={t('nav.showPinnedSummary')}
-                    title={t('nav.showPinnedSummary')}
+                    aria-label={label}
+                    title={label}
+                    aria-pressed={pinnedSummaryVisible}
                     onClick={handlePinnedToggle}
                     className={cn(
                         'inline-flex size-6 shrink-0 items-center justify-center rounded-lg leading-none',
                         'text-[var(--text-muted)] transition-colors',
                         'hover:bg-[var(--bg-sidebar-hover)] hover:text-[var(--text-primary)]',
+                        'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--border-subtle)]',
+                        pinnedSummaryVisible && 'bg-[var(--bg-sidebar-hover)] text-[var(--text-primary)]',
                     )}
                 >
                     <svg viewBox="0 0 16 16" className="size-3.5" aria-hidden>

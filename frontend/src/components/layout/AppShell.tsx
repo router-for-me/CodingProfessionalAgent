@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Outlet, useNavigate, useRouterState } from '@tanstack/react-router'
 import { WorkspaceVisibilityProvider } from '@cpa/plugin-ui'
 import { ExtensionSlot } from '@/plugins/registry/ExtensionSlot'
@@ -25,6 +25,11 @@ import { MainTitleBar } from './MainTitleBar'
 import { PinnedSummary } from './PinnedSummary'
 import { Sidebar } from './Sidebar'
 import { WindowToolbar } from './WindowToolbar'
+
+const PINNED_SUMMARY_WIDTH = 280
+const PINNED_SUMMARY_RIGHT_OFFSET = 12
+const PINNED_SUMMARY_RESERVED_SPACE = PINNED_SUMMARY_WIDTH + PINNED_SUMMARY_RIGHT_OFFSET // 292px
+const CHAT_CONTENT_MAX_WIDTH = 768
 
 /**
  * Top-level application chrome: pure host slot skeleton hosting
@@ -99,6 +104,39 @@ export function AppShell() {
     const rightSidebarVisible = !rightSidebarCollapsed
     const isRightMaximized = rightSidebarVisible && rightSidebarMaximized
 
+    const workspaceRef = useRef<HTMLDivElement>(null)
+    const [workspaceWidth, setWorkspaceWidth] = useState<number>(0)
+
+    useEffect(() => {
+        const el = workspaceRef.current
+        if (!el) return
+        setWorkspaceWidth(el.getBoundingClientRect().width || el.clientWidth)
+        if (typeof ResizeObserver === 'undefined') return
+        const observer = new ResizeObserver((entries) => {
+            for (const entry of entries) {
+                if (entry.target === el) {
+                    setWorkspaceWidth(entry.contentRect.width)
+                }
+            }
+        })
+        observer.observe(el)
+        return () => observer.disconnect()
+    }, [])
+
+    let pinnedSummaryShift = 0
+    if (hasActiveSession && pinnedSummaryVisible && workspaceWidth > 0) {
+        const contentWidth = Math.min(workspaceWidth, CHAT_CONTENT_MAX_WIDTH)
+        const centeredContentRight = (workspaceWidth + contentWidth) / 2
+        const safeRight = workspaceWidth - PINNED_SUMMARY_RESERVED_SPACE
+        const overlap = Math.max(0, centeredContentRight - safeRight)
+        const availableLeftSpace = Math.max(0, (workspaceWidth - contentWidth) / 2)
+
+        if (overlap > 0 && availableLeftSpace >= overlap) {
+            // Shift left just enough to clear PinnedSummary without excess movement
+            pinnedSummaryShift = Math.round(overlap * 2)
+        }
+    }
+
     return (
         <div className="app-background-surface relative flex h-full w-full bg-[var(--bg-app)] text-[var(--text-primary)]">
             <WorkspaceVisibilityProvider visible={!settingsOpen}>
@@ -125,19 +163,30 @@ export function AppShell() {
                             reserveWindowToolbar={!rightSidebarVisible && layout.reserveWindowToolbar}
                             sessionTitle={sessionTitle}
                         />
-                        <div className="relative min-h-0 flex-1 overflow-hidden">
+                        <div
+                            ref={workspaceRef}
+                            className="relative min-h-0 flex-1 overflow-hidden"
+                            style={{
+                                '--pinned-summary-shift': `${pinnedSummaryShift}px`,
+                            } as React.CSSProperties}
+                        >
                             {hasActiveSession && pinnedSummaryVisible ? (
                                 <div className="pointer-events-none absolute top-2 right-3 z-10">
                                     <PinnedSummary sessionId={chatSessionId} />
                                 </div>
                             ) : null}
-                            <ExtensionSlot
-                                name="workspace.main"
-                                fallback={<Outlet />}
-                            />
-                            {layout.showComposer ? (
-                                <ExtensionSlot name="workspace.composer" />
-                            ) : null}
+                            <div
+                                data-testid="workspace-content-container"
+                                className="relative h-full w-full min-h-0 min-w-0"
+                            >
+                                <ExtensionSlot
+                                    name="workspace.main"
+                                    fallback={<Outlet />}
+                                />
+                                {layout.showComposer ? (
+                                    <ExtensionSlot name="workspace.composer" />
+                                ) : null}
+                            </div>
                         </div>
                         <BottomPanel />
                     </main>
