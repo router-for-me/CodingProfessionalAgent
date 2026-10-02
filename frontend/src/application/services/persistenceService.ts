@@ -887,6 +887,13 @@ function sanitizeEntry(value: unknown): ConversationEntry | null {
   if (kind === 'toolResult') {
     const toolCallId = asString(value.toolCallId)
     if (!toolCallId) return null
+    let displayMetadata: Record<string, unknown> | undefined
+    if (isPlainObject(value.displayMetadata)) {
+        try {
+            const json = JSON.stringify(value.displayMetadata)
+            if (json.length <= 256 * 1024) displayMetadata = JSON.parse(json)
+        } catch { /* Discard invalid or oversized display-only metadata. */ }
+    }
     return {
       id,
       sessionId,
@@ -896,6 +903,7 @@ function sanitizeEntry(value: unknown): ConversationEntry | null {
       toolCallId,
       toolName: asString(value.toolName) ?? 'tool',
       content: sanitizeToolResultContent(value.content),
+      ...(displayMetadata ? { displayMetadata } : {}),
       isError: value.isError === true,
     }
   }

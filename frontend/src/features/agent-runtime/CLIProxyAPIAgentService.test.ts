@@ -291,6 +291,30 @@ function createWorktreePrepareInput(
 }
 
     describe('prepare preflight', () => {
+        it('fails a required policy closed when its plugin did not activate', async () => {
+            const { service, fakeClient } = createService({ createTools: async () => [makeTool('read')] })
+            const prepared = await service.prepare({ ...createWorktreePrepareInput(), projectPath: null, projectPaths: [], worktreePolicy: undefined, requiredToolPolicy: 'code-only' })
+            expect(prepared.requiredToolPolicy).toBe('code-only')
+            const events = await collect(service.streamChat({ prepared, sessionId: 's', runId: 'r', entries: [] }))
+            expect(events.some((event) => event.type === 'error' && event.message.includes('Required tool policy unavailable'))).toBe(true)
+            expect(fakeClient.calls).toHaveLength(0)
+            await service.dispose()
+        })
+
+        it('preserves required policy metadata in immutable prepared tool snapshots', async () => {
+            const policy = makeTool('policy')
+            policy.toolPolicyId = 'restricted'
+            policy.prepareToolSet = async () => ({ policyId: 'restricted', tools: [], nestedTools: [] })
+            const { service, fakeClient } = createService({ createTools: async () => [makeTool('read'), policy] })
+            fakeClient.queue({ kind: 'stream', final: (seed) => doneAssistant(seed, { stopReason: 'stop' }) })
+            const prepared = await service.prepare({ ...createWorktreePrepareInput(), projectPath: null, projectPaths: [], worktreePolicy: undefined, requiredToolPolicy: 'restricted' })
+            expect(prepared.tools.find((tool) => tool.name === 'policy')?.toolPolicyId).toBe('restricted')
+            const events = await collect(service.streamChat({ prepared, sessionId: 's', runId: 'r', entries: [] }))
+            expect(events.some((event) => event.type === 'error')).toBe(false)
+            expect(fakeClient.calls).toHaveLength(1)
+            expect(fakeClient.calls[0]?.tools ?? []).toHaveLength(0)
+            await service.dispose()
+        })
         it('validates, freezes, and propagates a worktree policy through prepare', async () => {
             const bridge = new FakeNativeBridge()
             bridge.setFile('/worktrees/repo-session/.keep', '')

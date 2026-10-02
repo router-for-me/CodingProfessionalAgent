@@ -20,6 +20,8 @@ import {
 } from '@cpa/plugin-kernel'
 import { MainPluginModuleLoader, type BundledEntryLoader } from '../loading/MainPluginModuleLoader.js'
 import { MainCapabilityBroker } from '../capabilities/MainCapabilityBroker.js'
+import { bindCapabilityContributions } from '../capabilities/bindCapabilityContributions.js'
+import { bindUtilityExecutors } from '../capabilities/utilityExecutors.js'
 import { bundledMainEntryLoaders } from '../generated/bundledPluginLoaders.js'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -100,12 +102,15 @@ export class MainPluginRuntimeHost {
     readonly contributionRegistry: ContributionRegistry
     readonly eventBus: PluginEventBus
     private graphDTO?: ResolvedPluginGraphDTO
+    private readonly disposeCapabilityBindings: () => void
+    private readonly disposeUtilityExecutors: () => void
 
     constructor(options: MainPluginRuntimeHostOptions = {}) {
         this.graphDTO = options.graphDTO
         this.contributionRegistry = options.contributionRegistry ?? new ContributionRegistry()
         this.eventBus = options.eventBus ?? new PluginEventBus()
         this.capabilityBroker = options.capabilityBroker ?? new MainCapabilityBroker()
+        this.disposeCapabilityBindings = bindCapabilityContributions(this.contributionRegistry, this.eventBus, this.capabilityBroker)
         const defaultDefinitions: Record<string, PluginEntryDefinition> = {
             ...(options.defaultDefinitions ?? {}),
         }
@@ -136,6 +141,7 @@ export class MainPluginRuntimeHost {
             })
 
         const broker = this.capabilityBroker
+        this.disposeUtilityExecutors = bindUtilityExecutors(broker, this.contributionRegistry, (id) => this.catalog.getPackage(id), path.join(repoRoot, 'plugins', 'bundled'))
 
         this.runtime =
             options.runtime ??
@@ -288,6 +294,8 @@ export class MainPluginRuntimeHost {
      * Dispose all active plugins, waiting for active generation leases to drain.
      */
     async dispose(): Promise<void> {
+        this.disposeCapabilityBindings()
+        this.disposeUtilityExecutors()
         const activeIds = this.runtime.getActivePluginIds()
         for (const id of activeIds) {
             try {

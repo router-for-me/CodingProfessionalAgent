@@ -399,6 +399,13 @@ describe('useAgentStream', () => {
         vi.useRealTimers()
     })
 
+    it('requires the persisted strict tool policy even without plugin-provided tools', async () => {
+        useSettingsStore.setState((state) => ({ settings: { ...state.settings, toolMode: 'code-only' } }))
+        const { result } = renderHook(() => useAgentStream(), { wrapper: wrapperFor(service) })
+        await act(async () => { await result.current.send('hello') })
+        expect(service.prepareInputs[0]?.requiredToolPolicy).toBe('code-only')
+    })
+
     it('preflight failure creates no session or user entry and rejects', async () => {
         service.prepareImpl = async () => {
             throw new AgentPreflightError(

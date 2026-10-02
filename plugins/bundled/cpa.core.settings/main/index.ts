@@ -53,6 +53,7 @@ export const settingsMainEntry = definePluginEntry({
                     const key = args[0] as string
                     const value = args[1]
                     const result = await kvStoreService.set(key, value)
+                    void context.events.emit('kvstore:updated', { key, value })
                     if (key === 'projects') {
                         emitEvent(
                             {

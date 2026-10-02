@@ -714,6 +714,8 @@ export function createAgentEventAdapter(
   const apply = (event: AgentRunEvent): ApplyAgentEventResult => {
     const { sessionId, runId } = event
     const actions = actionsOf()
+    // Nested calls are projected in their parent's display details, never protocol entries.
+    if (event.parentToolCallId && 'toolCallId' in event) return NO_CHANGE
 
     switch (event.type) {
       case 'agent-start': {
@@ -993,6 +995,14 @@ export function createAgentEventAdapter(
         if (!canAcceptRunEvent(sessionId, runId)) return NO_CHANGE
         setCompacting(sessionId, true)
         return NO_CHANGE
+      }
+
+      case 'tool-display-update': {
+        if (!canAcceptRunEvent(sessionId, runId)) return NO_CHANGE
+        const existing = findToolResult(actions.getEntries(sessionId), event.toolCallId)
+        if (!existing || !registry.runMetaBySession.get(sessionId)?.ownedIds.has(existing.id)) return NO_CHANGE
+        actions.replaceEntry({ ...existing, displayMetadata: { ...existing.displayMetadata, ...deepClone(event.displayMetadata) } })
+        return { changed: true, urgency: 'debounce' }
       }
 
       case 'tool-end': {

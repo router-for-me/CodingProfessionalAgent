@@ -150,10 +150,12 @@
     "@cpa/plugin-kernel": "workspace:*",
     "@cpa/plugin-sdk": "workspace:*",
     "@cpa/plugin-ui": "workspace:*",
+    "@jitl/quickjs-ng-wasmfile-release-sync": "0.32.0",
     "better-sqlite3": "^12.11.1",
     "bonjour-service": "^1.4.4",
     "node-pty": "^1.1.0",
     "pacote": "^22.0.0",
+    "quickjs-emscripten": "0.32.0",
     "semver": "^7.8.5",
     "ws": "^8.18.1"
   }

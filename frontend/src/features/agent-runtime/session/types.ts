@@ -63,6 +63,7 @@ export type DisplayMessagePart =
           args: Record<string, unknown>
           status: DisplayToolStatus
           result?: string
+          details?: Record<string, unknown>
           isError?: boolean
           /** Defensive copies of ToolResult image blocks (never dropped). */
           resultImages?: DisplayToolResultImage[]

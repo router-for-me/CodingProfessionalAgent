@@ -263,6 +263,55 @@ export const bundledManifests: Readonly<Record<string, PluginManifest>> = Object
                 ]
         }
 }),
+    'cpa.core.code-mode': Object.freeze({
+        "id": "cpa.core.code-mode",
+        "name": "Code Mode",
+        "version": "1.0.0",
+        "apiVersion": "1.0.0",
+        "description": "Backend QuickJS-ng cells for approval-preserving tool composition",
+        "engines": {
+                "cpa": ">=1.0.0"
+        },
+        "entries": {
+                "main": "./main/index.ts",
+                "agent": "./agent/index.ts",
+                "renderer": "./renderer/index.tsx"
+        },
+        "dependencies": {
+                "cpa.core.settings": ">=1.0.0",
+                "cpa.core.session-manager": ">=1.0.0"
+        },
+        "capabilities": [
+                "code-cell.execute",
+                "process.utility",
+                "settings.read",
+                "settings.write"
+        ],
+        "contributes": {
+                "background-job": [
+                        "code-cell-executor"
+                ],
+                "native-event": [
+                        "code-cell:event"
+                ],
+                "rpc": [
+                        "code-cell:command"
+                ],
+                "tool-factory": [
+                        "exec",
+                        "wait"
+                ],
+                "hook": [
+                        "code-cell-session-end"
+                ],
+                "settings": [
+                        "code-mode"
+                ],
+                "chat-renderer": [
+                        "code-cell-card"
+                ]
+        }
+}),
 })
 
 /**
@@ -293,6 +342,12 @@ export const bundledMainPackages: readonly ResolvedPluginPackage[] = Object.free
         sourceRoot: 'plugins/bundled/cpa.core.settings',
         source: Object.freeze({ kind: 'bundled' as const, spec: 'bundled:cpa.core.settings' }),
     }),
+    Object.freeze({
+        manifest: bundledManifests['cpa.core.code-mode'],
+        entries: bundledManifests['cpa.core.code-mode'].entries ?? {},
+        sourceRoot: 'plugins/bundled/cpa.core.code-mode',
+        source: Object.freeze({ kind: 'bundled' as const, spec: 'bundled:cpa.core.code-mode' }),
+    }),
 ])
 
 /**
@@ -313,6 +368,10 @@ export const bundledMainEntryLoaders: Readonly<Record<string, BundledEntryLoader
     },
     'cpa.core.settings': async () => {
         const mod = await import('../../../../plugins/bundled/cpa.core.settings/main/index.js')
+        return mod.default ?? mod.entry ?? mod
+    },
+    'cpa.core.code-mode': async () => {
+        const mod = await import('../../../../plugins/bundled/cpa.core.code-mode/main/index.js')
         return mod.default ?? mod.entry ?? mod
     },
 })

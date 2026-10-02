@@ -1790,6 +1790,7 @@ async function prepareExecutionRun(
                 models: params.catalog,
                 reasoningLevel: params.settings.reasoningLevel,
                 speed: params.settings.speed,
+                requiredToolPolicy: params.settings.toolMode === 'code-only' ? params.settings.toolMode : undefined,
                 compactionThresholdPercent:
                     params.settings.compactionThresholdPercent,
                 fastContextCompaction:
@@ -1920,6 +1921,7 @@ async function prepareExecutionRun(
             models: params.catalog,
             reasoningLevel: params.settings.reasoningLevel,
             speed: params.settings.speed,
+            requiredToolPolicy: params.settings.toolMode === 'code-only' ? params.settings.toolMode : undefined,
             compactionThresholdPercent:
                 params.settings.compactionThresholdPercent,
             fastContextCompaction:
@@ -2603,6 +2605,7 @@ export function useAgentStream(
                         models: catalog,
                         reasoningLevel: settings.reasoningLevel,
                         speed: settings.speed,
+                        requiredToolPolicy: settings.toolMode === 'code-only' ? settings.toolMode : undefined,
                         compactionThresholdPercent:
                             settings.compactionThresholdPercent,
                         fastContextCompaction:

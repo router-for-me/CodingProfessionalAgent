@@ -851,6 +851,10 @@
   "tool.summary.wroteFile": "已写入 {{name}}",
   "tool.summary.using": "正在使用 {{name}}",
   "tool.summary.used": "已使用 {{name}}",
+  "tool.summary.executingCode": "正在执行代码模式：{{description}}",
+  "tool.summary.executedCode": "已执行代码模式：{{description}}",
+  "tool.summary.executingCodeGeneric": "正在执行代码模式",
+  "tool.summary.executedCodeGeneric": "已执行代码模式",
   "tool.summary.readingTodoList": "正在读取待办事项",
   "tool.summary.readTodoList": "已读取待办事项",
   "tool.summary.updatingTodoList": "正在更新待办事项",
@@ -1493,5 +1497,45 @@
   "settings.appearance.wallpaper.importing": "正在导入…",
   "settings.appearance.wallpaper.reset": "重置壁纸",
   "settings.appearance.wallpaper.invalid": "无法使用此图片，请选择符合限制的有效图片。原壁纸保持不变。",
-  "settings.appearance.wallpaper.saveError": "无法加载或保存壁纸，请重试。"
+  "settings.appearance.wallpaper.saveError": "无法加载或保存壁纸，请重试。",
+    "codeMode": {
+        "nestedToolsTruncated": "部分较早的嵌套结果已省略，以限制展示数据大小。",
+        "image": "单元输出图片",
+        "title": "代码模式",
+        "description": "将工具的使用组合起来，以优化工具调用请求。",
+        "mode": "工具暴露模式",
+        "mode.desc": "选择模型直接调用工具、同时使用代码，或只能通过代码调用工具。",
+        "section.limits": "限额",
+        "section.tools": "工具可见性",
+        "modes": {
+            "direct": "直接工具（默认）",
+            "code": "工具与代码",
+            "code-only": "仅代码工具"
+        },
+        "unit": { "ms": "毫秒" },
+        "defaultExecYieldMs": "默认执行让出时间",
+        "defaultExecYieldMs.desc": "一次执行在把控制权交还模型之前可以运行多久。",
+        "defaultWaitYieldMs": "默认观察等待时间",
+        "defaultWaitYieldMs.desc": "一次观察在再次返回之前会盯着单元多久。",
+        "maxOutputTokens": "最大输出 token",
+        "maxOutputTokens.desc": "单次执行或观察返回给模型的近似字符预算。",
+        "excludedToolNames": "排除的嵌套工具名（逗号分隔）",
+        "excludedToolNames.desc": "这些工具即使打开代码模式也不会进入代码单元。",
+        "directOnlyToolNames": "仅直接调用的工具名（逗号分隔）",
+        "directOnlyToolNames.desc": "这些工具仍由模型直接调用，并且不会放进代码单元。",
+        "disableWhenUnavailable": "不可用时回退",
+        "disableWhenUnavailable.desc": "代码模式启动失败时改用直接工具。仅代码模式仍然失败关闭。",
+        "execTitle": "执行代码",
+        "waitTitle": "观察单元",
+        "terminate": "已请求终止",
+        "nestedTools": "嵌套工具",
+        "status": {
+            "running": "运行中",
+            "yielded": "已让出",
+            "completed": "已完成",
+            "failed": "失败",
+            "terminated": "已终止",
+            "missing": "不存在"
+        }
+    }
 }

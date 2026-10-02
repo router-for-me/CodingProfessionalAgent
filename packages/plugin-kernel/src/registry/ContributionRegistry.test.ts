@@ -273,6 +273,7 @@ describe('ContributionRegistry & ActivationTransaction', () => {
         const singleKinds: ContributionKind[] = [
             'service',
             'rpc',
+            'native-event',
             'action',
             'view',
             'panel',
@@ -299,7 +300,6 @@ describe('ContributionRegistry & ActivationTransaction', () => {
             'resource-provider',
             'hook',
             'protocol-middleware',
-            'native-event',
             'route',
             'lifecycle',
         ]

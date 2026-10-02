@@ -60,6 +60,23 @@ export interface ServiceCreateContext {
     getCapability<T>(capabilityId: CapabilityId): T
 }
 
+export interface UtilityExecutorContribution {
+    moduleUrl: string
+}
+
+export interface UtilityExecutorHandle {
+    postMessage(message: unknown): void
+    onMessage(listener: (message: any) => void): void
+    onExit(listener: (code: number) => void): void
+    onStderr(listener: (data: string) => void): void
+    kill(): void
+}
+
+export interface CapabilityEventContribution {
+    event: string
+    capability: CapabilityId
+}
+
 export interface RpcDescriptor {
     method: string
     aliases?: readonly string[]
@@ -355,13 +372,31 @@ export interface IsolatedModelInvoker {
 export interface ToolResult {
     content: ToolResultContentBlock[]
     details?: unknown
+    /** JSON display state persisted for replay, excluded from protocol requests. */
+    displayMetadata?: Record<string, unknown>
     isError?: boolean
     terminate?: boolean
     /** Runtime-owned usage records for isolated model calls made by this tool. */
     isolatedModelInvocations?: readonly IsolatedModelInvocationRecord[]
 }
 
+export type NestedToolDispatcher = (
+    call: { cellId: string; invocationId: string; toolName: string; input: unknown },
+    signal: AbortSignal,
+) => Promise<ToolResult>
+
+export interface ToolSetPreparation {
+    /** Policy actually enforced by this preparation. */
+    policyId?: string
+    tools: readonly AgentTool[]
+    nestedTools: readonly AgentTool[]
+    systemMessage?: string
+}
+
 export interface ToolExecutionContext {
+    dispatchNestedTool?: NestedToolDispatcher
+    /** User cancellation, distinct from normal run-iterator cleanup. */
+    cancellationSignal?: AbortSignal
     signal?: AbortSignal
     cwd?: string
     sessionId?: string
@@ -377,6 +412,12 @@ export interface AgentTool<TArgs extends Record<string, unknown> = Record<string
     parameters: Record<string, unknown>
     targetAgent?: AgentTarget
     requiresScheduledSession?: boolean
+    exposure?: 'direct' | 'code-nested' | 'both'
+    needsNestedDispatcher?: boolean
+    nestedToolNames?: readonly string[]
+    /** Declares which required tool policy this preparer can enforce. */
+    toolPolicyId?: string
+    prepareToolSet?(tools: readonly AgentTool[], context: { sessionId: string; signal: AbortSignal }): Promise<ToolSetPreparation>
     validate(input: unknown): TArgs
     execute(
         toolCallId: string,

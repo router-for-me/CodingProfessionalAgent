@@ -50,7 +50,9 @@ export type {
  * entry/partial/result payloads are defensive snapshots — later mutations must
  * not rewrite history already yielded to consumers.
  */
-export type AgentRunEvent =
+export type AgentRunEvent = AgentRunEventPayload & { parentToolCallId?: string; nested?: boolean }
+
+type AgentRunEventPayload =
     | { type: 'agent-start'; runId: string; sessionId: string }
     | {
           type: 'agent-end'
@@ -106,6 +108,13 @@ export type AgentRunEvent =
           toolCallId: string
           toolName: string
           result: ToolResult
+      }
+    | {
+          type: 'tool-display-update'
+          runId: string
+          sessionId: string
+          toolCallId: string
+          displayMetadata: Record<string, unknown>
       }
     | {
           type: 'tool-end'

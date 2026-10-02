@@ -567,14 +567,7 @@ function freezeTools(tools: readonly AgentTool[]): readonly AgentTool[] {
     return Object.freeze(
         tools.map((tool) => {
             const parameters = deepFreezeData(deepCloneData(tool.parameters))
-            return Object.freeze({
-                name: tool.name,
-                label: tool.label,
-                description: tool.description,
-                parameters,
-                validate: tool.validate,
-                execute: tool.execute,
-            })
+            return Object.freeze({ ...tool, parameters })
         }),
     ) as readonly AgentTool[]
 }
@@ -1335,6 +1328,7 @@ export class CLIProxyAPIAgentService implements AgentService {
                 reasoningEffort,
                 speed,
                 requestApproval: Boolean(input.requestApproval),
+                requiredToolPolicy: input.requiredToolPolicy,
                 compactionSettings: compactionSettingsFromThresholdPercent(
                     input.compactionThresholdPercent,
                 ),
@@ -1738,6 +1732,7 @@ export class CLIProxyAPIAgentService implements AgentService {
                 systemPrompt: effectiveSystemPrompt,
                 tools: effectiveTools,
                 requestApproval: prepared.requestApproval,
+                requiredToolPolicy: prepared.requiredToolPolicy,
                 reasoningEffort: prepared.reasoningEffort,
                 speed: prepared.speed,
                 signal: controller.signal,
@@ -2116,6 +2111,7 @@ export class CLIProxyAPIAgentService implements AgentService {
                     developerPrompt: request.developerPrompt,
                     tools: request.tools as AgentTool[],
                     requestApproval: false,
+                    requiredToolPolicy: prepared.requiredToolPolicy,
                     reasoningEffort:
                         request.reasoningEffort ??
                         resolveChildReasoning(

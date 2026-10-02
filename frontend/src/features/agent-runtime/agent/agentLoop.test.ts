@@ -15,7 +15,7 @@ import type {
     ToolResultEntry,
     UserEntry,
 } from '../session/types'
-import type { AgentTool, AssistantStreamEvent, ToolResult } from './types'
+import type { AgentRunEvent, AgentTool, AssistantStreamEvent, ToolResult } from './types'
 import { AgentLoop } from './agentLoop'
 import { ApprovalController, TOOL_REJECTED_MESSAGE } from './approvals'
 
@@ -3650,4 +3650,156 @@ describe('AgentLoop', () => {
         expect(firstTurnIsCurrent?.()).toBe(false)
         expect(onRequestSent).toHaveBeenCalledTimes(2)
     })
+})
+
+
+describe('generic nested tool orchestration', () => {
+    it.each(['approved', 'rejected'] as const)('preserves nested hooks and %s approval without protocol echo', async (decision) => {
+        const client = new FakeCPAClient()
+        const approvals = new ApprovalController()
+        const hookEvents: string[] = []
+        const write = makeTool('write', vi.fn(async () => ({ content: [{ type: 'text' as const, text: 'private large output' }] })))
+        const compose = makeTool('compose', async (_id, _args, context) => {
+            const result = await context.dispatchNestedTool!({ cellId: 'cell', invocationId: 'nested-call', toolName: 'write', input: { path: 'a' } }, context.signal!)
+            return { content: [{ type: 'text', text: result.isError ? 'caught denial' : 'summary only' }] }
+        })
+        compose.needsNestedDispatcher = true
+        compose.nestedToolNames = ['write']
+        compose.prepareToolSet = async () => ({ tools: [compose], nestedTools: [write] })
+        client.queue(
+            { kind: 'stream', final: (seed) => doneAssistant(seed, { stopReason: 'toolUse', content: [{ type: 'toolCall', id: 'parent', name: 'compose', arguments: {} }] }) },
+            { kind: 'stream', final: (seed) => doneAssistant(seed, { stopReason: 'stop', content: [{ type: 'text', text: 'done' }] }) },
+        )
+        const hooks = (['PreToolUse', 'PermissionRequest', 'PostToolUse'] as const).map((event) => ({ id: event, event, order: 1, failureMode: 'closed' as const, execute: async (input: any) => { if (input.payload.tool_name === 'write') hookEvents.push(event); return { continue: true } } }))
+        const loop = new AgentLoop({ client, approvals, hooks })
+        const events: any[] = []
+        for await (const event of loop.run({ runId: 'nested-run', sessionId: 'sess-1', model, entries: [], systemPrompt: '', tools: [write, compose], requestApproval: true })) {
+            events.push(event)
+            if (event.type === 'tool-approval-required') {
+                expect(event.parentToolCallId).toBe('parent')
+                expect(event.nested).toBe(true)
+                if (decision === 'approved') approvals.approve('nested-run', event.toolCallId)
+                else approvals.reject('nested-run', event.toolCallId)
+            }
+        }
+        expect(client.calls[0]!.tools?.map((tool) => tool.name)).toEqual(['compose'])
+        expect(hookEvents).toEqual(decision === 'approved' ? ['PreToolUse', 'PermissionRequest', 'PostToolUse'] : ['PreToolUse', 'PermissionRequest'])
+        expect(write.execute).toHaveBeenCalledTimes(decision === 'approved' ? 1 : 0)
+        expect(client.calls[1]!.entries.some((entry) => entry.kind === 'toolResult' && entry.toolCallId === 'nested-call')).toBe(false)
+        expect(JSON.stringify(client.calls[1]!.entries)).not.toContain('private large output')
+        const parentEnd = events.find((event) => event.type === 'tool-end' && event.toolCallId === 'parent')
+        expect(parentEnd.result.details.nestedTools[0].id).toBe('nested-call')
+    })
+
+    it('rejects tools outside the prepared nested allowlist', async () => {
+        const client = new FakeCPAClient()
+        const write = makeTool('write', vi.fn(async () => ({ content: [] })))
+        const compose = makeTool('compose', async (_id, _args, context) => {
+            await context.dispatchNestedTool!({ cellId: 'cell', invocationId: 'nested', toolName: 'write', input: {} }, context.signal!)
+            return { content: [] }
+        })
+        compose.needsNestedDispatcher = true
+        compose.nestedToolNames = []
+        compose.prepareToolSet = async () => ({ tools: [compose], nestedTools: [] })
+        client.queue(
+            { kind: 'stream', final: (seed) => doneAssistant(seed, { stopReason: 'toolUse', content: [{ type: 'toolCall', id: 'parent', name: 'compose', arguments: {} }] }) },
+            { kind: 'stream', final: (seed) => doneAssistant(seed, { stopReason: 'stop' }) },
+        )
+        const events = await collect(new AgentLoop({ client }).run({ runId: 'r', sessionId: 's', model, entries: [], systemPrompt: '', tools: [write, compose] })) as any[]
+        expect(write.execute).not.toHaveBeenCalled()
+        expect(events.find((event) => event.type === 'tool-end').isError).toBe(true)
+    })
+})
+
+
+it('publishes background nested approval while the next model stream is pending, without cancelling session cells on normal completion', async () => {
+    const approvals = new ApprovalController()
+    let finishBackground: () => void = () => {}
+    const backgroundDone = new Promise<void>((resolve) => { finishBackground = resolve })
+    let request = 0
+    let lifetime: AbortSignal | undefined
+    const client: ProtocolClient = {
+        async *stream(input) {
+            if (++request === 1) return doneAssistant(input.seed, { stopReason: 'toolUse', content: [{ type: 'toolCall', id: 'parent', name: 'compose', arguments: {} }] })
+            await backgroundDone
+            return doneAssistant(input.seed, { stopReason: 'stop' })
+        },
+    }
+    const write = makeTool('write', async () => ({ content: [{ type: 'text', text: 'private result' }] }))
+    const compose = makeTool('compose', async (_id, _args, context) => {
+        setTimeout(() => {
+            void context.dispatchNestedTool!({ cellId: 'cell', invocationId: 'background-write', toolName: 'write', input: {} }, context.cancellationSignal!).then(finishBackground)
+        }, 10)
+        return { content: [{ type: 'text', text: 'yielded' }], displayMetadata: { status: 'yielded' } }
+    })
+    compose.needsNestedDispatcher = true
+    compose.nestedToolNames = ['write']
+    compose.prepareToolSet = async (_tools, context) => { lifetime = context.signal; return { tools: [compose], nestedTools: [write] } }
+    const events: any[] = []
+    for await (const event of new AgentLoop({ client, approvals }).run({ runId: 'r', sessionId: 's', model, entries: [], systemPrompt: '', tools: [compose, write], requestApproval: true })) {
+        events.push(event)
+        if (event.type === 'tool-approval-required') approvals.approve('r', event.toolCallId)
+    }
+    expect(events.some((event) => event.type === 'tool-approval-required' && event.nested)).toBe(true)
+    expect(events.some((event) => event.type === 'tool-display-update')).toBe(true)
+    expect(lifetime?.aborted).toBe(false)
+    const end = events.find((event) => event.type === 'agent-end')
+    const entry = end.entries.find((entry: any) => entry.kind === 'toolResult')
+    expect(entry.displayMetadata.nestedTools[0].status).toBe('done')
+})
+
+
+it('bounds nested display history and strips it from provider inputs', async () => {
+    const read = makeTool('read', async () => ({ content: [{ type: 'text', text: 'privateNestedPayload' + '私'.repeat(100_000) }], details: { large: '私'.repeat(100_000) } }))
+    const compose = makeTool('compose', async (_id, _args, context) => {
+        for (let index = 0; index < 70; index += 1) await context.dispatchNestedTool!({ cellId: 'cell', invocationId: `read-${index}`, toolName: 'read', input: { huge: 'x'.repeat(80_000) } }, context.cancellationSignal!)
+        return { content: [{ type: 'text', text: 'selected output' }] }
+    })
+    compose.needsNestedDispatcher = true
+    compose.nestedToolNames = ['read']
+    compose.prepareToolSet = async () => ({ tools: [compose], nestedTools: [read] })
+    const client = new FakeCPAClient()
+    client.queue(
+        { kind: 'stream', events: [], final: (seed) => doneAssistant(seed, { stopReason: 'toolUse', content: [{ type: 'toolCall', id: 'parent', name: 'compose', arguments: {} }] }) },
+        { kind: 'stream', events: [], final: (seed) => doneAssistant(seed, { stopReason: 'stop' }) },
+    )
+    let end: any
+    for await (const event of new AgentLoop({ client }).run({ runId: 'r', sessionId: 's', model, entries: [], systemPrompt: '', tools: [compose, read], requestApproval: false })) if (event.type === 'agent-end') end = event
+    const metadata = end.entries.find((entry: any) => entry.kind === 'toolResult').displayMetadata
+    expect(metadata.nestedTools.length).toBeLessThanOrEqual(64)
+    expect(metadata.nestedToolsTruncated).toBe(true)
+    expect(new TextEncoder().encode(JSON.stringify(metadata)).byteLength).toBeLessThan(256 * 1024)
+    expect(JSON.stringify(client.calls[1]!.entries)).not.toContain('displayMetadata')
+    expect(JSON.stringify(client.calls[1]!.entries)).not.toContain('privateNestedPayload')
+})
+
+
+it.each(['missing', 'unrelated', 'unacknowledged'])('fails closed before model requests or resumed tools when the required policy is %s', async (state) => {
+    const client = new FakeCPAClient()
+    let executions = 0
+    const ordinary = makeTool('ordinary', async () => { executions += 1; return { content: [] } })
+    const tools = [ordinary]
+    if (state !== 'missing') {
+        const policy = makeTool('policy', async () => ({ content: [] }))
+        policy.toolPolicyId = state === 'unrelated' ? 'other' : 'restricted'
+        policy.prepareToolSet = async () => ({ tools: [ordinary], nestedTools: [] })
+        tools.push(policy)
+    }
+    const entry: AssistantEntry = { id: 'old', sessionId: 's', createdAt: 1, kind: 'assistant', status: 'done', stopReason: 'toolUse', content: [{ type: 'toolCall', id: 'pending', name: 'ordinary', arguments: {} }] }
+    const events: AgentRunEvent[] = []
+    for await (const event of new AgentLoop({ client }).run({ runId: 'r', sessionId: 's', model, entries: [entry], systemPrompt: '', tools, requiredToolPolicy: 'restricted' })) events.push(event)
+    expect(events.some((event) => event.type === 'error' && event.message.includes('Required tool policy'))).toBe(true)
+    expect(client.calls).toHaveLength(0)
+    expect(executions).toBe(0)
+})
+
+it('accepts a matching required policy only after explicit preparation acknowledgment', async () => {
+    const client = new FakeCPAClient()
+    client.queue({ kind: 'stream', final: (seed) => doneAssistant(seed, { stopReason: 'stop' }) })
+    const policy = makeTool('policy', async () => ({ content: [] }))
+    policy.toolPolicyId = 'restricted'
+    policy.prepareToolSet = async () => ({ policyId: 'restricted', tools: [], nestedTools: [] })
+    for await (const _event of new AgentLoop({ client }).run({ runId: 'r', sessionId: 's', model, entries: [], systemPrompt: '', tools: [policy], requiredToolPolicy: 'restricted' })) { /* Drain the run. */ }
+    expect(client.calls).toHaveLength(1)
+    expect(client.calls[0]!.tools ?? []).toHaveLength(0)
 })

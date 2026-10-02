@@ -156,11 +156,14 @@ export function commandFromArgs(args: Record<string, unknown>): string | undefin
 }
 
 export function titleFromArgs(args: Record<string, unknown>): string | undefined {
-  const title = stringArg(args, 'title')
-  if (!title) return undefined
-  const line = title.trim().split('\n')[0]?.trim() ?? ''
+  return activityLine(stringArg(args, 'title'), 64)
+}
+
+function activityLine(value: string | undefined, limit: number): string | undefined {
+  if (!value) return undefined
+  const line = value.trim().split('\n')[0]?.trim() ?? ''
   if (!line) return undefined
-  return line.length > 64 ? `${line.slice(0, 61)}…` : line
+  return line.length > limit ? `${line.slice(0, limit - 3)}…` : line
 }
 
 export function isToolRunning(status: string): boolean {
@@ -278,6 +281,17 @@ export function summarizeToolActivity(
         : (op === 'read'
             ? t('tool.summary.readTodoList', { defaultValue: 'Read todo list' })
             : t('tool.summary.updatedTodoList', { defaultValue: 'Updated todo list' })),
+    }
+  }
+
+  if (part.name === 'exec') {
+    const description = activityLine(stringArg(part.args, 'description'), 80)
+    return {
+      kind: 'other',
+      running,
+      text: description
+        ? t(running ? 'tool.summary.executingCode' : 'tool.summary.executedCode', { description })
+        : t(running ? 'tool.summary.executingCodeGeneric' : 'tool.summary.executedCodeGeneric'),
     }
   }
 

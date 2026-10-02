@@ -401,6 +401,7 @@ export class MainCapabilityBroker {
             ...sender,
             pluginId: bound.pluginId,
             runtime: bound.runtime,
+            generation: bound.generation,
         }
 
         return await descriptor.invoke(invocationContext, ...(args as any))

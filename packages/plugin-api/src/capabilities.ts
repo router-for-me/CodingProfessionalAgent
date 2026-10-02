@@ -13,6 +13,7 @@ export interface CapabilityInvocationContext {
     frameUrl: string
     transport: 'electron' | 'web'
     runtime?: 'main' | 'renderer' | 'agent'
+    generation?: number
     processId?: number
     routingId?: number
     documentId?: string

@@ -48,6 +48,34 @@ describe('createAgentEventAdapter', () => {
     __resetCompactionOverlayStoreForTests()
   })
 
+    it('merges background display updates into the owned parent, never standalone nested results', () => {
+        const adapter = createAgentEventAdapter(useMessageStore)
+        const scope = { sessionId: 's', runId: 'r' }
+        adapter.apply({ type: 'agent-start', ...scope })
+        const assistant = baseAssistant({ id: 'a', sessionId: 's', status: 'done', stopReason: 'toolUse', content: [{ type: 'toolCall', id: 'parent', name: 'compose', arguments: {} }] })
+        adapter.apply({ type: 'assistant-end', ...scope, entry: assistant })
+        const entry: ToolResultEntry = { kind: 'toolResult', id: 'result', version: 1, createdAt: 1, sessionId: 's', toolCallId: 'parent', toolName: 'compose', content: [{ type: 'text', text: 'yielded' }], isError: false, displayMetadata: { cellId: 'cell', status: 'yielded' } }
+        adapter.apply({ type: 'tool-end', ...scope, toolCallId: 'parent', toolName: 'compose', entry, result: { content: entry.content }, isError: false })
+        const nested = { id: 'child', name: 'read', status: 'done', result: 'private' }
+        expect(adapter.apply({ type: 'tool-display-update', ...scope, toolCallId: 'parent', displayMetadata: { nestedTools: [nested] } }).changed).toBe(true)
+        adapter.apply({ type: 'tool-end', ...scope, parentToolCallId: 'parent', nested: true, toolCallId: 'child', toolName: 'read', result: { content: [{ type: 'text', text: 'private' }] }, isError: false })
+        const entries = useMessageStore.getState().getEntries('s')
+        expect(entries).toHaveLength(2)
+        const parent = entries[1] as ToolResultEntry
+        expect(parent.content).toEqual(entry.content)
+        expect(parent.displayMetadata).toEqual({ cellId: 'cell', status: 'yielded', nestedTools: [nested] })
+        expect(adapter.apply({ type: 'tool-display-update', sessionId: 's', runId: 'old', toolCallId: 'parent', displayMetadata: { status: 'failed' } }).changed).toBe(false)
+    })
+
+    it('does not let an active run overwrite historical display metadata', () => {
+        const entry: ToolResultEntry = { kind: 'toolResult', id: 'historic', version: 1, createdAt: 1, sessionId: 's', toolCallId: 'old', toolName: 'compose', content: [], isError: false, displayMetadata: { status: 'completed' } }
+        useMessageStore.getState().replaceSessionEntries('s', [entry])
+        const adapter = createAgentEventAdapter(useMessageStore)
+        adapter.apply({ type: 'agent-start', sessionId: 's', runId: 'r' })
+        expect(adapter.apply({ type: 'tool-display-update', sessionId: 's', runId: 'r', toolCallId: 'old', displayMetadata: { status: 'failed' } }).changed).toBe(false)
+        expect((useMessageStore.getState().getEntries('s')[0] as ToolResultEntry).displayMetadata).toEqual({ status: 'completed' })
+    })
+
   it('scopes active run per session and ignores late old-run events', () => {
     const adapter = createAgentEventAdapter(useMessageStore)
     const start = adapter.apply({

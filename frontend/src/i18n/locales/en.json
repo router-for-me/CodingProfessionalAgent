@@ -851,6 +851,10 @@
   "tool.summary.wroteFile": "Wrote {{name}}",
   "tool.summary.using": "Using {{name}}",
   "tool.summary.used": "Used {{name}}",
+  "tool.summary.executingCode": "Running code mode: {{description}}",
+  "tool.summary.executedCode": "Ran code mode: {{description}}",
+  "tool.summary.executingCodeGeneric": "Running code mode",
+  "tool.summary.executedCodeGeneric": "Ran code mode",
   "tool.summary.readingTodoList": "Reading todo list",
   "tool.summary.readTodoList": "Read todo list",
   "tool.summary.updatingTodoList": "Updating todo list",
@@ -1495,5 +1499,45 @@
   "settings.appearance.wallpaper.importing": "Importing…",
   "settings.appearance.wallpaper.reset": "Reset wallpaper",
   "settings.appearance.wallpaper.invalid": "Cannot use this image. Choose a valid image within the limits. Your previous wallpaper is unchanged.",
-  "settings.appearance.wallpaper.saveError": "Could not load or save the wallpaper. Please try again."
+  "settings.appearance.wallpaper.saveError": "Could not load or save the wallpaper. Please try again.",
+    "codeMode": {
+        "nestedToolsTruncated": "Older nested results were omitted to stay within the display budget.",
+        "image": "Cell output image",
+        "title": "Code Mode",
+        "description": "Combine tool use to optimize tool-call requests.",
+        "mode": "Tool exposure mode",
+        "mode.desc": "Choose whether the model calls tools directly, through code, or only through code.",
+        "section.limits": "Limits",
+        "section.tools": "Tool visibility",
+        "modes": {
+            "direct": "Direct tools (default)",
+            "code": "Tools and code",
+            "code-only": "Code tools only"
+        },
+        "unit": { "ms": "ms" },
+        "defaultExecYieldMs": "Default exec yield",
+        "defaultExecYieldMs.desc": "How long an exec cell runs before yielding control back to the model.",
+        "defaultWaitYieldMs": "Default wait yield",
+        "defaultWaitYieldMs.desc": "How long a wait call watches a cell before returning again.",
+        "maxOutputTokens": "Maximum output tokens",
+        "maxOutputTokens.desc": "Approximate character budget for one exec or wait observation.",
+        "excludedToolNames": "Excluded nested tool names (comma-separated)",
+        "excludedToolNames.desc": "These tools stay out of the code cell even when code mode is on.",
+        "directOnlyToolNames": "Direct-only tool names (comma-separated)",
+        "directOnlyToolNames.desc": "These tools stay on the model directly and are omitted from the cell.",
+        "disableWhenUnavailable": "Fall back when unavailable",
+        "disableWhenUnavailable.desc": "In code mode, use direct tools if the runtime cannot start. Code-only still fails closed.",
+        "execTitle": "Execute code",
+        "waitTitle": "Observe cell",
+        "terminate": "Terminate requested",
+        "nestedTools": "Nested tools",
+        "status": {
+            "running": "Running",
+            "yielded": "Yielded",
+            "completed": "Completed",
+            "failed": "Failed",
+            "terminated": "Terminated",
+            "missing": "Missing"
+        }
+    }
 }

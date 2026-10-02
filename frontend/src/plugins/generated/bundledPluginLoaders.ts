@@ -910,6 +910,55 @@ export const bundledManifests: Readonly<Record<string, PluginManifest>> = Object
                 ]
         }
 }),
+    'cpa.core.code-mode': Object.freeze({
+        "id": "cpa.core.code-mode",
+        "name": "Code Mode",
+        "version": "1.0.0",
+        "apiVersion": "1.0.0",
+        "description": "Backend QuickJS-ng cells for approval-preserving tool composition",
+        "engines": {
+                "cpa": ">=1.0.0"
+        },
+        "entries": {
+                "main": "./main/index.ts",
+                "agent": "./agent/index.ts",
+                "renderer": "./renderer/index.tsx"
+        },
+        "dependencies": {
+                "cpa.core.settings": ">=1.0.0",
+                "cpa.core.session-manager": ">=1.0.0"
+        },
+        "capabilities": [
+                "code-cell.execute",
+                "process.utility",
+                "settings.read",
+                "settings.write"
+        ],
+        "contributes": {
+                "background-job": [
+                        "code-cell-executor"
+                ],
+                "native-event": [
+                        "code-cell:event"
+                ],
+                "rpc": [
+                        "code-cell:command"
+                ],
+                "tool-factory": [
+                        "exec",
+                        "wait"
+                ],
+                "hook": [
+                        "code-cell-session-end"
+                ],
+                "settings": [
+                        "code-mode"
+                ],
+                "chat-renderer": [
+                        "code-cell-card"
+                ]
+        }
+}),
 })
 
 /**
@@ -1054,6 +1103,12 @@ export const bundledRendererPackages: readonly ResolvedPluginPackage[] = Object.
         sourceRoot: 'plugins/bundled/cpa.core.web-search',
         source: Object.freeze({ kind: 'bundled' as const, spec: 'bundled:cpa.core.web-search' }),
     }),
+    Object.freeze({
+        manifest: bundledManifests['cpa.core.code-mode'],
+        entries: bundledManifests['cpa.core.code-mode'].entries ?? {},
+        sourceRoot: 'plugins/bundled/cpa.core.code-mode',
+        source: Object.freeze({ kind: 'bundled' as const, spec: 'bundled:cpa.core.code-mode' }),
+    }),
 ])
 
 /**
@@ -1119,6 +1174,12 @@ export const bundledAgentPackages: readonly ResolvedPluginPackage[] = Object.fre
         entries: bundledManifests['cpa.core.web-search'].entries ?? {},
         sourceRoot: 'plugins/bundled/cpa.core.web-search',
         source: Object.freeze({ kind: 'bundled' as const, spec: 'bundled:cpa.core.web-search' }),
+    }),
+    Object.freeze({
+        manifest: bundledManifests['cpa.core.code-mode'],
+        entries: bundledManifests['cpa.core.code-mode'].entries ?? {},
+        sourceRoot: 'plugins/bundled/cpa.core.code-mode',
+        source: Object.freeze({ kind: 'bundled' as const, spec: 'bundled:cpa.core.code-mode' }),
     }),
 ])
 
@@ -1210,6 +1271,10 @@ export const bundledRendererEntryLoaders: Readonly<Record<string, BundledEntryLo
         const mod = await import('../../../../plugins/bundled/cpa.core.web-search/renderer/index')
         return mod.default ?? mod.entry ?? mod
     },
+    'cpa.core.code-mode': async () => {
+        const mod = await import('../../../../plugins/bundled/cpa.core.code-mode/renderer/index')
+        return mod.default ?? mod.entry ?? mod
+    },
 })
 
 /**
@@ -1255,6 +1320,10 @@ export const bundledAgentEntryLoaders: Readonly<Record<string, BundledEntryLoade
     },
     'cpa.core.web-search': async () => {
         const mod = await import('../../../../plugins/bundled/cpa.core.web-search/agent/index')
+        return mod.default ?? mod.entry ?? mod
+    },
+    'cpa.core.code-mode': async () => {
+        const mod = await import('../../../../plugins/bundled/cpa.core.code-mode/agent/index')
         return mod.default ?? mod.entry ?? mod
     },
 })

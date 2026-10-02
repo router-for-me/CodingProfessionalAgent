@@ -153,6 +153,7 @@ export interface ToolResultEntry extends EntryBase {
     toolCallId: string
     toolName: string
     content: ToolResultContentBlock[]
+    displayMetadata?: Record<string, unknown>
     isError: boolean
     isolatedModelInvocations?: readonly IsolatedModelInvocationRecord[]
 }

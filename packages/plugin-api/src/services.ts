@@ -314,6 +314,13 @@ export interface EditorSettings {
 }
 
 export interface AppSettings {
+  toolMode?: 'direct' | 'code' | 'code-only'
+  defaultExecYieldMs?: number
+  defaultWaitYieldMs?: number
+  maxOutputTokens?: number
+  excludedToolNames?: string[]
+  directOnlyToolNames?: string[]
+  disableWhenUnavailable?: boolean
   theme: ThemeMode
   locale: Locale
   modelId: string

@@ -106,6 +106,8 @@ export interface AgentRunInput {
     systemPrompt: string
     developerPrompt?: string
     tools: readonly AgentTool[]
+    /** No provider request or pending tool may run without this policy. */
+    requiredToolPolicy?: string
     /** When true, bash/edit/write wait for ApprovalController. read is always auto. */
     requestApproval?: boolean
     reasoningEffort?: string
@@ -269,6 +271,8 @@ function canonicalToolResult(
     // Plugins cannot author accounting fields. Only records supplied by the runtime owner survive.
     return {
         content: snapshotClone(result.content),
+        ...(result.details !== undefined ? { details: snapshotClone(result.details) } : {}),
+        ...(result.displayMetadata ? { displayMetadata: snapshotClone(result.displayMetadata) } : {}),
         isError: Boolean(result.isError),
         ...(ownerRecords.length
             ? { isolatedModelInvocations: snapshotClone(ownerRecords) }
@@ -530,6 +534,8 @@ export class AgentLoop {
     private activeRunId: string | null = null
     private activeToken = 0
     private runAbort: AbortController | null = null
+    private runCancellation: AbortController | null = null
+    private backgroundSink: { token: number; push: (event: AgentRunEvent) => void; waitForCapacity: (signal: AbortSignal) => Promise<void> } | null = null
     private externalAbortHandler: (() => void) | null = null
     /**
      * Current provider stream iterator for the active run, tagged with the
@@ -641,6 +647,7 @@ export class AgentLoop {
         if (this.activeRunId === null) return
         if (runId !== undefined && runId !== this.activeRunId) return
         const token = this.activeToken
+        this.runCancellation?.abort()
         this.runAbort?.abort()
         this.approvals.abortAll(this.activeRunId ?? undefined)
         // Best-effort provider cleanup without awaiting unbounded return().
@@ -668,15 +675,19 @@ export class AgentLoop {
 
         const runAbort = new AbortController()
         this.runAbort = runAbort
+        const runCancellation = new AbortController()
+        this.runCancellation = runCancellation
 
         const external = input.signal
         const onExternalAbort = (): void => {
+            runCancellation.abort()
             runAbort.abort()
             this.approvals.abortAll(input.runId)
         }
         this.externalAbortHandler = onExternalAbort
         if (external) {
             if (external.aborted) {
+                runCancellation.abort()
                 runAbort.abort()
             } else {
                 external.addEventListener('abort', onExternalAbort)
@@ -684,6 +695,7 @@ export class AgentLoop {
         }
 
         const sink = createEventSink()
+        this.backgroundSink = { token, push: (event) => sink.push(event), waitForCapacity: (signal) => sink.waitForCapacity(MAX_PENDING_RUN_EVENTS, signal) }
         const gen = this.runGenerator(input, token, runAbort.signal)
 
         let pumpError: unknown
@@ -746,6 +758,7 @@ export class AgentLoop {
             if (cleanupStarted) return
             cleanupStarted = true
             consumerTerminal = true
+            runCancellation.abort()
 
             // Drop queued events and resolve any pending next as done.
             sink.abort()
@@ -835,6 +848,8 @@ export class AgentLoop {
         if (this.activeToken === token && this.activeRunId === runId) {
             this.activeRunId = null
             this.runAbort = null
+        this.runCancellation = null
+        this.backgroundSink = null
         }
         // Drop provider ref only when this token still owns it (return may already
         // have fire-observed). Never clear a newer run's provider slot.
@@ -913,10 +928,11 @@ export class AgentLoop {
         }
 
         const model = input.model
-        const systemPrompt = input.systemPrompt
-        const tools = input.tools
-        const toolDefs = toolDefinitionsOf(tools)
-        const toolsByName = new Map(tools.map((t) => [t.name, t]))
+        let systemPrompt = input.systemPrompt
+        let tools = input.tools
+        let toolDefs = toolDefinitionsOf(tools)
+        let toolsByName = new Map(tools.map((t) => [t.name, t]))
+        let nestedToolsByName = new Map<string, AgentTool>()
         const reasoningEffort = input.reasoningEffort
         const speed = input.speed
         const compactionSettings = input.compactionSettings
@@ -962,6 +978,27 @@ export class AgentLoop {
 
         try {
             yield { type: 'agent-start', ...scope }
+            const preparers = tools.filter((tool) => tool.prepareToolSet)
+            if (preparers.length > 1) throw new Error('Only one tool-set policy may be active')
+            if (input.requiredToolPolicy && preparers[0]?.toolPolicyId !== input.requiredToolPolicy) throw new Error(`Required tool policy unavailable: ${input.requiredToolPolicy}`)
+            if (preparers[0]?.prepareToolSet) {
+                const prepared = await preparers[0].prepareToolSet(tools, { sessionId: input.sessionId, signal: this.runCancellation?.signal ?? signal })
+                if (input.requiredToolPolicy && prepared.policyId !== input.requiredToolPolicy) throw new Error(`Required tool policy was not applied: ${input.requiredToolPolicy}`)
+                tools = prepared.tools
+                nestedToolsByName = new Map(prepared.nestedTools.map((tool) => [tool.name, tool]))
+                toolsByName = new Map(tools.map((tool) => [tool.name, tool]))
+                toolDefs = toolDefinitionsOf(tools)
+                if (prepared.systemMessage) {
+                    systemPrompt += `\n\n${prepared.systemMessage}`
+                    const entry: UserEntry = { id: this.generateId(), sessionId: input.sessionId, createdAt: this.now(), kind: 'user', content: [{ type: 'text', text: `[System notice] ${prepared.systemMessage}` }] }
+                    stableEntries.push(entry)
+                    yield { type: 'user-entry', ...scope, entry }
+                }
+            } else {
+                tools = tools.filter((tool) => tool.exposure !== 'code-nested')
+                toolsByName = new Map(tools.map((tool) => [tool.name, tool]))
+                toolDefs = toolDefinitionsOf(tools)
+            }
 
             // Pre-first-provider compaction check.
             yield* this.awaitCompact(stableEntries, {
@@ -992,6 +1029,7 @@ export class AgentLoop {
                 yield* this.executeToolBatch({
                     toolCalls: pendingToolCalls.selected,
                     toolsByName,
+                    nestedToolsByName,
                     requestApproval,
                     cwd,
                     model,
@@ -1143,6 +1181,7 @@ export class AgentLoop {
                 yield* this.executeToolBatch({
                     toolCalls,
                     toolsByName,
+                    nestedToolsByName,
                     requestApproval,
                     cwd,
                     model,
@@ -1433,7 +1472,11 @@ export class AgentLoop {
                 model,
                 systemPrompt,
                 developerPrompt: args.developerPrompt,
-                entries: buildCompactedContext(stableEntries),
+                entries: buildCompactedContext(stableEntries).map((entry) => {
+                    if (entry.kind !== 'toolResult') return entry
+                    const { displayMetadata: _displayMetadata, ...protocolEntry } = entry
+                    return protocolEntry
+                }),
                 tools: toolDefs,
                 reasoningEffort,
                 speed,
@@ -1793,6 +1836,8 @@ export class AgentLoop {
     private async *executeToolBatch(args: {
         toolCalls: AssistantToolCallBlock[]
         toolsByName: Map<string, AgentTool>
+        nestedToolsByName?: Map<string, AgentTool>
+        parentToolCallId?: string
         requestApproval: boolean
         cwd?: string
         model: ModelCatalogEntry
@@ -1800,7 +1845,7 @@ export class AgentLoop {
         scope: { runId: string; sessionId: string }
         token: number
         stableEntries: ConversationEntry[]
-    }): AsyncGenerator<AgentRunEvent, void, undefined> {
+    }): AsyncGenerator<AgentRunEvent, ToolResult[], undefined> {
         const {
             toolCalls,
             toolsByName,
@@ -1813,7 +1858,16 @@ export class AgentLoop {
             stableEntries,
         } = args
 
-        const sink = createEventSink()
+        const rawSink = createEventSink()
+        const sink = {
+            ...rawSink,
+            get pending() { return rawSink.pending },
+            push: (event: AgentRunEvent) => {
+                const scoped = args.parentToolCallId ? { ...event, parentToolCallId: args.parentToolCallId, nested: true } as AgentRunEvent : event
+                if (!rawSink.isClosed()) rawSink.push(scoped)
+                else if (this.backgroundSink?.token === token && !signal.aborted && (scoped.parentToolCallId || scoped.type === 'tool-display-update')) this.backgroundSink.push(snapshotClone(scoped))
+            },
+        }
         const results: Array<{
             toolCall: AssistantToolCallBlock
             result: ToolResult
@@ -2109,7 +2163,73 @@ export class AgentLoop {
                     })
                 }
 
+                const nestedRecords = new Map<string, Record<string, unknown>>()
+                let omittedNestedRecords = false
+                const withNested = (result: ToolResult): ToolResult => {
+                    if (nestedRecords.size === 0) return result
+                    const records = [...nestedRecords.values()]
+                    const pending = (record: Record<string, unknown>) => record.status === 'running' || record.status === 'awaiting_approval'
+                    const selected = new Set<Record<string, unknown>>()
+                    let size = 0
+                    // Preserve approval controls before spending the display budget on history.
+                    for (const record of [...records.filter(pending), ...records.filter((item) => !pending(item)).reverse()]) {
+                        const bytes = new TextEncoder().encode(JSON.stringify(record)).byteLength
+                        if (size + bytes > 224 * 1024) continue
+                        selected.add(record)
+                        size += bytes
+                    }
+                    const metadata = { nestedTools: records.filter((record) => selected.has(record)), nestedToolsTruncated: omittedNestedRecords || selected.size !== records.length }
+                    return { ...result, details: { ...(result.details && typeof result.details === 'object' ? result.details : {}), ...metadata }, displayMetadata: { ...result.displayMetadata, ...metadata } }
+                }
+                const dispatchNestedTool = tool.needsNestedDispatcher ? async (call: { cellId: string; invocationId: string; toolName: string; input: unknown }, nestedSignal: AbortSignal): Promise<ToolResult> => {
+                    if (!tool.nestedToolNames?.includes(call.toolName) || !args.nestedToolsByName?.has(call.toolName)) throw new Error(`Nested tool is not permitted: ${call.toolName}`)
+                    const combinedSignal = AbortSignal.any([signal, nestedSignal])
+                    if (combinedSignal.aborted) throw createAbortError()
+                    const nestedCall: AssistantToolCallBlock = { type: 'toolCall', id: call.invocationId, name: call.toolName, arguments: call.input as Record<string, unknown> }
+                    const generator = this.executeToolBatch({ ...args, toolCalls: [nestedCall], toolsByName: args.nestedToolsByName, parentToolCallId: toolCallId, signal: combinedSignal, stableEntries: [] })
+                    while (true) {
+                        const next = await generator.next()
+                        if (next.done) return next.value[0] ?? textToolResult('Nested tool did not return a result', true)
+                        const event = next.value
+                        if (rawSink.isClosed() && this.backgroundSink?.token === token) await this.backgroundSink.waitForCapacity(combinedSignal)
+                        sink.push(event)
+                        if ('toolCallId' in event) {
+                            const record = nestedRecords.get(event.toolCallId) ?? { id: event.toolCallId, type: 'tool_call', name: call.toolName, args: call.input }
+                            if (event.type === 'tool-approval-required') record.status = 'awaiting_approval'
+                            if (event.type === 'tool-start') record.status = 'running'
+                            if (event.type === 'tool-update' || event.type === 'tool-end') {
+                                record.result = event.result.content.filter((block) => block.type === 'text').map((block) => block.text).join('\n').slice(0, 16_384)
+                                record.details = event.result.details
+                                record.resultImages = event.result.content.filter((block) => block.type === 'image').map((block) => ({ data: block.data, mimeType: block.mimeType }))
+                                if (event.type === 'tool-end') record.status = event.isError ? 'error' : 'done'
+                            }
+                            let serialized = ''
+                            try { serialized = JSON.stringify(record) } catch { delete record.details; delete record.resultImages; serialized = JSON.stringify(record) }
+                            const limit = record.status === 'running' || record.status === 'awaiting_approval' ? 6144 : 65_536
+                            if (new TextEncoder().encode(serialized).byteLength > limit) {
+                                delete record.details
+                                delete record.resultImages
+                                record.args = { preview: (JSON.stringify(record.args) ?? 'undefined').slice(0, 1024), truncated: true }
+                                record.result = String(record.result ?? '').slice(0, record.status === 'done' || record.status === 'error' ? 4096 : 512)
+                                record.displayTruncated = true
+                            }
+                            nestedRecords.set(event.toolCallId, record)
+                            if (nestedRecords.size > 64) {
+                                const oldest = [...nestedRecords].find(([, item]) => item.status !== 'running' && item.status !== 'awaiting_approval')
+                                if (oldest) { nestedRecords.delete(oldest[0]); omittedNestedRecords = true }
+                            }
+                            const update = withNested({ content: [] })
+                            if (rawSink.isClosed()) {
+                                const entry = stableEntries.find((item) => item.kind === 'toolResult' && item.toolCallId === toolCallId) as ToolResultEntry | undefined
+                                if (entry) entry.displayMetadata = { ...entry.displayMetadata, ...update.displayMetadata }
+                                sink.push({ type: 'tool-display-update', ...scope, toolCallId, displayMetadata: update.displayMetadata ?? {} })
+                            } else sink.push({ type: 'tool-update', ...scope, toolCallId, toolName, result: update })
+                        }
+                    }
+                } : undefined
                 const executePromise = tool.execute(toolCallId, effectiveValidated, {
+                    dispatchNestedTool,
+                    cancellationSignal: this.runCancellation?.signal,
                     signal,
                     cwd,
                     sessionId: scope.sessionId,
@@ -2154,7 +2274,7 @@ export class AgentLoop {
 
                 // Strip plugin-authored accounting immediately, but leave owner records
                 // pending so an abort/error during post hooks can still claim them.
-                let finalResult = canonicalToolResult(result)
+                let finalResult = canonicalToolResult(withNested(result))
 
                 try {
                     const postOutcome = await HookProvider.execute(
@@ -2281,6 +2401,7 @@ export class AgentLoop {
             )
         }
         this.notifyContextChanged()
+        return results.map((item) => item?.result ?? textToolResult(ABORTED_TOOL_MESSAGE, true))
     }
 
     private toToolResultEntry(
@@ -2307,6 +2428,7 @@ export class AgentLoop {
             toolCallId: toolCall.id,
             toolName: toolCall.name,
             content,
+            ...(result.displayMetadata ? { displayMetadata: snapshotClone(result.displayMetadata) } : {}),
             isError: Boolean(result.isError),
             ...(result.isolatedModelInvocations?.length
                 ? {

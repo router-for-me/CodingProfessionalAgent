@@ -12,9 +12,10 @@ describe('bundledPluginContract baseline', () => {
     it('accounts for every bundled plugin through a real entry or the migration adapter', async () => {
         const report = await scanBundledPluginContracts(repoRoot)
 
-        // Baseline plus the independently packaged Web Search plugin.
-        expect(report.pluginIds).toHaveLength(23)
+        // Baseline plus the independently packaged Web Search and Code Mode plugins.
+        expect(report.pluginIds).toHaveLength(24)
         expect(report.pluginIds).toContain('cpa.core.web-search')
+        expect(report.pluginIds).toContain('cpa.core.code-mode')
         expect(report.unaccountedPluginIds).toEqual([])
         expect(report.duplicatePluginIds).toEqual([])
         expect(report.manifestCopies).toBe(0)

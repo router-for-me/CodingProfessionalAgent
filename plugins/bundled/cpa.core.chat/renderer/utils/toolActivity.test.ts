@@ -52,6 +52,10 @@ describe('summarizeToolActivity', () => {
     'tool.summary.searchedWeb': 'Searched the web',
     'tool.summary.using': 'Using {{name}}',
     'tool.summary.used': 'Used {{name}}',
+    'tool.summary.executingCode': 'Running code mode: {{description}}',
+    'tool.summary.executedCode': 'Ran code mode: {{description}}',
+    'tool.summary.executingCodeGeneric': 'Running code mode',
+    'tool.summary.executedCodeGeneric': 'Ran code mode',
     'tool.display.memories_search': 'Memory search',
     'tool.display.memories_add_ad_hoc_note': 'Write memory',
     'tool.display.web_search': 'Web search',
@@ -255,6 +259,38 @@ describe('summarizeToolActivity', () => {
     )
     expect(webSearch.text).toBe('Searching the web')
     expect(webSearch.text).not.toContain('web_search')
+  })
+
+  it('shows the exec description across running and completed activity', () => {
+    const running = summarizeToolActivity(
+      {
+        id: 'e1',
+        name: 'exec',
+        args: { source: 'text(1)', description: '读取两个配置文件' },
+        status: 'running',
+      },
+      t,
+    )
+    expect(running.running).toBe(true)
+    expect(running.text).toBe('Running code mode: 读取两个配置文件')
+
+    const done = summarizeToolActivity(
+      {
+        id: 'e2',
+        name: 'exec',
+        args: { source: 'text(1)', description: '读取两个配置文件\nignored' },
+        status: 'done',
+      },
+      t,
+    )
+    expect(done.running).toBe(false)
+    expect(done.text).toBe('Ran code mode: 读取两个配置文件')
+
+    const missing = summarizeToolActivity(
+      { id: 'e3', name: 'exec', args: { source: 'text(1)' }, status: 'queued' },
+      t,
+    )
+    expect(missing.text).toBe('Running code mode')
   })
 
   it('uses localized display names for unknown tools instead of raw function names', () => {

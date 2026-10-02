@@ -182,6 +182,7 @@ function contentToDisplayParts(
                 status,
             }
             if (result) {
+                if (result.displayMetadata) part.details = deepCloneJson(result.displayMetadata)
                 const resultText = joinToolResultText(result)
                 if (resultText !== undefined) part.result = resultText
                 if (result.isError) part.isError = true

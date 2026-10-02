@@ -173,7 +173,7 @@ describe('bootstrapApplication', () => {
         expect(rendererRegistry.getSlotContributions('chat.message.header')).toHaveLength(1)
         expect(rendererRegistry.getSlotContributions('layout.bottom_panel.content')).toHaveLength(1)
         expect(rendererRegistry.getSlotContributions('layout.right_panel.content')).toHaveLength(1)
-        expect(rendererRegistry.getSettingsSections()).toHaveLength(16)
+        expect(rendererRegistry.getSettingsSections()).toHaveLength(17)
         expect(rendererRegistry.getSettingsSections().some((s) => s.id === 'subagents')).toBe(true)
         expect(rendererRegistry.getSettingsSections().some((s) => s.id === 'skills')).toBe(true)
     })

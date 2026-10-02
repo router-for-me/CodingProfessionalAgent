@@ -1,0 +1,24 @@
+{
+    "id": "cpa.core.code-mode",
+    "name": "Code Mode",
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "description": "Backend QuickJS-ng cells for approval-preserving tool composition",
+    "engines": { "cpa": ">=1.0.0" },
+    "entries": {
+        "main": "./main/index.ts",
+        "agent": "./agent/index.ts",
+        "renderer": "./renderer/index.tsx"
+    },
+    "dependencies": { "cpa.core.settings": ">=1.0.0", "cpa.core.session-manager": ">=1.0.0" },
+    "capabilities": ["code-cell.execute", "process.utility", "settings.read", "settings.write"],
+    "contributes": {
+        "background-job": ["code-cell-executor"],
+        "native-event": ["code-cell:event"],
+        "rpc": ["code-cell:command"],
+        "tool-factory": ["exec", "wait"],
+        "hook": ["code-cell-session-end"],
+        "settings": ["code-mode"],
+        "chat-renderer": ["code-cell-card"]
+    }
+}

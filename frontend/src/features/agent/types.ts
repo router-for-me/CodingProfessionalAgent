@@ -63,6 +63,8 @@ export interface AgentPrepareInput {
     reasoningLevel: string
     speed: Speed
     requestApproval?: boolean
+    /** Fail closed unless a matching tool-set policy is applied. */
+    requiredToolPolicy?: string
     /** Auto-compact when context exceeds this percent of the model window. */
     compactionThresholdPercent?: number
     /** Lower expensive reasoning levels for context summarization. Defaults to true. */
@@ -115,6 +117,7 @@ export interface PreparedAgentRun {
     readonly reasoningEffort?: string
     readonly speed: 'standard' | 'fast' | string
     readonly requestApproval?: boolean
+    readonly requiredToolPolicy?: string
     readonly compactionSettings?: CompactionSettings
     readonly fastContextCompaction: boolean
     readonly agentDir: string

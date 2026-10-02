@@ -11,6 +11,7 @@ import type { ContributionRegistry } from './ContributionRegistry.js'
 export const SINGLE_VALUE_CONTRIBUTION_KINDS: ReadonlySet<ContributionKind> = new Set<ContributionKind>([
     'service',
     'rpc',
+    'native-event',
     'action',
     'view',
     'panel',
