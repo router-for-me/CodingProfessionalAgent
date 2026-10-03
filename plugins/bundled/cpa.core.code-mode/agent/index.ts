@@ -1,6 +1,7 @@
 import { definePluginEntry } from '@cpa/plugin-sdk'
-import { SettingsServiceToken, type HookContribution, type PluginContext, type SettingsService, type ToolFactoryContext, type ToolFactoryContribution } from '@cpa/plugin-api'
+import { SettingsServiceToken, type HookContribution, type PluginContext, type ResourceProvider, type SettingsService, type ToolFactoryContext, type ToolFactoryContribution } from '@cpa/plugin-api'
 import { CellClient } from './client'
+import { codeModeBatchGuidance } from './describe'
 import { createExecTool } from './execTool'
 import { createWaitTool } from './waitTool'
 import { codeModeConfiguration } from '../shared/configuration'
@@ -38,6 +39,18 @@ export const entry = definePluginEntry({
                 },
             })
         }
+        context.register<ResourceProvider>({
+            kind: 'resource-provider', id: 'code-mode-batch-guidance',
+            value: {
+                id: 'code-mode-batch-guidance', kind: 'system-prompt', order: 80, targetAgent: 'all',
+                async load() {
+                    const settings = context.getService(SettingsServiceToken)
+                    const snapshot = settings.getSnapshot?.() ?? await settings.get()
+                    const guidance = codeModeBatchGuidance(codeModeConfiguration(snapshot).toolMode)
+                    return guidance ? [{ id: 'code-mode-batch-guidance', content: guidance, order: 80 }] : []
+                },
+            },
+        })
         context.register<HookContribution>({
             kind: 'hook', id: 'code-cell-session-end',
             value: {

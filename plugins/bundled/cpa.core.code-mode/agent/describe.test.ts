@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { renderExecDescription, schemaToTypeScript } from './describe'
+import { codeModeBatchGuidance, renderExecDescription, schemaToTypeScript } from './describe'
 import { selectNestedTools } from './names'
 import { DEFAULT_SCHEMA_BUDGET_BYTES } from './protocol'
 
@@ -88,6 +88,18 @@ describe('Code Mode schema to TypeScript', () => {
 
     it.each([0, 6, -1, 1.5, Infinity])('rejects unsafe schema budget %s', (budget) => {
         expect(() => schemaToTypeScript({}, budget)).toThrow('Schema budget')
+    })
+})
+
+describe('Code Mode batch guidance', () => {
+    it('asks code mode to prefer exec for independent calls and stays silent otherwise', () => {
+        const guidance = codeModeBatchGuidance('code')
+        expect(guidance).toContain('prefer that direct tool')
+        expect(guidance).toContain('Do not wrap a single call in exec')
+        expect(guidance).toContain('prefer one exec')
+        expect(guidance).toContain('Promise.all')
+        expect(codeModeBatchGuidance('code-only')).toBeUndefined()
+        expect(codeModeBatchGuidance('direct')).toBeUndefined()
     })
 })
 

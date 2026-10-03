@@ -948,6 +948,9 @@ export const bundledManifests: Readonly<Record<string, PluginManifest>> = Object
                         "exec",
                         "wait"
                 ],
+                "resource-provider": [
+                        "code-mode-batch-guidance"
+                ],
                 "hook": [
                         "code-cell-session-end"
                 ],

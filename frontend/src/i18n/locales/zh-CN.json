@@ -1508,7 +1508,7 @@
         "section.limits": "限额",
         "section.tools": "工具可见性",
         "modes": {
-            "direct": "直接工具（默认）",
+            "direct": "直接工具",
             "code": "工具与代码",
             "code-only": "仅代码工具"
         },

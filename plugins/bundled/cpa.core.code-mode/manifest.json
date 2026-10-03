@@ -17,6 +17,7 @@
         "native-event": ["code-cell:event"],
         "rpc": ["code-cell:command"],
         "tool-factory": ["exec", "wait"],
+        "resource-provider": ["code-mode-batch-guidance"],
         "hook": ["code-cell-session-end"],
         "settings": ["code-mode"],
         "chat-renderer": ["code-cell-card"]

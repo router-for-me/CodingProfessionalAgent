@@ -144,6 +144,17 @@ export interface ExecDescriptionOptions {
     locale?: string
 }
 
+export function codeModeBatchGuidance(mode: ToolMode): string | undefined {
+    if (mode !== 'code') return undefined
+    return [
+        'Direct tools and code mode are both available.',
+        'When you need only one tool call, prefer that direct tool. Do not wrap a single call in exec.',
+        'When you already plan several tool calls that do not depend on each other, prefer one exec call instead of calling those tools directly.',
+        'Put the independent calls in that same exec and start them together with Promise.all.',
+        'If a later call depends on reading an earlier result before you can decide, use direct tool calls instead of guessing inside exec.',
+    ].join('\n')
+}
+
 export function renderExecDescription(
     mode: Exclude<ToolMode, 'direct'>,
     tools: readonly NamedNestedTool[],
