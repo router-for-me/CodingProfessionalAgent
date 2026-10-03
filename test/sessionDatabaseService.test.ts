@@ -378,6 +378,19 @@ describe('SessionDatabaseService', () => {
     })
   })
 
+  it('persists executed subagent speed through snapshots and incremental updates', async () => {
+    const parentId = 'speed-parent'
+    const agent = { id: 'speed-agent', sessionId: 'speed-child', parentSessionId: parentId, name: 'Worker', speed: 'fast' }
+    await service.set(parentId, { entries: [], subAgents: [agent] })
+    expect((await service.get(parentId))?.subAgents?.[0].speed).toBe('fast')
+    await service.updateSubAgent({ ...agent, speed: 'standard' })
+    expect((await service.get(parentId))?.subAgents?.[0].speed).toBe('standard')
+    await service.updateSubAgent({ id: agent.id, status: 'completed' })
+    expect((await service.get(parentId))?.subAgents?.[0].speed).toBe('standard')
+    await service.set(parentId, { entries: [], subAgents: [{ ...agent, speed: undefined }] })
+    expect((await service.get(parentId))?.subAgents?.[0].speed).toBe('standard')
+  })
+
   it('handles subagents and cascading deletion of child sessions', async () => {
     const parentId = 'parent-sess'
     const childId = 'child-sess-1'

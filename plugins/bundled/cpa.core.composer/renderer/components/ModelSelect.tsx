@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import { createPortal } from 'react-dom'
 import {
     ChevronDown,
+    Zap,
     cn,
     useActiveRun,
     useHostServices,
@@ -161,6 +162,7 @@ export function ModelSelect({
 
     const reasoningOptions = current ? getReasoningOptions(current) : []
     const speedOptions = current ? getSpeedOptions(current.supportsFast) : []
+    const isFastEnabled = Boolean(current?.supportsFast && speed !== 'standard')
     const currentReasoning = reasoningOptions.find(
         (option) => option.id === reasoningLevel,
     )
@@ -240,7 +242,7 @@ export function ModelSelect({
             observer.observe(el)
             return () => observer.disconnect()
         }
-    }, [currentModelLabel, currentReasoningLabel])
+    }, [currentModelLabel, currentReasoningLabel, isFastEnabled])
 
     useEffect(() => {
         if (disabled && !isSessionRunning) setOpen(false)
@@ -367,8 +369,12 @@ export function ModelSelect({
                 {currentReasoningLabel ? (
                     <span className="shrink-0">{currentReasoningLabel}</span>
                 ) : null}
+                {isFastEnabled ? (
+                    <Zap className="size-3 translate-y-px shrink-0 text-[var(--accent-blue)]" aria-hidden />
+                ) : null}
                 <span id={triggerDescriptionId} className="sr-only">
                     {currentModelLabel} {currentReasoningLabel}
+                    {isFastEnabled ? ` ${t('composer.speed.fast', { defaultValue: 'Fast' })}` : ''}
                 </span>
                 <ChevronDown className="size-3 shrink-0 opacity-70" aria-hidden />
             </button>
@@ -382,6 +388,9 @@ export function ModelSelect({
                 <span className="truncate">{currentModelLabel}</span>
                 {currentReasoningLabel ? (
                     <span className="shrink-0">{currentReasoningLabel}</span>
+                ) : null}
+                {isFastEnabled ? (
+                    <Zap className="size-3 translate-y-px shrink-0 text-[var(--accent-blue)]" aria-hidden />
                 ) : null}
                 <ChevronDown className="size-3 shrink-0 opacity-70" aria-hidden />
             </span>

@@ -1566,6 +1566,8 @@ export class SubAgentHost {
             // and must not be overridden by the user UI's dynamic runtime settings.
         }
 
+        // Publish the same immutable speed passed to execution before streaming starts.
+        this.patch(agentId, { speed: request.speed })
         for await (const event of this.runChild(request)) {
             this.emitEvent(event)
             if (event.type === 'assistant-end') {
@@ -1637,7 +1639,7 @@ export class SubAgentHost {
 
     private patch(
         agentId: string,
-        patch: Partial<Pick<SubAgentRecord, 'status' | 'lastMessage' | 'errorMessage' | 'completedAt' | 'pausedMs'>>,
+        patch: Partial<Pick<SubAgentRecord, 'status' | 'lastMessage' | 'errorMessage' | 'completedAt' | 'pausedMs' | 'speed'>>,
     ): void {
         const current = this.agents.get(agentId)
         if (!current) return

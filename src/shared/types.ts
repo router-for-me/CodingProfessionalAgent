@@ -446,6 +446,7 @@ export interface SubAgentItem {
   name?: string
   modelId?: string | null
   reasoningEffort?: string | null
+  speed?: string | null
   status?: string
   color?: string | null
   icon?: string | null

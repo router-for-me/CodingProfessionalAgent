@@ -59,6 +59,7 @@ function sameAgentList(
       a.parentSessionId !== b.parentSessionId ||
       a.modelId !== b.modelId ||
       a.reasoningEffort !== b.reasoningEffort ||
+      a.speed !== b.speed ||
       a.completedAt !== b.completedAt ||
       a.pausedMs !== b.pausedMs
     ) {

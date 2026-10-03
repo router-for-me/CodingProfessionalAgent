@@ -212,7 +212,7 @@ export class SessionDatabaseService {
     }
 
     const subAgentRows = this.getStatement(
-        'SELECT id, session_id, parent_session_id, parent_tool_call_id, name, model_id, reasoning_effort, status, color, icon, last_message, error_message, role_id, role_name, role_prompt, depth, parent_agent_id, created_at, updated_at FROM subagents WHERE parent_session_id = ? ORDER BY created_at ASC',
+        'SELECT id, session_id, parent_session_id, parent_tool_call_id, name, model_id, reasoning_effort, speed, status, color, icon, last_message, error_message, role_id, role_name, role_prompt, depth, parent_agent_id, created_at, updated_at FROM subagents WHERE parent_session_id = ? ORDER BY created_at ASC',
       ).all(sessionId) as Array<{
         id: string
         session_id: string
@@ -221,6 +221,7 @@ export class SessionDatabaseService {
         name: string
         model_id: string | null
         reasoning_effort: string | null
+        speed: string | null
         status: string
         color: string | null
         icon: string | null
@@ -244,6 +245,7 @@ export class SessionDatabaseService {
       sessionId: row.session_id,
       modelId: row.model_id ?? undefined,
       ...(row.reasoning_effort ? { reasoningEffort: row.reasoning_effort } : {}),
+      ...(row.speed ? { speed: row.speed } : {}),
       status: row.status,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -503,9 +505,9 @@ export class SessionDatabaseService {
 
     const upsertSubAgentStmt = this.getStatement(`
       INSERT INTO subagents (
-        id, session_id, parent_session_id, parent_tool_call_id, name, model_id, reasoning_effort, status, color, icon, last_message, error_message, role_id, role_name, role_prompt, depth, parent_agent_id, created_at, updated_at
+        id, session_id, parent_session_id, parent_tool_call_id, name, model_id, reasoning_effort, speed, status, color, icon, last_message, error_message, role_id, role_name, role_prompt, depth, parent_agent_id, created_at, updated_at
       ) VALUES (
-        @id, @session_id, @parent_session_id, @parent_tool_call_id, @name, @model_id, @reasoning_effort, @status, @color, @icon, @last_message, @error_message, @role_id, @role_name, @role_prompt, @depth, @parent_agent_id, @created_at, @updated_at
+        @id, @session_id, @parent_session_id, @parent_tool_call_id, @name, @model_id, @reasoning_effort, @speed, @status, @color, @icon, @last_message, @error_message, @role_id, @role_name, @role_prompt, @depth, @parent_agent_id, @created_at, @updated_at
       ) ON CONFLICT(id) DO UPDATE SET
         session_id = excluded.session_id,
         parent_session_id = excluded.parent_session_id,
@@ -513,6 +515,7 @@ export class SessionDatabaseService {
         name = excluded.name,
         model_id = excluded.model_id,
         reasoning_effort = excluded.reasoning_effort,
+        speed = COALESCE(excluded.speed, subagents.speed),
         status = excluded.status,
         color = excluded.color,
         icon = excluded.icon,
@@ -704,6 +707,7 @@ export class SessionDatabaseService {
             name: sa?.name || 'Subagent',
             modelId: sa?.modelId || sa?.model_id || null,
             reasoningEffort: sa?.reasoningEffort || sa?.reasoning_effort || null,
+            speed: typeof sa?.speed === 'string' ? sa.speed : null,
             status: sa?.status || 'completed',
             color: sa?.color || null,
             icon: sa?.icon || null,
@@ -756,6 +760,7 @@ export class SessionDatabaseService {
             name: sa.name,
             model_id: sa.modelId,
             reasoning_effort: sa.reasoningEffort,
+            speed: sa.speed,
             status: sa.status,
             color: sa.color,
             icon: sa.icon,
@@ -1287,7 +1292,7 @@ export class SessionDatabaseService {
 
     const stmt = this.getStatement(`
       INSERT INTO subagents (
-        id, session_id, parent_session_id, parent_tool_call_id, name, model_id, reasoning_effort, status, color, icon, last_message, error_message, created_at, updated_at
+        id, session_id, parent_session_id, parent_tool_call_id, name, model_id, reasoning_effort, speed, status, color, icon, last_message, error_message, created_at, updated_at
       ) VALUES (
         @id,
         COALESCE(@session_id, @id),
@@ -1296,6 +1301,7 @@ export class SessionDatabaseService {
         COALESCE(@name, 'Subagent'),
         @model_id,
         @reasoning_effort,
+        @speed,
         COALESCE(@status, 'completed'),
         @color,
         @icon,
@@ -1310,6 +1316,7 @@ export class SessionDatabaseService {
         name = CASE WHEN excluded.name != 'Subagent' THEN excluded.name ELSE subagents.name END,
         model_id = CASE WHEN excluded.model_id IS NOT NULL THEN excluded.model_id ELSE subagents.model_id END,
         reasoning_effort = CASE WHEN excluded.reasoning_effort IS NOT NULL THEN excluded.reasoning_effort ELSE subagents.reasoning_effort END,
+        speed = COALESCE(excluded.speed, subagents.speed),
         status = excluded.status,
         color = CASE WHEN excluded.color IS NOT NULL THEN excluded.color ELSE subagents.color END,
         icon = CASE WHEN excluded.icon IS NOT NULL THEN excluded.icon ELSE subagents.icon END,
@@ -1326,6 +1333,7 @@ export class SessionDatabaseService {
       name: subAgent.name ?? null,
       model_id: subAgent.modelId ?? null,
       reasoning_effort: subAgent.reasoningEffort ?? null,
+      speed: subAgent.speed ?? null,
       status: subAgent.status ?? null,
       color: subAgent.color ?? null,
       icon: subAgent.icon ?? null,

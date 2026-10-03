@@ -2881,6 +2881,15 @@ describe('persist pure helpers', () => {
       setHostBridge(null)
     })
 
+    it.each(['standard', 'fast', 'max'])('restores executed subagent speed %s without reading global preferences', (speed) => {
+      const [record] = sanitizeSubAgents([{
+        id: 'speed-child', sessionId: 'speed-child', parentSessionId: 'parent',
+        name: 'Worker', modelId: 'model', status: 'completed', speed,
+        color: '#9b7dff', icon: 'sparkle', createdAt: 1, updatedAt: 2,
+      }])
+      expect(record?.speed).toBe(speed)
+    })
+
     it('sanitizeSubAgents properly cleans up invalid fields and timestamps while preserving running and queued statuses', () => {
       const dirtyAgents = [
         {

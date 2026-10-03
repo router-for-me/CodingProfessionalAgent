@@ -1222,6 +1222,7 @@ export function sanitizeSubAgents(
     const errorMessage =
       typeof item.errorMessage === 'string' ? item.errorMessage : undefined
     if (errorMessage) record.errorMessage = errorMessage
+    if (typeof item.speed === 'string' && item.speed) record.speed = item.speed
     const reasoningEffort = sanitizeSubAgentReasoningEffort(item.reasoningEffort)
     if (reasoningEffort) {
       record.reasoningEffort = reasoningEffort

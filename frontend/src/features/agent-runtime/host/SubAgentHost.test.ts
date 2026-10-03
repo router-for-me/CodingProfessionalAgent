@@ -387,21 +387,24 @@ describe('SubAgentHost', () => {
         expect(record?.reasoningEffort).toBe('xhigh')
     })
 
-    it('passes speed from prepared configuration into SubAgentRunRequest', async () => {
+    it.each(['fast', 'standard', 'max'])('publishes and restores executed speed %s through the subagent record', async (speed) => {
         let capturedRequest: SubAgentRunRequest | null = null
         const host = new SubAgentHost({
             generateId: () => 'subagent-fast',
             now: () => 10,
             run: (request) => {
                 capturedRequest = request
+                expect(host.get(request.agentId)?.speed).toBe(request.speed)
                 return scriptedRun(request, ['fast child completed'])
             },
         })
         host.configure({
-            prepared: { ...preparedRun(), speed: 'fast' },
+            prepared: { ...preparedRun(), speed },
             codingTools: [readTool],
             models: [model],
         })
+        const publishedSpeeds: Array<string | undefined> = []
+        host.subscribe({ onStateChange: (agents) => publishedSpeeds.push(agents[0]?.speed) })
         host.setParentContext({ sessionId: 'parent', runId: 'run-fast' })
 
         await host.spawn('fast task', {
@@ -410,7 +413,13 @@ describe('SubAgentHost', () => {
 
         expect(capturedRequest).not.toBeNull()
         const req = capturedRequest as SubAgentRunRequest | null
-        expect(req?.speed).toBe('fast')
+        expect(req?.speed).toBe(speed)
+        expect(publishedSpeeds).toContain(speed)
+        const records = host.list()
+        expect(records[0]?.speed).toBe(speed)
+        const restored = new SubAgentHost({ generateId: () => 'restored', now: () => 20, run: (request) => scriptedRun(request, []) })
+        restored.hydrate(JSON.parse(JSON.stringify(records)))
+        expect(restored.list()[0]?.speed).toBe(speed)
     })
 
     it('queues send_message while running and applies it on the next turn', async () => {

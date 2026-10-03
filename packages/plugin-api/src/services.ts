@@ -956,6 +956,8 @@ export interface SubAgentRecord {
     sessionId: string
     modelId: string
     reasoningEffort?: string
+    /** Execution speed captured from the prepared run, not current UI preferences. */
+    speed?: string
     status: SubAgentStatus
     createdAt: number
     updatedAt: number

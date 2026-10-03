@@ -42,6 +42,7 @@ export interface SessionEntryRow {
 }
 
 export interface SubAgentRow {
+  speed?: string | null
   id: string
   session_id: string
   parent_session_id: string
@@ -114,6 +115,7 @@ CREATE TABLE IF NOT EXISTS session_entries (
 
 export const SUBAGENTS_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS subagents (
+    speed TEXT,
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
     parent_session_id TEXT NOT NULL,
@@ -405,6 +407,7 @@ export function applySessionSchemaAndMigrations(db: DatabaseType): void {
 
   // 4. Ensure all subagents columns exist for older database upgrades
   const subagentColumns = [
+    'speed TEXT',
     'parent_tool_call_id TEXT',
     'model_id TEXT',
     'reasoning_effort TEXT',

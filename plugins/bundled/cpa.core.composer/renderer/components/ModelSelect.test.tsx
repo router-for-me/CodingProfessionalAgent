@@ -318,6 +318,47 @@ describe('ModelSelect', () => {
         expect(zapIcon).toHaveClass('text-[var(--text-muted)]')
     })
 
+    it.each([
+        ['standard', true, false],
+        ['fast', true, true],
+        ['max', true, true],
+        ['fast', false, false],
+    ] as const)('renders the trigger and measurement indicator for %s with support=%s', (speed, supportsFast, visible) => {
+        modelsState = [{ ...testModels[1]!, supportsFast }]
+        settingsState = { ...settingsState, modelId: 'model-fast', reasoningLevel: 'high', speed }
+        const { container } = render(<ModelSelect disabled />)
+        const trigger = screen.getByRole('button', { name: 'Model' })
+        expect(Boolean(trigger.querySelector('.lucide-zap'))).toBe(visible)
+        expect(Boolean(container.querySelector('.invisible .lucide-zap'))).toBe(visible)
+        if (visible) {
+            expect(trigger).toHaveAccessibleDescription('Fast Model High Fast')
+            expect(trigger.querySelector('.lucide-zap')?.previousElementSibling).toHaveTextContent('High')
+        }
+    })
+
+    it('uses the running session speed instead of global preferences and reacts to changes', () => {
+        modelsState = testModels
+        settingsState = { ...settingsState, modelId: 'model-fast', speed: 'fast' }
+        sessionsState = [{
+            id: 'running-fast', title: 'Running', pinned: false,
+            modelId: 'model-fast', reasoningEffort: 'high', speed: 'standard',
+            createdAt: 1, updatedAt: 1,
+        }]
+        render(<ModelSelect sessionId="running-fast" isRunning />)
+        const trigger = screen.getByRole('button', { name: 'Model' })
+        expect(trigger.querySelector('.lucide-zap')).toBeNull()
+        act(() => {
+            sessionsState = [{ ...sessionsState[0]!, speed: 'max' }]
+            notifySessions()
+        })
+        expect(trigger.querySelector('.lucide-zap')).toBeInTheDocument()
+        act(() => {
+            sessionsState = [{ ...sessionsState[0]!, speed: 'standard' }]
+            notifySessions()
+        })
+        expect(trigger.querySelector('.lucide-zap')).toBeNull()
+    })
+
     it('updates reasoning from the slider and writes selected option values back', async () => {
         const user = userEvent.setup()
         modelsState = testModels

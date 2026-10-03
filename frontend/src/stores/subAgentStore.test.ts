@@ -76,6 +76,13 @@ describe('subAgentStore', () => {
     expect(agents.find((a) => a.id === 'agent-old')?.status).toBe('completed')
   })
 
+    it('applies speed-only host updates even when timestamps match', () => {
+        const agent = makeAgent({ speed: 'standard' })
+        useSubAgentStore.setState({ agents: [agent] })
+        useSubAgentStore.getState().mergeHostAgents([{ ...agent, speed: 'fast' }])
+        expect(useSubAgentStore.getState().agents[0]?.speed).toBe('fast')
+    })
+
   it('filters agents correctly by parent session', () => {
     const agentA = makeAgent({ id: 'a', parentSessionId: 'parent-1' })
     const agentB = makeAgent({ id: 'b', parentSessionId: 'parent-2' })
