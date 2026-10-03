@@ -56,12 +56,12 @@ export function SchedulerDrawerOverlay() {
     )
 }
 
-let activeDisposables: Array<() => void> = []
+const activeCleanups = new WeakMap<PluginContext, () => Promise<void>>()
 
 export const schedulerRendererEntry = definePluginEntry({
     runtime: 'renderer',
     async activate(context: PluginContext) {
-        activeDisposables = []
+        const activeDisposables: Array<() => void | Promise<void>> = []
 
         // 1. Register Scheduled View
         context.register<ViewContribution>({
@@ -146,38 +146,65 @@ export const schedulerRendererEntry = definePluginEntry({
         let saveChain = Promise.resolve()
         let lastTasksJson = JSON.stringify(useScheduledTasksStore.getState().tasks)
 
+        let disposed = false
+        let loading = false
+        let revision = 0
+        let stopRunner: (() => Promise<void>) | undefined
+        let hydrateTimer: ReturnType<typeof setTimeout> | undefined
+
+        const scheduleHydration = (delay: number) => {
+            if (disposed) return
+            if (hydrateTimer !== undefined) clearTimeout(hydrateTimer)
+            hydrateTimer = setTimeout(() => {
+                hydrateTimer = undefined
+                void hydrateTasks()
+            }, delay)
+        }
+
         const hydrateTasks = async () => {
-            const sched = resolveScheduleService()
-            if (!sched) return
+            if (disposed || loading) return
+            loading = true
+            const startedRevision = revision
             try {
-                isHydrating = true
+                const sched = resolveScheduleService()
+                if (!sched) throw new Error('Schedule service is not ready')
                 const tasks = await sched.list()
-                if (Array.isArray(tasks)) {
-                    const currentServices = (context as any).services ?? getDefaultHostServices()
-                    const projects = currentServices?.projects?.getSnapshot?.() ?? []
-                    useScheduledTasksStore.getState().hydrate(tasks as ScheduledTask[], projects)
-                    lastTasksJson = JSON.stringify(useScheduledTasksStore.getState().tasks)
+                if (disposed) return
+                if (!Array.isArray(tasks)) throw new Error('Invalid schedule list')
+                if (startedRevision !== revision) {
+                    scheduleHydration(1000)
+                    return
                 }
+                isHydrating = true
+                const currentServices = (context as any).services ?? getDefaultHostServices()
+                const projects = currentServices?.projects?.getSnapshot?.() ?? []
+                useScheduledTasksStore.getState().hydrate(tasks as ScheduledTask[], projects)
+                lastTasksJson = JSON.stringify(useScheduledTasksStore.getState().tasks)
+                // Start once, only after durable tasks are available, without mounting a view.
+                stopRunner ??= initScheduledTaskRunner(currentServices, context.generation)
             } catch (err) {
-                console.error('[cpa.core.scheduler] Failed to hydrate tasks:', err)
+                if (!disposed) {
+                    console.error('[cpa.core.scheduler] Failed to hydrate tasks:', err)
+                    scheduleHydration(1000)
+                }
             } finally {
                 isHydrating = false
+                loading = false
             }
         }
 
-        // Defer hydration until after the current platform generation commits.
-        // Renderer activate runs while Main is still staged, so kvstore/schedule RPCs
-        // are not dispatchable yet during synchronous activate.
-        let hydrateTimer: ReturnType<typeof setTimeout> | undefined
-        hydrateTimer = setTimeout(() => {
-            void hydrateTasks()
-        }, 0)
+        // A macrotask is not a platform commit barrier. Retry until RPCs are ready.
+        scheduleHydration(0)
         activeDisposables.push(() => {
-            if (hydrateTimer) clearTimeout(hydrateTimer)
+            disposed = true
+            if (hydrateTimer !== undefined) clearTimeout(hydrateTimer)
+            return stopRunner?.()
         })
 
         if (context.events && typeof context.events.on === 'function') {
             const unsubEvents = context.events.on('schedule:updated', (payload: any) => {
+                if (disposed) return
+                revision += 1
                 if (payload?.data) {
                     try {
                         const tasks = typeof payload.data === 'string' ? JSON.parse(payload.data) : payload.data
@@ -203,11 +230,12 @@ export const schedulerRendererEntry = definePluginEntry({
 
         // 5. Serialized save on store updates
         const unsubscribeStore = useScheduledTasksStore.subscribe(() => {
-            if (isHydrating) return
+            if (disposed || isHydrating) return
             const currentTasks = useScheduledTasksStore.getState().tasks
             const currentJson = JSON.stringify(currentTasks)
             if (currentJson === lastTasksJson) return
             lastTasksJson = currentJson
+            revision += 1
 
             const sched = resolveScheduleService()
             if (sched) {
@@ -249,26 +277,34 @@ export const schedulerRendererEntry = definePluginEntry({
                     })
             }
         })
-        activeDisposables.push(unsubscribeStore)
+        activeDisposables.push(() => { unsubscribeStore() })
 
-        // 6. Start scheduler runner
-        const stopRunner = initScheduledTaskRunner(services)
-        activeDisposables.push(stopRunner)
-
+        // Stop accepting updates before draining saves. The runtime awaits deactivate
+        // before releasing this context's registrations and dependent resources.
+        let cleanupPromise: Promise<void> | undefined
+        const cleanup = (): Promise<void> => {
+            if (cleanupPromise) return cleanupPromise
+            const drains: Promise<void>[] = []
+            for (const dispose of activeDisposables) {
+                try {
+                    const drain = dispose()
+                    if (drain) drains.push(drain)
+                } catch (err) {
+                    console.error('[cpa.core.scheduler] Error during cleanup:', err)
+                }
+            }
+            cleanupPromise = Promise.all([...drains, saveChain]).then(() => {})
+            return cleanupPromise
+        }
+        activeCleanups.set(context, cleanup)
         if (Array.isArray((context as any).subscriptions)) {
-            (context as any).subscriptions.push(...activeDisposables)
+            (context as any).subscriptions.push(cleanup)
         }
     },
 
-    async deactivate() {
-        for (const dispose of activeDisposables) {
-            try {
-                dispose()
-            } catch (err) {
-                console.error('[cpa.core.scheduler] Error during cleanup:', err)
-            }
-        }
-        activeDisposables = []
+    async deactivate(context: PluginContext) {
+        await activeCleanups.get(context)?.()
+        activeCleanups.delete(context)
     },
 })
 

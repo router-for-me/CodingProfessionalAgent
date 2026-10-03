@@ -63,6 +63,7 @@ export interface SessionFilePayload {
   subAgents?: SubAgentRecord[]
   projectId?: string | null
   parentSessionId?: string | null
+  scheduleId?: string
   isSubagent?: boolean
   branch?: string | null
   pinned?: boolean
@@ -1982,6 +1983,7 @@ async function writeSessionData(
     ...(sanitizedSubAgents.length > 0 ? { subAgents: sanitizedSubAgents } : {}),
     ...(projectId ? { projectId } : {}),
     ...(parentSessionId ? { parentSessionId } : {}),
+    ...(session?.scheduleId ? { scheduleId: session.scheduleId } : {}),
     ...(isSubagent ? { isSubagent: true } : {}),
     ...(speed === 'standard' || speed === 'fast' || speed === 'max' ? { speed } : {}),
     ...(subAgentRecord?.reasoningEffort ?? session?.reasoningEffort ?? settings?.reasoningLevel

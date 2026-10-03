@@ -178,7 +178,7 @@ export type TaskExecutor = (task: ScheduledTask, runTime?: Date) => Promise<stri
 
 export class ScheduledTaskScheduler {
     private timerId: ReturnType<typeof setInterval> | null = null
-    private isTicking = false
+    private activeTick: Promise<ScheduledTask[]> | null = null
     private customExecutor: TaskExecutor | null = null
     private services: HostServices | null = null
     private pendingSessions = new Map<string, PendingSession>()
@@ -207,60 +207,71 @@ export class ScheduledTaskScheduler {
             clearInterval(this.timerId)
             this.timerId = null
         }
-        this.pendingSessions.clear()
-        this.completedRuns.clear()
+        const clearProgress = () => {
+            if (this.timerId !== null) return
+            this.pendingSessions.clear()
+            this.completedRuns.clear()
+        }
+        if (this.activeTick) void this.activeTick.then(clearProgress, clearProgress)
+        else clearProgress()
     }
 
     isRunning(): boolean {
         return this.timerId !== null
     }
 
-    async tick(now: Date = new Date()): Promise<ScheduledTask[]> {
-        if (this.isTicking) return []
-        this.isTicking = true
-
-        try {
-            const tasks = useScheduledTasksStore.getState().tasks
-            const dueTasks: ScheduledTask[] = []
-
-            for (const task of tasks) {
-                const completed = this.completedRuns.get(task.id)
-                const effectiveTask = completed?.schedule === task.schedule &&
-                    completed.createdAt === task.createdAt && completed.acceptedAt > (task.lastRunAt ?? 0)
-                    ? { ...task, lastRunAt: completed.acceptedAt, lastRunError: null }
-                    : task
-                if (isTaskDueToRun(effectiveTask, now)) {
-                    dueTasks.push(effectiveTask)
-                }
-            }
-
-            for (const task of dueTasks) {
-                await this.executeTask(task, now)
-            }
-
-            return dueTasks
-        } finally {
-            this.isTicking = false
-        }
+    waitForIdle(): Promise<void> {
+        return this.activeTick?.then(() => {}) ?? Promise.resolve()
     }
 
-    private async executeTask(task: ScheduledTask, runTime: Date): Promise<void> {
+    tick(now: Date = new Date()): Promise<ScheduledTask[]> {
+        if (this.activeTick) return Promise.resolve([])
+        // Keep claim, dispatch, and settlement on the same generation's services.
+        this.activeTick = this.runTick(now, this.services).finally(() => {
+            this.activeTick = null
+        })
+        return this.activeTick
+    }
+
+    private async runTick(now: Date, services: HostServices | null): Promise<ScheduledTask[]> {
+        const tasks = useScheduledTasksStore.getState().tasks
+        const dueTasks: ScheduledTask[] = []
+
+        for (const task of tasks) {
+            const completed = this.completedRuns.get(task.id)
+            const effectiveTask = completed?.schedule === task.schedule &&
+                completed.createdAt === task.createdAt && completed.acceptedAt > (task.lastRunAt ?? 0)
+                ? { ...task, lastRunAt: completed.acceptedAt, lastRunError: null }
+                : task
+            if (isTaskDueToRun(effectiveTask, now)) {
+                dueTasks.push(effectiveTask)
+            }
+        }
+
+        for (const task of dueTasks) {
+            await this.executeTask(task, now, services)
+        }
+
+        return dueTasks
+    }
+
+    private async executeTask(task: ScheduledTask, runTime: Date, services: HostServices | null): Promise<void> {
         const period = runPeriod(task, runTime)
         let claimToken: string | null = null
         let attemptRecorded = false
 
         try {
-            const claimRun = this.services?.schedule?.claimRun
+            const claimRun = services?.schedule?.claimRun
             if (claimRun) {
-                if (!this.services?.schedule?.settleRun) {
+                if (!services?.schedule?.settleRun) {
                     throw new Error('Schedule settlement service is unavailable')
                 }
                 claimToken = await claimRun(task.id, task.schedule, period)
                 if (!claimToken) return
             }
 
-            const projects = this.services?.projects?.getSnapshot?.() ?? []
-            const pendingContext = this.services?.ui?.getPendingSessionContext?.() ?? {
+            const projects = services?.projects?.getSnapshot?.() ?? []
+            const pendingContext = services?.ui?.getPendingSessionContext?.() ?? {
                 projectId: null,
                 branch: null,
                 workLocation: 'local',
@@ -286,16 +297,16 @@ export class ScheduledTaskScheduler {
             if (this.customExecutor) {
                 await this.customExecutor(task)
             } else {
-                const sendFn = this.services?.agentRun?.send ?? this.services?.chatMessages?.send
+                const sendFn = services?.agentRun?.send ?? services?.chatMessages?.send
                 if (!sendFn) throw new Error('Agent send service is unavailable')
 
                 const isExistingChat =
                     task.runIn === 'existing-chat' &&
                     task.chatSessionId &&
                     task.chatSessionId !== 'new-chat'
-                const currentSessions = this.services?.sessions?.getSnapshot?.() ?? []
+                const currentSessions = services?.sessions?.getSnapshot?.() ?? []
                 const foregroundSessionId =
-                    this.services?.sessions?.getCurrentSessionId?.() ?? null
+                    services?.sessions?.getCurrentSessionId?.() ?? null
                 const existingSession = isExistingChat
                     ? currentSessions.find((session) => session.id === task.chatSessionId)
                     : null
@@ -314,10 +325,10 @@ export class ScheduledTaskScheduler {
                         sessionId = pending.sessionId
                         context = pending.context
                     } else {
-                        if (!this.services?.sessions?.create) {
+                        if (!services?.sessions?.create) {
                             throw new Error('Session creation service is unavailable')
                         }
-                        sessionId = await this.services.sessions.create({
+                        sessionId = await services.sessions.create({
                             title: task.title,
                             projectId: targetProjectId ?? undefined,
                             scheduleId: task.id,
@@ -329,8 +340,8 @@ export class ScheduledTaskScheduler {
                         })
                         if (!sessionId) throw new Error('Scheduled session could not be created')
                         this.pendingSessions.set(task.id, { schedule: task.schedule, period, sessionId, context })
-                        if (this.services.sessions.getCurrentSessionId?.() === sessionId) {
-                            this.services.sessions.setCurrentSessionId?.(foregroundSessionId)
+                        if (services.sessions.getCurrentSessionId?.() === sessionId) {
+                            services.sessions.setCurrentSessionId?.(foregroundSessionId)
                         }
                     }
                 }
@@ -352,16 +363,16 @@ export class ScheduledTaskScheduler {
             })
             if (claimToken) {
                 try {
-                    await this.services?.schedule?.settleRun?.(task.id, period, claimToken, runTime.getTime())
+                    await services?.schedule?.settleRun?.(task.id, period, claimToken, runTime.getTime())
                 } catch (err) {
                     console.error(`Failed to persist scheduled task [${task.id}] completion:`, err)
                 }
             }
-            this.services?.ui?.pushToast?.(`Scheduled task [${task.title}] started as planned`)
+            services?.ui?.pushToast?.(`Scheduled task [${task.title}] started as planned`)
         } catch (err) {
             if (claimToken) {
                 try {
-                    await this.services?.schedule?.settleRun?.(task.id, period, claimToken, null)
+                    await services?.schedule?.settleRun?.(task.id, period, claimToken, null)
                 } catch (settleError) {
                     console.error(`Failed to release scheduled task [${task.id}] claim:`, settleError)
                 }
@@ -374,7 +385,7 @@ export class ScheduledTaskScheduler {
             }
             useScheduledTasksStore.getState().updateTask(task.id, { lastRunError: message })
             if (task.lastRunError !== message) {
-                this.services?.ui?.pushToast?.(`Scheduled task [${task.title}] failed to start: ${message}`, 'error')
+                services?.ui?.pushToast?.(`Scheduled task [${task.title}] failed to start: ${message}`, 'error')
             }
         }
     }
@@ -382,9 +393,32 @@ export class ScheduledTaskScheduler {
 
 export const globalScheduledScheduler = new ScheduledTaskScheduler()
 
-export function initScheduledTaskRunner(services?: HostServices | null): () => void {
-    globalScheduledScheduler.start(services)
+const runnerOwners = new Map<symbol, { services: HostServices | null; generation: number }>()
+
+function latestRunnerServices(): HostServices | null {
+    let latest: { services: HostServices | null; generation: number } | undefined
+    for (const owner of runnerOwners.values()) {
+        if (!latest || owner.generation >= latest.generation) latest = owner
+    }
+    return latest?.services ?? null
+}
+
+export function initScheduledTaskRunner(services?: HostServices | null, generation = 0): () => Promise<void> {
+    const owner = Symbol('scheduled-runner-owner')
+    runnerOwners.set(owner, { services: services ?? null, generation })
+    globalScheduledScheduler.start(latestRunnerServices())
+    let releasePromise: Promise<void> | undefined
     return () => {
-        globalScheduledScheduler.stop()
+        if (releasePromise) return releasePromise
+        runnerOwners.delete(owner)
+        if (runnerOwners.size > 0) {
+            globalScheduledScheduler.setServices(latestRunnerServices())
+        } else {
+            globalScheduledScheduler.stop()
+            globalScheduledScheduler.setServices(null)
+        }
+        // The host must not release an old context while its dispatch is still active.
+        releasePromise = globalScheduledScheduler.waitForIdle()
+        return releasePromise
     }
 }

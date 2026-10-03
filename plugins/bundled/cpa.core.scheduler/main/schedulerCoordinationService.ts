@@ -27,6 +27,7 @@ function mergeProgress(incoming: ScheduledTaskItem, current?: ScheduledTaskItem)
 
 export class SchedulerCoordinationService {
     private tasks: ScheduledTaskItem[] = []
+    private disposed = false
     private hydrated = false
     private hydrationPromise: Promise<void> | null = null
     private saveQueue: Promise<void> = Promise.resolve()
@@ -44,17 +45,17 @@ export class SchedulerCoordinationService {
     }
 
     private async ensureHydrated(): Promise<void> {
+        if (this.disposed) throw new Error('Scheduler coordination service is disposed')
         if (this.hydrated || !this.store) return
         this.hydrationPromise ??= (async () => {
-            try {
-                const loaded = await this.store!.loadTasks()
-                if (Array.isArray(loaded)) this.tasks = [...loaded]
-            } catch {
-                // Keep in-memory tasks when durable store is unavailable (e.g. still staged).
-            } finally {
-                this.hydrated = true
-            }
-        })()
+            const loaded = await this.store!.loadTasks()
+            if (this.disposed) throw new Error('Scheduler coordination service is disposed')
+            if (!Array.isArray(loaded)) throw new Error('Invalid schedule list')
+            this.tasks = [...loaded]
+            this.hydrated = true
+        })().finally(() => {
+            this.hydrationPromise = null
+        })
         await this.hydrationPromise
     }
 
@@ -157,6 +158,7 @@ export class SchedulerCoordinationService {
     }
 
     dispose(): void {
+        this.disposed = true
         this.tasks = []
         this.hydrated = false
         this.hydrationPromise = null

@@ -733,6 +733,75 @@ describe('scheduledScheduler', () => {
             scheduler.stop()
         })
 
+        it('pins in-flight services and drains the old owner without stopping the new owner', async () => {
+            vi.useFakeTimers()
+            const now = new Date(2026, 8, 10, 10)
+            const task = {
+                id: 'generation-task', title: 'Generation task', schedule: 'Daily 09:00:00',
+                prompt: 'Test', enabled: true, createdAt: 1000,
+            }
+            useScheduledTasksStore.getState().hydrate([task])
+            let resolveClaim!: (token: string) => void
+            const settle = vi.fn().mockResolvedValue(undefined)
+            const oldServices = { ...mockServices, schedule: {
+                list: vi.fn(), save: vi.fn(),
+                claimRun: vi.fn(() => new Promise<string>((resolve) => { resolveClaim = resolve })),
+                settleRun: settle,
+            } }
+            const nextSend = vi.fn().mockResolvedValue('next-session')
+            const nextSettle = vi.fn().mockResolvedValue(undefined)
+            const nextServices = { ...mockServices, agentRun: { send: nextSend }, schedule: {
+                list: vi.fn(), save: vi.fn(), claimRun: vi.fn().mockResolvedValue('next-token'), settleRun: nextSettle,
+            } } as unknown as HostServices
+            const releaseOld = initScheduledTaskRunner(oldServices)
+            const pendingTick = globalScheduledScheduler.tick(now)
+            const releaseNext = initScheduledTaskRunner(nextServices)
+            let released = false
+            const draining = releaseOld().then(() => { released = true })
+            await Promise.resolve()
+            expect(released).toBe(false)
+            expect(await globalScheduledScheduler.tick(now)).toEqual([])
+            resolveClaim('old-token')
+            await pendingTick
+            await draining
+            expect(sendMock).toHaveBeenCalledTimes(1)
+            expect(settle).toHaveBeenCalledWith(task.id, expect.any(Number), 'old-token', now.getTime())
+            expect(nextSend).not.toHaveBeenCalled()
+            expect(nextSettle).not.toHaveBeenCalled()
+            expect(globalScheduledScheduler.isRunning()).toBe(true)
+            useScheduledTasksStore.getState().hydrate([task])
+            await globalScheduledScheduler.tick(now)
+            expect(nextSend).not.toHaveBeenCalled()
+            await globalScheduledScheduler.tick(new Date(2026, 8, 11, 10))
+            expect(nextSend).toHaveBeenCalledTimes(1)
+            expect(nextSettle).toHaveBeenCalledTimes(1)
+            await releaseOld()
+            expect(globalScheduledScheduler.isRunning()).toBe(true)
+            await releaseNext()
+            expect(vi.getTimerCount()).toBe(0)
+        })
+
+        it('prefers generation order over hydration order and restores the remaining owner', async () => {
+            vi.useFakeTimers()
+            useScheduledTasksStore.getState().hydrate([{
+                id: 'late-load', title: 'Late load', schedule: 'Daily 09:00:00',
+                prompt: 'Test', enabled: true, createdAt: 1000,
+            }])
+            const nextSend = vi.fn().mockResolvedValue('next-session')
+            const nextServices = { ...mockServices, agentRun: { send: nextSend } } as unknown as HostServices
+            const releaseNext = initScheduledTaskRunner(nextServices, 2)
+            const releaseOld = initScheduledTaskRunner(mockServices, 1)
+            await globalScheduledScheduler.tick(new Date(2026, 8, 10, 10))
+            expect(nextSend).toHaveBeenCalledTimes(1)
+            expect(sendMock).not.toHaveBeenCalled()
+            await releaseNext()
+            expect(globalScheduledScheduler.isRunning()).toBe(true)
+            await globalScheduledScheduler.tick(new Date(2026, 8, 11, 10))
+            expect(sendMock).toHaveBeenCalledTimes(1)
+            await releaseOld()
+            expect(vi.getTimerCount()).toBe(0)
+        })
+
         it('initScheduledTaskRunner starts and cleans up global scheduler', () => {
             const cleanup = initScheduledTaskRunner(mockServices)
             expect(globalScheduledScheduler.isRunning()).toBe(true)

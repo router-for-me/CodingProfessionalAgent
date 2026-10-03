@@ -9,6 +9,7 @@ describe('cpa.core.scheduler main entry', () => {
             manifest,
         })
 
+        Object.assign(harness.context, { capabilityClient: { invoke: vi.fn().mockResolvedValue([]) } })
         await harness.activate()
 
         const services = harness.registrations.filter((r) => r.kind === 'service')

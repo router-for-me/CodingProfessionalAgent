@@ -254,26 +254,6 @@ export function ScheduledView() {
         hostServices?.sessions?.setCurrentSessionId?.(null)
     }, [hostServices])
 
-    useEffect(() => {
-        let active = true
-        void (async () => {
-            const scheduleService = hostServices?.schedule
-            if (scheduleService?.list) {
-                try {
-                    const loadedTasks = await scheduleService.list()
-                    if (active && Array.isArray(loadedTasks)) {
-                        const projects = hostServices?.projects?.getSnapshot?.() ?? []
-                        useScheduledTasksStore.getState().hydrate(loadedTasks as ScheduledTask[], projects)
-                    }
-                } catch (err) {
-                    console.error('[ScheduledView] Failed to load scheduled tasks:', err)
-                }
-            }
-        })()
-        return () => {
-            active = false
-        }
-    }, [hostServices])
 
     useEffect(() => {
         setCurrentPage(1)

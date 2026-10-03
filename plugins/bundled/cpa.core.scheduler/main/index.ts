@@ -21,7 +21,7 @@ export const schedulerMainEntry = definePluginEntry({
         const coordinationService = new SchedulerCoordinationService(emitEvent, {
             async loadTasks() {
                 const client = context.capabilityClient
-                if (!client?.invoke) return []
+                if (!client?.invoke) throw new Error('Schedule storage is not ready')
                 const loaded = await client.invoke('kvstore:get', ['schedule'])
                 return Array.isArray(loaded) ? (loaded as ScheduledTaskItem[]) : []
             },

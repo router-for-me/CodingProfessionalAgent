@@ -17,6 +17,19 @@ afterEach(() => {
 })
 
 describe('SchedulerCoordinationService run claims', () => {
+    it('propagates hydration failure and retries with a single shared durable read', async () => {
+        const loadTasks = vi.fn().mockRejectedValueOnce(new Error('KV unavailable')).mockResolvedValue([task])
+        const saveTasks = vi.fn()
+        const service = new SchedulerCoordinationService(vi.fn(), { loadTasks, saveTasks })
+        await expect(service.save([])).rejects.toThrow('KV unavailable')
+        expect(saveTasks).not.toHaveBeenCalled()
+        const lists = await Promise.all([service.list(), service.list()])
+        expect(lists).toEqual([[task], [task]])
+        expect(loadTasks).toHaveBeenCalledTimes(2)
+        await service.list()
+        expect(loadTasks).toHaveBeenCalledTimes(2)
+    })
+
     it('allows only one renderer to dispatch a period and preserves completion across stale saves', async () => {
         const saveTasks = vi.fn().mockResolvedValue(undefined)
         const service = new SchedulerCoordinationService(vi.fn(), {

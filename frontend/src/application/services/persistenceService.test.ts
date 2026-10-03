@@ -192,6 +192,15 @@ describe('persist pure helpers', () => {
     expect(useMessageStore.getState().getEntries(sessionId)).toEqual([entries[0]])
   })
 
+    it('persists the schedule association with session data', async () => {
+        const sessionId = 'scheduled-session'
+        useSessionStore.setState({ sessions: [{ id: sessionId, title: 'Scheduled', scheduleId: 'task-1' } as any] })
+        const SessionSet = vi.fn().mockResolvedValue('revision-1')
+        setHostBridge({ SessionSet } as any)
+        await saveSessionData(sessionId, [])
+        expect(SessionSet).toHaveBeenCalledWith(sessionId, expect.objectContaining({ scheduleId: 'task-1' }))
+    })
+
   it('passes the read baseline and explicit removals for retry and clear, advancing after each save', async () => {
     const sessionId = 'save-edit'
     const entries = [assistant('keep', sessionId, 'done', 'keep'), assistant('retry', sessionId, 'done', 'retry')]

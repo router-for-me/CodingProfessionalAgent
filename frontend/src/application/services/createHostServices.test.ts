@@ -353,6 +353,18 @@ describe('createHostServices', () => {
         expect(services.ui?.getComposerDraftReferences?.('session:sess-1')).toEqual([])
     })
 
+    it('rejects unavailable schedule storage rather than treating it as an empty list', async () => {
+        setHostBridge({
+            ScheduleList: vi.fn().mockRejectedValue(new Error('RPC not ready')),
+            KVStoreGet: vi.fn().mockRejectedValue(new Error('KV not ready')),
+        } as any)
+        const capabilityClient = { invoke: vi.fn().mockRejectedValue(new Error('RPC not ready')) }
+        const services = createHostServices({ capabilityClient: capabilityClient as any })
+        await expect(services.schedule.list()).rejects.toThrow('Schedule storage is not ready')
+        capabilityClient.invoke.mockResolvedValue([])
+        await expect(services.schedule.list()).resolves.toEqual([])
+    })
+
     it('delegates schedule operations through ScheduleService', async () => {
         const capabilityClient = {
             invoke: vi.fn().mockImplementation((method: string) => {

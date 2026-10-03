@@ -1,5 +1,5 @@
 import i18n from '@/i18n'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import '@/i18n'
@@ -395,7 +395,7 @@ describe('ScheduledView', () => {
         }
     })
 
-    it('hydrates tasks from hostServices.schedule on mount when store is initially empty', async () => {
+    it('renders lifecycle-loaded tasks without fetching on page mount', async () => {
         const persistedTasks = [
             {
                 id: 'persisted-1',
@@ -407,6 +407,7 @@ describe('ScheduledView', () => {
                 createdAt: Date.now(),
             },
         ]
+        useScheduledTasksStore.getState().hydrate(persistedTasks)
         const listMock = vi.fn().mockResolvedValue(persistedTasks)
         const servicesWithSchedule = {
             ...mockServices,
@@ -416,7 +417,7 @@ describe('ScheduledView', () => {
             },
         }
 
-        render(
+        const { unmount } = render(
             <HostServicesProvider services={servicesWithSchedule}>
                 <ScheduledView />
             </HostServicesProvider>,
@@ -425,7 +426,20 @@ describe('ScheduledView', () => {
         await waitFor(() => {
             expect(screen.getByText('Persisted Schedule Task')).toBeInTheDocument()
         })
-        expect(listMock).toHaveBeenCalled()
+        act(() => {
+            useScheduledTasksStore.getState().updateTask('persisted-1', { enabled: false, status: 'paused' })
+        })
+        expect(useScheduledTasksStore.getState().tasks[0].enabled).toBe(false)
+        act(() => { useScheduledTasksStore.getState().deleteTask('persisted-1') })
+        unmount()
+        render(
+            <HostServicesProvider services={servicesWithSchedule}>
+                <ScheduledView />
+            </HostServicesProvider>,
+        )
+        expect(useScheduledTasksStore.getState().tasks).toEqual([])
+        expect(screen.queryByText('Persisted Schedule Task')).not.toBeInTheDocument()
+        expect(listMock).not.toHaveBeenCalled()
     })
 
     it('correctly localizes task list and filter tabs in zh-CN locale', async () => {

@@ -999,6 +999,7 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
             if (bridge?.KVStoreGet) {
                 try {
                     const data = await bridge.KVStoreGet('schedule')
+                    if (data == null) return []
                     if (Array.isArray(data)) {
                         return data as ScheduledTaskItem[]
                     }
@@ -1008,6 +1009,9 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
                         console.error('Failed to load schedule from KV store:', err)
                     }
                 }
+            }
+            if (capabilityClient || bridge) {
+                throw new Error('Schedule storage is not ready')
             }
             return fallbackScheduleTasks
         },
