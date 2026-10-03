@@ -1,10 +1,12 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as os from 'node:os'
 import * as crypto from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { generateReleaseManifest } from '../scripts/generate-release-manifest.mjs'
+
+vi.mock('node:fs', async (importOriginal) => ({ ...await importOriginal<typeof import('node:fs')>() }))
 
 describe('generateReleaseManifest', () => {
     let tempDir: string
@@ -28,6 +30,38 @@ describe('generateReleaseManifest', () => {
             size: buf.length,
         }
     }
+
+    it.each([false, true])('rebuilds paired metadata without an old manifest (reverse=%s)', (reverse) => {
+        createDummyFile('app-update-1.2.3.asar', 'raw')
+        const compressed = createDummyFile('app-update-1.2.3.asar.br', 'compressed')
+        const original = fs.readdirSync
+        const spy = vi.spyOn(fs, 'readdirSync').mockImplementation(((...args: any[]) => {
+            const files = (original as any)(...args)
+            return reverse ? files.reverse() : files
+        }) as any)
+        try {
+            const manifest = generateReleaseManifest({ tag: 'v1.2.3', assetsDir: tempDir, nativeRequirements: { modules: '149' } })
+            expect(manifest.asar.compressed).toEqual({
+                encoding: 'br', filename: 'app-update-1.2.3.asar.br',
+                url: expect.stringContaining('/v1.2.3/app-update-1.2.3.asar.br'), ...compressed,
+            })
+        } finally { spy.mockRestore() }
+    })
+
+    it('preserves same-release metadata for installer-only merges but drops it on ASAR replacement or version changes', () => {
+        createDummyFile('app-update-1.2.3.asar', 'raw')
+        createDummyFile('app-update-1.2.3.asar.br', 'compressed')
+        const options = { tag: 'v1.2.3', assetsDir: tempDir, nativeRequirements: { modules: '149' } }
+        const existing = generateReleaseManifest(options)
+        fs.unlinkSync(path.join(tempDir, 'app-update-1.2.3.asar'))
+        fs.unlinkSync(path.join(tempDir, 'app-update-1.2.3.asar.br'))
+        createDummyFile('installer.exe', 'installer')
+        expect(generateReleaseManifest({ ...options, existingManifest: existing }).asar).toEqual(existing.asar)
+        createDummyFile('app-update-1.2.3.asar', 'replacement')
+        expect(generateReleaseManifest({ ...options, existingManifest: existing }).asar.compressed).toBeUndefined()
+        fs.unlinkSync(path.join(tempDir, 'app-update-1.2.3.asar'))
+        expect(generateReleaseManifest({ ...options, tag: 'v2.0.0', existingManifest: existing }).asar).toBeUndefined()
+    })
 
     it('generates a complete release-manifest.json matching all platform assets', () => {
         const asarInfo = createDummyFile('app-update-1.2.3.asar', 'dummy asar content')

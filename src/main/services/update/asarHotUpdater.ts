@@ -2,6 +2,8 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as https from 'node:https'
 import * as http from 'node:http'
+import { createBrotliDecompress } from 'node:zlib'
+import { selectAsarDownloadAsset } from './asarAsset.js'
 import { Transform } from 'node:stream'
 import { pipeline, finished } from 'node:stream/promises'
 import type { AsarAsset, DownloadProgress } from '../../../shared/updateTypes.js'
@@ -42,31 +44,66 @@ export class AsarHotUpdater {
         fs.mkdirSync(pendingDir, { recursive: true })
         fs.mkdirSync(versionsDir, { recursive: true })
 
-        const tempFilePath = path.join(pendingDir, `app-update-${version}.tmp`)
+        const taskDir = fs.mkdtempSync(path.join(pendingDir, 'asar-'))
+        const tempFilePath = path.join(taskDir, 'app.asar.tmp')
         const targetAsarPath = path.join(versionsDir, 'app.asar')
 
-        let downloadSuccess = false
+        const selectedAsset = selectAsarDownloadAsset(asset)
+        const compressed = selectedAsset !== asset
+        const downloadPath = compressed ? tempFilePath + '.br' : tempFilePath
         try {
-            await this.downloadFileWithProgress(asset.url, tempFilePath, asset.size, onProgress, abortSignal)
-
-            if (abortSignal?.aborted) {
-                throw new Error('Operation aborted')
+            const validateMetadata = (candidate: AsarAsset, label: string) => {
+                if (!Number.isSafeInteger(candidate.size) || candidate.size < 0 ||
+                    typeof candidate.sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(candidate.sha256) ||
+                    typeof candidate.url !== 'string' || !candidate.url ||
+                    typeof candidate.filename !== 'string' || !candidate.filename) {
+                    throw new Error('Invalid ' + label + ' metadata')
+                }
             }
+            validateMetadata(asset, 'ASAR')
+            validateMetadata(selectedAsset, compressed ? 'compressed ASAR' : 'ASAR')
+            await this.downloadFileWithProgress(selectedAsset.url, downloadPath, selectedAsset.size, onProgress, abortSignal)
 
-            const isValid = await verifyFileSha256(tempFilePath, asset.sha256)
-            if (!isValid) {
+            const verify = async (file: string, expected: AsarAsset, label: string) => {
+                if (abortSignal?.aborted) throw new Error('Operation aborted')
+                if (fs.statSync(file).size !== expected.size) {
+                    throw new Error('Size verification failed for ' + label)
+                }
+                if (!await verifyFileSha256(file, expected.sha256, abortSignal)) {
+                    throw new Error('SHA-256 verification failed for ' + label)
+                }
+                if (abortSignal?.aborted) throw new Error('Operation aborted')
+            }
+            await verify(downloadPath, selectedAsset, compressed ? 'compressed ASAR' : 'version ' + version)
+            if (compressed) {
+                let outputBytes = 0
+                const limit = new Transform({
+                    transform(chunk: Buffer, _encoding, callback) {
+                        outputBytes += chunk.length
+                        if (outputBytes > asset.size) {
+                            callback(new Error('Decompressed ASAR exceeds expected size'))
+                            return
+                        }
+                        callback(null, chunk)
+                    },
+                })
                 try {
-                    fs.unlinkSync(tempFilePath)
-                } catch {}
-                throw new Error(`SHA-256 verification failed for version ${version}`)
+                    await pipeline(
+                        fs.createReadStream(downloadPath),
+                        createBrotliDecompress(),
+                        limit,
+                        fs.createWriteStream(tempFilePath),
+                        { signal: abortSignal },
+                    )
+                } catch (err) {
+                    if (abortSignal?.aborted) throw new Error('Operation aborted')
+                    throw new Error('ASAR Brotli decompression failed: ' + (err as Error).message)
+                }
+                await verify(tempFilePath, asset, 'version ' + version)
             }
 
-            if (abortSignal?.aborted) {
-                throw new Error('Operation aborted')
-            }
-
+            if (abortSignal?.aborted) throw new Error('Operation aborted')
             fs.renameSync(tempFilePath, targetAsarPath)
-            downloadSuccess = true
             const relativePath = path.join('versions', version, 'app.asar')
             this.storage.recordPendingVersion(version, relativePath)
 
@@ -76,11 +113,9 @@ export class AsarHotUpdater {
                 asarAbsolutePath: targetAsarPath,
             }
         } finally {
-            if (fs.existsSync(tempFilePath)) {
-                try {
-                    fs.unlinkSync(tempFilePath)
-                } catch {}
-            }
+            try {
+                fs.rmSync(taskDir, { recursive: true, force: true })
+            } catch {}
         }
     }
 

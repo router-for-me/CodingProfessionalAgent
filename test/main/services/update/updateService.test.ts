@@ -113,6 +113,27 @@ describe('UpdateService', () => {
         } catch {}
     })
 
+    it.each(['br', 'unknown'])('uses selected wire size and waits for verification before ready (%s)', async (encoding) => {
+        const manifest = structuredClone(sampleHotManifest)
+        manifest.asar!.compressed = { encoding: encoding as 'br', filename: 'app.asar.br', url: 'https://example.com/app.asar.br', size: 100, sha256: '0'.repeat(64) }
+        const size = encoding === 'br' ? 100 : 2048
+        let complete!: () => void
+        mockHotUpdater.downloadAndStage.mockImplementation(async (_asset: unknown, _version: string, progress: (p: DownloadProgress) => void) => {
+            progress({ percent: 100, transferredBytes: size, totalBytes: size, bytesPerSecond: size })
+            await new Promise<void>((resolve) => { complete = resolve })
+        })
+        const emitEvent = vi.fn()
+        const custom = new UpdateService({ storage, hotUpdater: mockHotUpdater, currentVersion: '1.0.0', electronVersion: '44.0.0', nodeAbiVersion: '130', manifestFetcher: async () => manifest, emitEvent, enableBackgroundCheck: false })
+        expect((await custom.checkForUpdates()).packageSize).toBe(size)
+        const task = custom.startDownload()
+        expect(custom.getStatusSnapshot()).toMatchObject({ phase: 'downloading', packageSize: size, downloadProgress: { percent: 100, totalBytes: size } })
+        expect(JSON.parse(emitEvent.mock.calls.at(-1)![0].data)).toEqual(custom.getStatusSnapshot())
+        complete()
+        await task
+        expect(custom.getStatusSnapshot().phase).toBe('ready')
+        custom.dispose()
+    })
+
     it('starts at idle phase with current version', () => {
         const snapshot = service.getStatusSnapshot()
         expect(snapshot.phase).toBe('idle')

@@ -1,6 +1,8 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as crypto from 'node:crypto'
+import { createBrotliCompress, constants } from 'node:zlib'
+import { pipeline } from 'node:stream/promises'
 import { execSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
@@ -464,9 +466,20 @@ export async function buildUpdatePatch(options = {}) {
     }
 
     // 3. Calculate SHA-256 and size
-    const asarBuf = fs.readFileSync(asarPath)
-    const sha256 = crypto.createHash('sha256').update(asarBuf).digest('hex')
-    const size = asarBuf.length
+    const hashFile = async (file) => {
+        const hash = crypto.createHash('sha256')
+        for await (const chunk of fs.createReadStream(file)) hash.update(chunk)
+        return hash.digest('hex')
+    }
+    const compressedPath = asarPath + '.br'
+    await pipeline(
+        fs.createReadStream(asarPath),
+        createBrotliCompress({ params: { [constants.BROTLI_PARAM_QUALITY]: 6 } }),
+        fs.createWriteStream(compressedPath),
+    )
+    const sha256 = await hashFile(asarPath)
+    const size = fs.statSync(asarPath).size
+    const compressedSha256 = await hashFile(compressedPath)
 
     console.log(`[Patch Builder] Asar generated: size=${size} bytes, sha256=${sha256}`)
 
@@ -488,6 +501,13 @@ export async function buildUpdatePatch(options = {}) {
             url: `https://github.com/${repo}/releases/download/v${version}/app-update-${version}.asar`,
             sha256,
             size,
+            compressed: {
+                encoding: 'br',
+                filename: path.basename(compressedPath),
+                url: 'https://github.com/' + repo + '/releases/download/v' + version + '/' + path.basename(compressedPath),
+                size: fs.statSync(compressedPath).size,
+                sha256: compressedSha256,
+            },
         },
         installers: {},
     }

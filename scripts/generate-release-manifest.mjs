@@ -103,6 +103,10 @@ export function generateReleaseManifest(options = {}) {
         }
     }
 
+    // Never carry assets or compression metadata across releases.
+    if (existing?.version !== version) existing = null
+
+    const compressedAssets = new Map()
     const manifest = {
         version: existing?.version || version,
         releaseDate: new Date().toISOString(),
@@ -145,7 +149,9 @@ export function generateReleaseManifest(options = {}) {
         const url = `https://github.com/${repo}/releases/download/${rawTag}/${file}`
         const isArm = file.includes('arm64') || file.includes('aarch64')
 
-        if (file.endsWith('.asar')) {
+        if (file.endsWith('.asar.br')) {
+            compressedAssets.set(file.slice(0, -3), { encoding: 'br', filename: file, url, sha256, size })
+        } else if (file.endsWith('.asar')) {
             manifest.asar = { filename: file, url, sha256, size }
         } else if (file.endsWith('.dmg')) {
             const key = isArm ? 'darwin-arm64' : 'darwin-x64'
@@ -162,6 +168,11 @@ export function generateReleaseManifest(options = {}) {
                 manifest.installers[key] = { filename: file, url, sha256, size }
             }
         }
+    }
+
+    // Pair after scanning so enumeration order cannot overwrite compression metadata.
+    if (manifest.asar && compressedAssets.has(manifest.asar.filename)) {
+        manifest.asar = { ...manifest.asar, compressed: compressedAssets.get(manifest.asar.filename) }
     }
 
     // Validate that at least one asset was detected

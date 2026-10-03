@@ -39,6 +39,13 @@ describe('checksum utils', () => {
         expect(isValid).toBe(false)
     })
 
+    it('rejects a pre-aborted signal without reading the file', async () => {
+        const controller = new AbortController()
+        controller.abort()
+        await expect(verifyFileSha256(path.join(tempDir, 'missing'), 'hash', controller.signal)).rejects.toThrow('aborted')
+        await expect(calculateFileSha256(tempFile, controller.signal)).rejects.toThrow('aborted')
+    })
+
     it('handles uppercase SHA-256 string comparison', async () => {
         const expected = crypto.createHash('sha256').update('Hello CPA Update World!').digest('hex')
         const isValid = await verifyFileSha256(tempFile, expected.toUpperCase())

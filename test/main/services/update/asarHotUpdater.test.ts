@@ -4,6 +4,7 @@ import * as path from 'node:path'
 import * as os from 'node:os'
 import * as http from 'node:http'
 import * as crypto from 'node:crypto'
+import { brotliCompressSync } from 'node:zlib'
 import { AsarHotUpdater } from '../../../../src/main/services/update/asarHotUpdater.js'
 import { UpdateStateStorage } from '../../../../src/main/services/update/updateStateStorage.js'
 import type { AsarAsset, DownloadProgress } from '../../../../src/shared/updateTypes.js'
@@ -30,7 +31,11 @@ describe('AsarHotUpdater', () => {
 
         server = http.createServer((req, res) => {
             const parsedUrl = new URL(req.url || '/', 'http://127.0.0.1')
-            if (parsedUrl.pathname === '/app.asar') {
+            if (parsedUrl.pathname === '/app.asar.br') {
+                const compressed = brotliCompressSync(mockAsarData)
+                res.writeHead(200, { 'Content-Length': compressed.length.toString() })
+                res.end(compressed)
+            } else if (parsedUrl.pathname === '/app.asar') {
                 res.writeHead(200, {
                     'Content-Type': 'application/octet-stream',
                     'Content-Length': mockAsarData.length.toString(),
@@ -178,6 +183,25 @@ describe('AsarHotUpdater', () => {
         expect(lastProgress.percent).toBe(100)
         expect(lastProgress.transferredBytes).toBe(mockAsarData.length)
         expect(lastProgress.totalBytes).toBe(mockAsarData.length)
+    })
+
+    it('downloads Brotli bytes over HTTP and reports wire progress before staging raw bytes', async () => {
+        const compressed = brotliCompressSync(mockAsarData)
+        const asset: AsarAsset = {
+            filename: 'app.asar', url: serverBaseUrl + '/error-500', size: mockAsarData.length, sha256: mockAsarSha256,
+            compressed: {
+                encoding: 'br', filename: 'app.asar.br', url: serverBaseUrl + '/app.asar.br',
+                size: compressed.length, sha256: crypto.createHash('sha256').update(compressed).digest('hex'),
+            },
+        }
+        const progress: DownloadProgress[] = []
+        const result = await updater.downloadAndStage(asset, '1.1.0', (item) => {
+            progress.push(item)
+            expect(storage.loadState().pendingVersion).toBeNull()
+        })
+        expect(fs.readFileSync(result.asarAbsolutePath)).toEqual(mockAsarData)
+        expect(progress.at(-1)).toMatchObject({ percent: 100, totalBytes: compressed.length, transferredBytes: compressed.length })
+        expect(fs.readdirSync(path.join(tempDir, 'pending'))).toEqual([])
     })
 
     it('follows HTTP redirect before staging', async () => {
@@ -496,7 +520,7 @@ describe('AsarHotUpdater', () => {
         expect(state.pendingVersion).toBeNull()
     })
 
-    it('resumes partial download when temporary file exists and server returns 206 Partial Content', async () => {
+    it('ignores another task temporary file when downloading from a resumable server', async () => {
         const pendingDir = path.join(tempDir, 'pending')
         fs.mkdirSync(pendingDir, { recursive: true })
         const tempFilePath = path.join(pendingDir, 'app-update-1.5.0.tmp')
@@ -519,6 +543,7 @@ describe('AsarHotUpdater', () => {
             (progress) => progressList.push(progress),
         )
 
+        expect(fs.readFileSync(tempFilePath)).toEqual(mockAsarData.subarray(0, partialSize))
         expect(result.version).toBe('1.5.0')
         expect(fs.existsSync(result.asarAbsolutePath)).toBe(true)
 
@@ -528,7 +553,7 @@ describe('AsarHotUpdater', () => {
         expect(progressList[progressList.length - 1].percent).toBe(100)
     })
 
-    it('overwrites from 0 when temporary file exists but server returns 200 OK (ignores Range)', async () => {
+    it('preserves another task temporary file when the server returns 200 OK', async () => {
         const pendingDir = path.join(tempDir, 'pending')
         fs.mkdirSync(pendingDir, { recursive: true })
         const tempFilePath = path.join(pendingDir, 'app-update-1.6.0.tmp')
@@ -545,6 +570,7 @@ describe('AsarHotUpdater', () => {
         }
 
         const result = await updater.downloadAndStage(asset, '1.6.0')
+        expect(fs.readFileSync(tempFilePath)).toEqual(mockAsarData.subarray(0, partialSize))
         expect(result.version).toBe('1.6.0')
         expect(fs.existsSync(result.asarAbsolutePath)).toBe(true)
 

@@ -3,6 +3,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as os from 'node:os'
 import * as crypto from 'node:crypto'
+import { brotliDecompressSync } from 'node:zlib'
 import * as asarModule from '@electron/asar'
 import { createRequire } from 'node:module'
 import { buildUpdatePatch } from '../scripts/build-update-patch.mjs'
@@ -190,6 +191,7 @@ describe('buildUpdatePatch', () => {
         const expectedSha256 = crypto.createHash('sha256').update(asarBuf).digest('hex')
         expect(result.sha256).toBe(expectedSha256)
         expect(result.size).toBe(asarBuf.length)
+        expect(brotliDecompressSync(fs.readFileSync(result.asarPath + '.br'))).toEqual(asarBuf)
 
         // Verify initial manifest
         const manifest = JSON.parse(fs.readFileSync(result.manifestPath, 'utf8'))
@@ -199,6 +201,13 @@ describe('buildUpdatePatch', () => {
             url: expect.stringContaining('/app-update-2.5.0.asar'),
             sha256: expectedSha256,
             size: asarBuf.length,
+            compressed: {
+                encoding: 'br',
+                filename: 'app-update-2.5.0.asar.br',
+                url: expect.stringContaining('/app-update-2.5.0.asar.br'),
+                size: fs.statSync(result.asarPath + '.br').size,
+                sha256: crypto.createHash('sha256').update(fs.readFileSync(result.asarPath + '.br')).digest('hex'),
+            },
         })
         expect(manifest.nativeRequirements).toEqual({
             electron: '44.0.0',

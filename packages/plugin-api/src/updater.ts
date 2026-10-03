@@ -8,6 +8,13 @@ export interface NativeRequirements {
 }
 
 export interface AsarAsset {
+    compressed?: {
+        encoding: 'br'
+        filename: string
+        url: string
+        size: number
+        sha256: string
+    }
     filename: string
     url: string
     sha256: string

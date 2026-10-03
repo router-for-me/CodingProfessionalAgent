@@ -235,7 +235,7 @@ jobs:
         run: |
           mkdir -p release-assets
           cd release-assets
-          gh release download "$TAG" --pattern "*.dmg" --pattern "*.exe" --pattern "*.AppImage" --pattern "*.tar.gz" --pattern "*.zip" --pattern "*.asar" --clobber || true
+          gh release download "$TAG" --pattern "*.dmg" --pattern "*.exe" --pattern "*.AppImage" --pattern "*.tar.gz" --pattern "*.zip" --pattern "*.asar" --pattern "*.asar.br" --clobber || true
           rm -f SHA256SUMS.txt release-manifest.json
           for file in *; do
             if [ -f "$file" ]; then

@@ -16,6 +16,7 @@ import type {
 } from '../../../shared/updateTypes.js'
 import type { NativeEvent } from '../../../shared/types.js'
 import { UpdateStateStorage } from './updateStateStorage.js'
+import { selectAsarDownloadAsset } from './asarAsset.js'
 import { AsarHotUpdater } from './asarHotUpdater.js'
 import { FullUpdateProvider } from './fullUpdateProvider.js'
 import { decideUpdateType } from './updateDecision.js'
@@ -157,7 +158,7 @@ export class UpdateService {
         let packageSize: number | undefined
         if (manifest) {
             if (updateType === 'hot') {
-                packageSize = manifest.asar?.size
+                packageSize = manifest.asar ? selectAsarDownloadAsset(manifest.asar).size : undefined
             } else if (updateType === 'full') {
                 const installer = this.fullProvider.resolveInstaller(manifest)
                 packageSize = installer?.size

@@ -70,7 +70,7 @@ export function findTargetArtifacts(dir) {
 
         const ext = path.extname(file)
         const isTarget =
-            ['.dmg', '.exe', '.AppImage', '.zip', '.asar'].includes(ext) || file.endsWith('.tar.gz')
+            ['.dmg', '.exe', '.AppImage', '.zip', '.asar'].includes(ext) || file.endsWith('.tar.gz') || file.endsWith('.asar.br')
 
         if (isTarget) {
             targetFiles.push(file)

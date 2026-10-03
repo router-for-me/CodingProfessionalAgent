@@ -26,6 +26,8 @@ describe('publishReleaseArtifacts', () => {
             fs.writeFileSync(path.join(tempDir, 'Coding-Professional-Agent-1.0.0-mac-amd64.zip'), 'zip')
             fs.writeFileSync(path.join(tempDir, 'app-update-1.0.0.asar'), 'asar')
 
+            fs.writeFileSync(path.join(tempDir, 'app-update-1.0.0.asar.br'), 'brotli')
+
             // Metadata and non-distribution files
             fs.writeFileSync(path.join(tempDir, 'release-manifest.json'), '{}')
             fs.writeFileSync(path.join(tempDir, 'SHA256SUMS.txt'), 'sums')
@@ -42,6 +44,7 @@ describe('publishReleaseArtifacts', () => {
                 'Coding-Professional-Agent-1.0.0-mac-amd64.zip',
                 'Coding-Professional-Agent-1.0.0-win-amd64.exe',
                 'app-update-1.0.0.asar',
+                'app-update-1.0.0.asar.br',
             ])
         })
 
