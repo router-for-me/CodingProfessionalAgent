@@ -6,12 +6,13 @@ import {
     cn,
     useActiveRun,
     useHostServices,
+    useModelCatalog,
     useSessions,
     useSettings,
     useTranslation,
     useWorkspaceVisible,
 } from '@cpa/plugin-ui'
-import type { ModelCatalogEntry, ModelReasoningOption, Speed } from '@cpa/plugin-api'
+import type { ModelReasoningOption, Speed } from '@cpa/plugin-api'
 import { AdvancedMenu, type ActiveSubmenu } from './AdvancedMenu.js'
 import { ModelMenu } from './ModelMenu.js'
 import {
@@ -70,9 +71,11 @@ export function ModelSelect({
         opts: { modelId?: string; reasoningEffort?: string; speed?: Speed },
     ) => services?.sessions?.setSessionRuntimeSettings?.(sId, opts)
 
-    const rawCatalogModels = (services?.models?.getModels?.() ?? []) as ModelCatalogEntry[]
-    const catalogStatus = services?.models?.getStatus?.() ?? 'ready'
-    const catalogError = services?.models?.getError?.() ?? null
+    const {
+        models: rawCatalogModels,
+        status: catalogStatus,
+        error: catalogError,
+    } = useModelCatalog()
 
     const [open, setOpen] = useState(false)
     const [view, setView] = useState<'quick' | 'advanced'>('quick')
@@ -174,13 +177,14 @@ export function ModelSelect({
 
     const catalogNotice = getCatalogNotice(
         t,
-        catalogStatus as any,
+        catalogStatus,
         rawCatalogModels.length,
         catalogError,
     )
 
     useEffect(() => {
-        if (catalogModels.length === 0 || disabled) return
+        if ((catalogStatus !== 'ready' && catalogStatus !== 'success') ||
+            catalogError || catalogModels.length === 0 || disabled) return
 
         if (!matchedModel) {
             const firstModel = catalogModels[0]
@@ -218,6 +222,8 @@ export function ModelSelect({
             })
         }
     }, [
+        catalogStatus,
+        catalogError,
         catalogModels,
         matchedModel,
         modelId,
@@ -510,7 +516,7 @@ function getReasoningLabel(
 
 function getCatalogNotice(
     translate: (key: string, options?: { defaultValue?: string }) => string,
-    status: 'idle' | 'loading' | 'ready' | 'error',
+    status: 'idle' | 'loading' | 'ready' | 'success' | 'error',
     modelCount: number,
     error: string | null,
 ): string | undefined {

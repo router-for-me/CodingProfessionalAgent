@@ -2365,6 +2365,35 @@ describe('persist pure helpers', () => {
       setHostBridge(null)
     })
 
+    it.each(['standard', 'fast', 'max', undefined] as const)('saves and restores executed child speed %s ahead of session and global preferences', async (speed) => {
+        const saved: Record<string, any> = {}
+        const bridge = {
+            SessionGet: vi.fn(async (id: string) => saved[id] ?? null),
+            SessionSet: vi.fn(async (id: string, data: unknown) => { saved[id] = data }),
+        }
+        setHostBridge(bridge as any)
+        useSettingsStore.getState().hydrate({ speed: 'fast' })
+        useSessionStore.setState({ sessions: [{
+            id: 'speed-child', title: 'Child', pinned: false, createdAt: 1, updatedAt: 2,
+            speed: speed === 'standard' ? 'fast' : 'standard',
+        }] })
+        useSubAgentStore.setState({ agents: [{
+            id: 'speed-agent', sessionId: 'speed-child', parentSessionId: 'speed-parent',
+            name: 'Worker', modelId: 'model', status: 'completed', speed,
+            color: '#9b7dff', icon: 'sparkle', createdAt: 1, updatedAt: 2,
+        }] })
+        await saveSessionData('speed-child', [])
+        await saveSessionData('speed-parent', [])
+        expect(saved['speed-child'].speed).toBe(speed)
+        if (speed === undefined) expect(saved['speed-child']).not.toHaveProperty('speed')
+        resetAllStores()
+        useSettingsStore.getState().hydrate({ speed: 'fast' })
+        expect((await loadSessionData('speed-child'))?.speed).toBe(speed)
+        await ensureSessionLoaded('speed-parent')
+        expect(useSubAgentStore.getState().agents[0]?.speed).toBe(speed)
+        setHostBridge(null)
+    })
+
     it('saves subagents inside the parent session file and loads them on demand', async () => {
       const savedSessions: Record<string, unknown> = {}
       const mockBridge = {

@@ -378,6 +378,18 @@ describe('SessionDatabaseService', () => {
     })
   })
 
+  it.each(['standard', 'fast', 'max', undefined])('preserves session and executed child speed %s across database reopen', async (speed) => {
+    const agent = { id: 'reopen-agent', sessionId: 'reopen-child', parentSessionId: 'reopen-parent', name: 'Worker', speed }
+    await service.set('reopen-parent', { entries: [], speed: 'fast', subAgents: [agent] })
+    await service.set('reopen-child', { entries: [], isSubagent: true, parentSessionId: 'reopen-parent', speed })
+    service.close()
+    service = new SessionDatabaseService({ customDir: tempDir })
+    expect((await service.get('reopen-parent'))?.speed).toBe('fast')
+    expect((await service.get('reopen-parent'))?.subAgents?.[0].speed).toBe(speed)
+    expect((await service.get('reopen-child'))?.speed).toBe(speed)
+    expect((await service.getMeta('reopen-child'))?.speed).toBe(speed)
+  })
+
   it('persists executed subagent speed through snapshots and incremental updates', async () => {
     const parentId = 'speed-parent'
     const agent = { id: 'speed-agent', sessionId: 'speed-child', parentSessionId: parentId, name: 'Worker', speed: 'fast' }

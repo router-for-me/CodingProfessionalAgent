@@ -1,11 +1,11 @@
 import {
     useTranslation,
-    useHostServices,
+    useModelCatalog,
     useSettings,
     Zap,
     cn,
 } from '@cpa/plugin-ui'
-import type { SubAgentRecord, ModelCatalogEntry } from '@cpa/plugin-api'
+import type { SubAgentRecord } from '@cpa/plugin-api'
 import { subAgentDisplayMeta } from '../utils/subAgentMeta.js'
 
 export function SubAgentMetaText({
@@ -16,9 +16,8 @@ export function SubAgentMetaText({
     className?: string
 }) {
     const { t } = useTranslation()
-    const services = useHostServices()
     const settings = useSettings()
-    const models = (services?.models?.getModels?.() ?? []) as readonly ModelCatalogEntry[]
+    const { models } = useModelCatalog()
     const preferredReasoning = settings?.reasoningLevel
     const meta = subAgentDisplayMeta(agent, models, preferredReasoning, t)
     const label = meta.reasoningLabel

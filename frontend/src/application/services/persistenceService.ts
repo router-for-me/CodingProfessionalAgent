@@ -1961,6 +1961,8 @@ async function writeSessionData(
   const retainedIds = new Set(sanitized.map((entry) => entry.id))
   const removals = new Map(Array.from(pendingEntryRemovals.get(sessionId) ?? [])
     .filter(([id]) => !retainedIds.has(id)))
+  // Historical subagents without recorded speed must not inherit current preferences.
+  const speed = subAgentRecord ? subAgentRecord.speed : session?.speed ?? settings?.speed
   const payload: SessionFilePayload = {
     id: sessionId,
     version: CURRENT_VERSION,
@@ -1981,9 +1983,7 @@ async function writeSessionData(
     ...(projectId ? { projectId } : {}),
     ...(parentSessionId ? { parentSessionId } : {}),
     ...(isSubagent ? { isSubagent: true } : {}),
-    ...(session?.speed ?? settings?.speed
-      ? { speed: session?.speed ?? settings.speed }
-      : {}),
+    ...(speed === 'standard' || speed === 'fast' || speed === 'max' ? { speed } : {}),
     ...(subAgentRecord?.reasoningEffort ?? session?.reasoningEffort ?? settings?.reasoningLevel
       ? { reasoningEffort: subAgentRecord?.reasoningEffort ?? session?.reasoningEffort ?? settings.reasoningLevel }
       : {}),

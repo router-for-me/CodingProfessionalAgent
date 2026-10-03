@@ -57,6 +57,9 @@ let activeRunsState: Record<string, any>
 let mockServices: any
 let settingsListeners: Set<() => void>
 let sessionsListeners: Set<() => void>
+let modelsListeners: Set<() => void>
+let catalogStatus: 'idle' | 'loading' | 'ready' | 'success' | 'error'
+let catalogError: string | null
 let runsListeners: Set<() => void>
 
 function notifySettings() {
@@ -73,6 +76,9 @@ function resetState(): void {
     settingsListeners = new Set()
     sessionsListeners = new Set()
     runsListeners = new Set()
+    modelsListeners = new Set()
+    catalogStatus = 'ready'
+    catalogError = null
 
     settingsState = {
         theme: 'dark',
@@ -113,9 +119,12 @@ function resetState(): void {
         },
         models: {
             getModels: () => modelsState,
-            getStatus: () => 'ready',
-            getError: () => null,
-            subscribe: (listener: () => void) => () => {},
+            getStatus: () => catalogStatus,
+            getError: () => catalogError,
+            subscribe: (listener: () => void) => {
+                modelsListeners.add(listener)
+                return () => modelsListeners.delete(listener)
+            },
         },
         sessions: {
             getSnapshot: () => sessionsState,
@@ -159,6 +168,64 @@ describe('ModelSelect', () => {
     beforeEach(async () => {
         await i18n.changeLanguage('en')
         resetState()
+    })
+
+    it('restores Fast from an asynchronously published catalog without another render', () => {
+        catalogStatus = 'loading'
+        settingsState = { ...settingsState, modelId: 'model-fast', reasoningLevel: 'high', speed: 'fast' }
+        const { unmount } = render(<ModelSelect />)
+        const trigger = screen.getByRole('button', { name: 'Model' })
+        expect(trigger.querySelector('.lucide-zap')).toBeNull()
+        expect(mockServices.settings.setSpeed).not.toHaveBeenCalled()
+        act(() => {
+            modelsState = testModels
+            catalogStatus = 'success'
+            modelsListeners.forEach((listener) => listener())
+        })
+        expect(trigger.querySelector('.lucide-zap')).toHaveClass('translate-y-px')
+        expect(settingsState.speed).toBe('fast')
+        unmount()
+        expect(modelsListeners.size).toBe(0)
+    })
+
+    it.each(['idle', 'loading', 'error'] as const)('protects saved speed while catalog is %s and normalizes only after confirmation', (status) => {
+        catalogStatus = status
+        modelsState = [testModels[0]!]
+        settingsState = { ...settingsState, modelId: 'model-primary', reasoningLevel: 'high', speed: 'fast' }
+        sessionsState = [{ id: 'restored', title: 'Restored', pinned: false, createdAt: 1, updatedAt: 1,
+            modelId: 'model-primary', reasoningEffort: 'high', speed: 'fast' }]
+        render(<ModelSelect sessionId="restored" />)
+        expect(mockServices.settings.setSpeed).not.toHaveBeenCalled()
+        expect(mockServices.sessions.setSessionRuntimeSettings).not.toHaveBeenCalled()
+        act(() => {
+            catalogStatus = 'ready'
+            modelsListeners.forEach((listener) => listener())
+        })
+        expect(settingsState.speed).toBe('standard')
+        expect(sessionsState[0]?.speed).toBe('standard')
+    })
+
+    it('reacts to status-only and error-only notifications in the open menu', async () => {
+        modelsState = testModels
+        settingsState = { ...settingsState, modelId: 'model-primary', reasoningLevel: 'high' }
+        renderModelSelect()
+        await userEvent.setup().click(screen.getByRole('button', { name: 'Model' }))
+        act(() => {
+            catalogStatus = 'loading'
+            modelsListeners.forEach((listener) => listener())
+        })
+        expect(screen.getByText(i18n.t('composer.modelCatalog.loading'))).toBeVisible()
+        act(() => {
+            catalogStatus = 'error'
+            catalogError = 'Catalog offline'
+            modelsListeners.forEach((listener) => listener())
+        })
+        expect(screen.getByText(i18n.t('composer.modelCatalog.error'))).toBeVisible()
+        act(() => {
+            catalogError = null
+            modelsListeners.forEach((listener) => listener())
+        })
+        expect(screen.queryByRole('status')).not.toBeInTheDocument()
     })
 
     it('renders no mock data and disables trigger when model catalog is empty', () => {

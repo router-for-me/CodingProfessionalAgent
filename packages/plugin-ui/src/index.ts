@@ -30,3 +30,5 @@ export { default as ReactMarkdown, type Components } from 'react-markdown'
 export { default as remarkGfm } from 'remark-gfm'
 export { default as hljs } from 'highlight.js'
 export { useTranslation, Trans, I18nextProvider } from 'react-i18next'
+
+export * from './useModelCatalog.js'

@@ -2,15 +2,17 @@ import { act, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it } from 'vitest'
 import i18n from '@/i18n'
 import { HostServicesProvider } from '@cpa/plugin-ui'
+import type { ModelCatalogEntry } from '@cpa/plugin-api'
 import { SubAgentMetaText } from './SubAgentMetaText.js'
 
 const agent = { sessionId: 'child', modelId: 'child-model', reasoningEffort: 'high' }
 
 function setup(speed: string | undefined, supportsFast = true, reasoningLevels: any[] = []) {
     let record = { ...agent, speed }
+    const models = [{ id: 'child-model', label: 'Child Model', supportsFast, reasoningLevels }]
     const services: any = {
         settings: { getSnapshot: () => settings },
-        models: { getModels: () => [{ id: 'child-model', label: 'Child Model', supportsFast, reasoningLevels }] },
+        models: { getModels: () => models },
 
     }
     const settings = { speed: 'fast', modelId: 'different-model' }
@@ -34,6 +36,35 @@ function setup(speed: string | undefined, supportsFast = true, reasoningLevels: 
 describe('SubAgentMetaText Fast indicator', () => {
     beforeEach(async () => {
         await i18n.changeLanguage('en')
+    })
+
+    it.each(['fast', 'standard', undefined])('updates from catalog notifications with recorded speed %s', (speed) => {
+        let models: readonly ModelCatalogEntry[] = []
+        const listeners = new Set<() => void>()
+        const settings = { speed: 'fast' }
+        const services: any = {
+            settings: { getSnapshot: () => settings },
+            models: {
+                getModels: () => models,
+                subscribe: (listener: () => void) => {
+                    listeners.add(listener)
+                    return () => listeners.delete(listener)
+                },
+            },
+        }
+        const { unmount } = render(<HostServicesProvider services={services}>
+            <SubAgentMetaText agent={{ ...agent, speed }} />
+        </HostServicesProvider>)
+        const meta = screen.getByTestId('subagent-model-meta')
+        expect(meta.querySelector('.lucide-zap')).toBeNull()
+        act(() => {
+            models = [{ id: 'child-model', label: 'Loaded Model', supportsFast: true, reasoningLevels: [] } as any]
+            listeners.forEach((listener) => listener())
+        })
+        expect(meta).toHaveTextContent('Loaded Model')
+        expect(Boolean(meta.querySelector('.lucide-zap'))).toBe(speed === 'fast')
+        unmount()
+        expect(listeners.size).toBe(0)
     })
 
     it.each([
