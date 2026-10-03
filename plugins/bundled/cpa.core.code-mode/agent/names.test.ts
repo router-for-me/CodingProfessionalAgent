@@ -56,3 +56,9 @@ describe('Code Mode nested tool names', () => {
         expect(result.warnings).toEqual([])
     })
 })
+
+
+it.each([undefined, 'both', 'code-nested', 'direct'] as const)('never selects subagents with exposure %s and empty settings', (exposure) => {
+    const selection = selectNestedTools(['spawn_agent', 'send_message', 'send_input', 'stop_agent', 'read'].map((name) => tool(name, exposure)), { directOnlyToolNames: [], excludedToolNames: [] })
+    expect(selection.tools.map((entry) => entry.name)).toEqual(exposure === 'direct' ? [] : ['read'])
+})

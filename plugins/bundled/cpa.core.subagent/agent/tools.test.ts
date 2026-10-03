@@ -17,6 +17,7 @@ describe('sub-agent tools', () => {
     it('validates spawn/send/stop arguments', () => {
         const coordinator = createMockCoordinator()
         const [spawn, send, stop] = createSubAgentTools(coordinator)
+        expect([spawn, send, stop].map((tool) => tool?.exposure)).toEqual(['direct', 'direct', 'direct'])
         expect(spawn?.validate({ prompt: 'do work', name: 'Atlas', model: 'flash' })).toEqual({
             prompt: 'do work',
             name: 'Atlas',

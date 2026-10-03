@@ -1,3 +1,4 @@
+import { isMandatoryDirectTool } from '../shared/toolPolicy'
 import type { AgentTool, AppSettings, SettingsService } from '@cpa/plugin-api'
 import { codeModeConfiguration } from '../shared/configuration'
 import { execParametersForLocale } from './protocol'
@@ -18,7 +19,7 @@ export function createExecTool(client: CellClient, settings: SettingsService, in
             const snapshot = settings.getSnapshot?.() ?? await settings.get()
             config = codeModeConfiguration(snapshot)
             const ordinary = tools.filter((item) => !item.needsNestedDispatcher)
-            const direct = ordinary.filter((item) => item.exposure !== 'code-nested')
+            const direct = ordinary.filter((item) => (isMandatoryDirectTool(item.name) || item.exposure !== 'code-nested'))
             context.signal.addEventListener('abort', () => { void client.cancel(context.sessionId).catch(() => {}) }, { once: true })
             if (config.toolMode === 'direct') {
                 await client.cancel(context.sessionId)
@@ -39,7 +40,7 @@ export function createExecTool(client: CellClient, settings: SettingsService, in
             tool.description = renderExecDescription(config.toolMode, specifications, { defaults: { yieldTimeMs: config.defaultExecYieldMs, maxOutputTokens: config.maxOutputTokens }, locale: snapshot.locale })
             return {
                 policyId: config.toolMode,
-                tools: tools.filter((item) => item.needsNestedDispatcher || item.exposure !== 'code-nested' && (config.toolMode === 'code' || item.exposure === 'direct' || config.directOnlyToolNames.includes(item.name))).map((item) => item.needsNestedDispatcher ? { ...item, nestedToolNames: [...names], description: item.name === tool.name ? tool.description : item.description } : item),
+                tools: tools.filter((item) => item.needsNestedDispatcher || isMandatoryDirectTool(item.name) || item.exposure !== 'code-nested' && (config.toolMode === 'code' || item.exposure === 'direct' || config.directOnlyToolNames.includes(item.name))).map((item) => item.needsNestedDispatcher ? { ...item, nestedToolNames: [...names], description: item.name === tool.name ? tool.description : item.description } : item),
                 nestedTools: ordinary.filter((item) => names.has(item.name)),
             }
         },

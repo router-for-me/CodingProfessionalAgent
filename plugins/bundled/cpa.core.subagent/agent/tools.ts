@@ -123,6 +123,7 @@ export function createSpawnAgentTool(
     }
     return {
         name: 'spawn_agent',
+        exposure: 'direct',
         label: 'spawn_agent',
         description:
             'Dispatch a sub-agent to work on an independent task. Choose a short, human-readable name randomly and pass it in name. If a pre-configured role is specified via role, model is optional and defaults to the role\'s configured model. If no role is specified, always pass model as a catalog model id. Waits until the sub-agent finishes and returns its last message, prefixed with the agent id. Use that id with send_message or stop_agent. Do not spawn a sub-agent for work you can finish with a single tool call.',
@@ -218,6 +219,7 @@ export function createSendMessageTool(
 ): AgentTool<SendMessageArgs> {
     return {
         name: 'send_message',
+        exposure: 'direct',
         label: 'send_message',
         description:
             'Send a follow-up message to an existing sub-agent. If the sub-agent is still running, the message is queued. If it is idle, this starts a new turn and waits for the last message.',
@@ -274,6 +276,7 @@ export function createStopAgentTool(
 ): AgentTool<StopAgentArgs> {
     return {
         name: 'stop_agent',
+        exposure: 'direct',
         label: 'stop_agent',
         description: 'Stop a running sub-agent by id.',
         targetAgent: 'main',

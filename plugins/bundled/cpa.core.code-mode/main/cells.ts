@@ -1,3 +1,4 @@
+import { isMandatoryDirectTool } from '../shared/toolPolicy.js'
 import { newQuickJSWASMModule, type QuickJSContext, type QuickJSRuntime, type QuickJSHandle, type QuickJSDeferredPromise } from 'quickjs-emscripten'
 import variant from '@jitl/quickjs-ng-wasmfile-release-sync'
 import { randomUUID } from 'node:crypto'
@@ -217,6 +218,7 @@ export class CellExecutor {
             const identifier = context.getString(nameHandle)
             const spec = input.tools.find((tool) => tool.identifier === identifier)
             if (!spec) throw new Error(`Unknown nested tool: ${identifier}`)
+            if (isMandatoryDirectTool(spec.name)) throw new Error(`Nested tool is direct-only: ${spec.name}`)
             if ([...this.pending.values()].filter((entry) => entry.cell === cell).length >= 32) throw new Error('Cell exceeds 32 outstanding tool calls')
             const promise = context.newPromise()
             cell.deferred.add(promise)

@@ -163,3 +163,13 @@ describe('Code Mode exec descriptions', () => {
         expect(() => renderExecDescription('code-only', selected, { schemaBudgetBytes: budget })).toThrow('Description schema budget')
     })
 })
+
+
+it.each(['code', 'code-only'] as const)('limits batching guidance to eligible tools in %s', (mode) => {
+    const description = renderExecDescription(mode, selected)
+    expect(description).toContain('always call them at the top level, never inside exec')
+    expect(description).toContain('not to poll subagents')
+    expect(description).toContain('Batch eligible nested tool calls')
+    expect(description).not.toContain('Put every tool call')
+    if (mode === 'code') expect(codeModeBatchGuidance(mode)).toContain('direct-only')
+})

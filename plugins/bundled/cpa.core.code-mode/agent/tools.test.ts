@@ -6,7 +6,7 @@ import { createWaitTool } from './waitTool'
 import { CELL_RPC } from '../shared/messages'
 
 const ordinary = (name: string, exposure?: AgentTool['exposure']): AgentTool => ({ name, label: name, description: `${name} description`, parameters: { type: 'object', properties: { path: { type: 'string' } } }, exposure, validate: (value) => value as any, execute: async () => ({ content: [] }) })
-function setup(mode: AppSettings['toolMode'] = 'code', unavailable = false) {
+function setup(mode: AppSettings['toolMode'] = 'code', unavailable = false, requestedTool = 'read') {
     const snapshot = { toolMode: mode, directOnlyToolNames: ['standalone'] } as AppSettings
     const settings = { get: async () => snapshot, getSnapshot: () => snapshot } as SettingsService
     let listener: (value: any) => void = () => {}
@@ -18,7 +18,7 @@ function setup(mode: AppSettings['toolMode'] = 'code', unavailable = false) {
             if (command.type === 'prepare') { if (unavailable) throw new Error('offline'); return undefined }
             if (command.type === 'observe') return { cellId: command.input.cellId, status: command.input.terminate ? 'terminated' : 'missing', content: [] }
             if (command.type === 'start') {
-                listener({ requestId: command.requestId, event: { type: 'tool-request', request: { cellId: 'cell', invocationId: 'nested', toolName: 'read', input: { path: 'a' } } } })
+                listener({ requestId: command.requestId, event: { type: 'tool-request', request: { cellId: 'cell', invocationId: 'nested', toolName: requestedTool, input: { path: 'a' } } } })
                 return { cellId: 'cell', status: 'completed', content: [{ type: 'text', text: 'done' }] }
             }
         }) as PluginCapabilityClient['invoke'],
@@ -121,6 +121,49 @@ describe('Code Mode tools and exposure policy', () => {
         expect(exec.validate({ source: '2', description: '  读取两个文件  ' })).toEqual({ source: '2', description: '读取两个文件' })
         expect(() => wait.validate({ cell_id: 'id', yield_time_ms: -1 })).toThrow()
         expect(() => wait.validate({ cell_id: 'id', terminate: 'yes' })).toThrow()
+        client.dispose()
+    })
+})
+
+
+describe('mandatory direct-only subagent tools', () => {
+    const names = ['spawn_agent', 'send_message', 'send_input', 'stop_agent']
+    it.each(['direct', 'code', 'code-only'] as const)('retains top-level tools in %s regardless of settings or metadata', async (mode) => {
+        for (const exposure of [undefined, 'both', 'code-nested', 'direct'] as const) {
+            const { exec, tools, client, snapshot } = setup(mode)
+            snapshot.directOnlyToolNames = []
+            snapshot.excludedToolNames = names
+            const subagents = names.map((name) => ordinary(name, exposure))
+            const result = await exec.prepareToolSet!([...tools, ...subagents], preparationContext())
+            for (const tool of subagents) expect(result.tools).toContain(tool)
+            expect(result.nestedTools.map((tool) => tool.name)).toEqual(mode === 'direct' ? [] : ['read', 'standalone'])
+            for (const tool of result.tools.filter((tool) => tool.needsNestedDispatcher)) {
+                expect(tool.nestedToolNames).toEqual(['read', 'standalone'])
+                for (const name of names) expect(tool.description).not.toContain('Tool tools.' + name)
+            }
+            client.dispose()
+        }
+    })
+    it.each(names)('rejects forged %s dispatches on start and observe', async (name) => {
+        const { exec, wait, tools, client, capability } = setup('code', false, name)
+        await exec.prepareToolSet!(tools, preparationContext())
+        const dispatch = vi.fn(async () => ({ content: [] }))
+        const context = { sessionId: 'session', dispatchNestedTool: dispatch }
+        const original = vi.mocked(capability.invoke).getMockImplementation()!
+        vi.mocked(capability.invoke).mockImplementation((method, args) => {
+            const command = args![0] as any
+            return original(method, command.type === 'observe' ? [{ ...command, type: 'start' }] : args)
+        })
+        await exec.execute('id', { source: 'text(1)' }, context)
+        await wait.execute('id', { cell_id: 'cell' }, context)
+        await new Promise((resolve) => setTimeout(resolve, 0))
+        expect(dispatch).not.toHaveBeenCalled()
+        const deliveries = vi.mocked(capability.invoke).mock.calls.map((call) => call[1]?.[0] as any).filter((command) => command.type === 'deliver')
+        expect(deliveries).toHaveLength(2)
+        for (const delivery of deliveries) {
+            expect(delivery.result.isError).toBe(true)
+            expect(delivery.result.content[0].text).toContain('direct-only: ' + name)
+        }
         client.dispose()
     })
 })

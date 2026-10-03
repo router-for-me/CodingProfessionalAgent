@@ -46,6 +46,22 @@ in `exec.description`. Backend failure is fail-closed in `code-only`; `code`
 may explicitly fall back with a visible notice when configured to do so.
 Pure static browser pages without a CPA backend cannot execute Code Mode.
 
+### Direct-only subagent orchestration
+
+`spawn_agent`, `send_message` (including its `send_input` alias), and
+`stop_agent` always remain top-level tools when available, including in
+`code-only`. They are never included in nested declarations, `ALL_TOOLS`, or
+the guest tool allowlist. Empty settings, exclusion lists, and `code-nested`
+metadata cannot relax this rule. The tools declare `exposure: "direct"`
+at their source.
+
+Only eligible ordinary tools should be batched inside `exec`. Call subagent
+tools directly; this preserves delegation rather than disabling it. Do not
+use Code Mode `wait` to poll subagents: it observes execution cells only.
+The cell executor and agent-side event dispatcher reject direct-only names
+before invoking host tools, including forged requests and resumed cells.
+The same policy applies to desktop and browser-backed sessions.
+
 Example `exec` arguments:
 
 ```json

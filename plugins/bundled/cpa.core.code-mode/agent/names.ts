@@ -1,3 +1,4 @@
+import { isMandatoryDirectTool } from '../shared/toolPolicy'
 import type { NamedNestedTool, NestedToolSpecification } from './protocol'
 
 export function normalizeToolIdentifier(name: string): string {
@@ -22,8 +23,6 @@ export function selectNestedTools(
     options: NestedToolSelectionOptions = {},
 ): NestedToolSelection {
     const excluded = new Set([
-        'exec',
-        'wait',
         ...options.excludedToolNames ?? [],
         ...options.directOnlyToolNames ?? [],
     ])
@@ -31,7 +30,7 @@ export function selectNestedTools(
     const selected: NamedNestedTool[] = []
     const warnings: string[] = []
     for (const tool of tools) {
-        if (excluded.has(tool.name) || tool.exposure === 'direct') continue
+        if (isMandatoryDirectTool(tool.name) || excluded.has(tool.name) || tool.exposure === 'direct') continue
         const identifier = normalizeToolIdentifier(tool.name)
         if (identifiers.has(identifier)) {
             const message = `Skipped nested tool ${JSON.stringify(tool.name)}: duplicate JavaScript identifier ${JSON.stringify(identifier)}`

@@ -164,3 +164,14 @@ it('disposal cancels initialization before any script runs', async () => {
     expect((await starting).status).toBe('terminated')
     expect(text(await executor.start(input('text(load("afterCancellation") === undefined)')))).toBe('true')
 })
+
+
+it.each(['spawn_agent', 'send_message', 'send_input', 'stop_agent'])('blocks forged nested specifications for %s before dispatch', async (name) => {
+    const requests: unknown[] = []
+    const executor = new CellExecutor((request) => requests.push(request))
+    executors.push(executor)
+    const result = await executor.start(input('try { await tools.alias({}) } catch (error) { text(error.message) }', { tools: [{ name, identifier: 'alias', description: '' }] }))
+    expect(result.status).toBe('completed')
+    expect(text(result)).toContain('direct-only: ' + name)
+    expect(requests).toEqual([])
+})

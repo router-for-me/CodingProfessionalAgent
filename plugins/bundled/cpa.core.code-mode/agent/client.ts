@@ -1,3 +1,4 @@
+import { isMandatoryDirectTool } from '../shared/toolPolicy'
 import type { PluginCapabilityClient, ToolExecutionContext, ToolResult } from '@cpa/plugin-api'
 import { CELL_EVENT, CELL_RPC, observationResult, type CellObservation, type ExecutorEvent, type ObserveCell, type StartCell } from '../shared/messages'
 
@@ -65,7 +66,9 @@ export class CellClient {
             if (event.type === 'tool-request') {
                 const request = event.request
                 pendingTools += 1
-                void context.dispatchNestedTool!(request, signal).then((result) => invoke({ type: 'deliver', invocationId: request.invocationId, result })).catch((error) => {
+                void (isMandatoryDirectTool(request.toolName)
+                    ? Promise.reject(new Error(`Nested tool is direct-only: ${request.toolName}`))
+                    : context.dispatchNestedTool!(request, signal)).then((result) => invoke({ type: 'deliver', invocationId: request.invocationId, result })).catch((error) => {
                     return invoke({ type: 'deliver', invocationId: request.invocationId, result: { content: [{ type: 'text', text: String(error) }], isError: true } })
                 }).catch(() => {}).finally(() => {
                     pendingTools -= 1

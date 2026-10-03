@@ -1,3 +1,4 @@
+import { DIRECT_TOOL_GUIDANCE } from '../shared/toolPolicy'
 import {
     DEFAULT_EXEC_OPTIONS,
     DEFAULT_SCHEMA_BUDGET_BYTES,
@@ -148,8 +149,9 @@ export function codeModeBatchGuidance(mode: ToolMode): string | undefined {
     if (mode !== 'code') return undefined
     return [
         'Direct tools and code mode are both available.',
+        DIRECT_TOOL_GUIDANCE,
         'When you need only one tool call, prefer that direct tool. Do not wrap a single call in exec.',
-        'When you already plan several tool calls that do not depend on each other, prefer one exec call instead of calling those tools directly.',
+        'When you already plan several eligible nested tool calls that do not depend on each other, prefer one exec call instead of calling those tools directly.',
         'Put the independent calls in that same exec and start them together with Promise.all.',
         'If a later call depends on reading an earlier result before you can decide, use direct tool calls instead of guessing inside exec.',
     ].join('\n')
@@ -166,7 +168,8 @@ export function renderExecDescription(
         'No Node, filesystem, network, console, Atomics, SharedArrayBuffer, WebAssembly, or imports.',
         'Await tools.<name>(input) to call approved tools; every nested call keeps its own approval and hooks.',
         `Also pass description: one short user-visible sentence about what this batch does, written in ${interfaceLanguage(options.locale)}. It is the activity label, not a copy of the source.`,
-        'Put every tool call you can already plan into the same exec. Do not spend one exec on one tool.',
+        DIRECT_TOOL_GUIDANCE,
+        'Batch eligible nested tool calls you can already plan into the same exec. Do not spend one exec on one tool when direct calls are available.',
         'Start independent calls together with Promise.all. If a later call needs an earlier result, await them in order inside that same exec.',
         'Start another exec only after you must read the combined result and decide the next step yourself.',
         'Example: const [a, b] = await Promise.all([tools.tool_a({ path: "a" }), tools.tool_b({ path: "b" })]); text({ a, b });',
