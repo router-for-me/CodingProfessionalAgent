@@ -216,12 +216,12 @@ export function resolveLanguageGuideline(language?: string): string | undefined 
                 region === 'HK' ||
                 region === 'MO'
             ) {
-                return 'Respond in Traditional Chinese by default unless the user requests otherwise'
+                return 'Respond in Traditional Chinese. This is mandatory: do not respond in another language unless the user explicitly requests a different language.'
             }
-            return 'Respond in Simplified Chinese by default unless the user requests otherwise'
+            return 'Respond in Simplified Chinese. This is mandatory: do not respond in another language unless the user explicitly requests a different language.'
         }
         if (lang === 'en') {
-            return 'Respond in English by default unless the user requests otherwise'
+            return 'Respond in English. This is mandatory: do not respond in another language unless the user explicitly requests a different language.'
         }
 
         const displayNames = new Intl.DisplayNames(['en'], {
@@ -234,7 +234,7 @@ export function resolveLanguageGuideline(language?: string): string | undefined 
             resolvedName.toLowerCase() !== trimmed.toLowerCase() &&
             resolvedName.toLowerCase() !== lang
         ) {
-            return `Respond in ${resolvedName} by default unless the user requests otherwise`
+            return `Respond in ${resolvedName}. This is mandatory: do not respond in another language unless the user explicitly requests a different language.`
         }
     } catch {
         // Fall back to undefined for invalid locale tags

@@ -898,7 +898,7 @@ describe('SubAgentHost', () => {
 
         await host.spawn('test lang', { name: 'Atlas' })
         expect(childSystemPrompt).toContain(
-            '- Respond in Simplified Chinese by default unless the user requests otherwise',
+            '- Respond in Simplified Chinese. This is mandatory: do not respond in another language unless the user explicitly requests a different language.',
         )
     })
 

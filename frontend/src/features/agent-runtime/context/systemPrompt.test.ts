@@ -410,7 +410,7 @@ describe('buildSystemPrompt', () => {
             language: 'zh-CN',
         })
         expect(promptZh).toContain(
-            '- Respond in Simplified Chinese by default unless the user requests otherwise',
+            '- Respond in Simplified Chinese. This is mandatory: do not respond in another language unless the user explicitly requests a different language.',
         )
 
         const promptEn = buildSystemPrompt({
@@ -418,7 +418,7 @@ describe('buildSystemPrompt', () => {
             language: 'en',
         })
         expect(promptEn).toContain(
-            '- Respond in English by default unless the user requests otherwise',
+            '- Respond in English. This is mandatory: do not respond in another language unless the user explicitly requests a different language.',
         )
 
         const promptTw = buildSystemPrompt({
@@ -426,7 +426,7 @@ describe('buildSystemPrompt', () => {
             language: 'zh-TW',
         })
         expect(promptTw).toContain(
-            '- Respond in Traditional Chinese by default unless the user requests otherwise',
+            '- Respond in Traditional Chinese. This is mandatory: do not respond in another language unless the user explicitly requests a different language.',
         )
 
         const promptJa = buildSystemPrompt({
@@ -434,7 +434,7 @@ describe('buildSystemPrompt', () => {
             language: 'ja',
         })
         expect(promptJa).toContain(
-            '- Respond in Japanese by default unless the user requests otherwise',
+            '- Respond in Japanese. This is mandatory: do not respond in another language unless the user explicitly requests a different language.',
         )
 
         const promptNone = buildSystemPrompt({
@@ -451,7 +451,7 @@ describe('buildSystemPrompt', () => {
         })
         expect(prompt.startsWith('CUSTOM SYSTEM BODY')).toBe(true)
         expect(prompt).toContain(
-            'Guidelines:\n- Respond in Simplified Chinese by default unless the user requests otherwise',
+            'Guidelines:\n- Respond in Simplified Chinese. This is mandatory: do not respond in another language unless the user explicitly requests a different language.',
         )
     })
 
@@ -629,55 +629,55 @@ describe('resolvePersonalityGuideline', () => {
 describe('resolveLanguageGuideline', () => {
     it('maps Chinese locales to Simplified or Traditional Chinese', () => {
         expect(resolveLanguageGuideline('zh-CN')).toBe(
-            'Respond in Simplified Chinese by default unless the user requests otherwise',
+            'Respond in Simplified Chinese. This is mandatory: do not respond in another language unless the user explicitly requests a different language.',
         )
         expect(resolveLanguageGuideline('zh_CN')).toBe(
-            'Respond in Simplified Chinese by default unless the user requests otherwise',
+            'Respond in Simplified Chinese. This is mandatory: do not respond in another language unless the user explicitly requests a different language.',
         )
         expect(resolveLanguageGuideline('zh-Hans')).toBe(
-            'Respond in Simplified Chinese by default unless the user requests otherwise',
+            'Respond in Simplified Chinese. This is mandatory: do not respond in another language unless the user explicitly requests a different language.',
         )
         expect(resolveLanguageGuideline('zh-Hans-CN')).toBe(
-            'Respond in Simplified Chinese by default unless the user requests otherwise',
+            'Respond in Simplified Chinese. This is mandatory: do not respond in another language unless the user explicitly requests a different language.',
         )
         expect(resolveLanguageGuideline('zh-SG')).toBe(
-            'Respond in Simplified Chinese by default unless the user requests otherwise',
+            'Respond in Simplified Chinese. This is mandatory: do not respond in another language unless the user explicitly requests a different language.',
         )
         expect(resolveLanguageGuideline('zh')).toBe(
-            'Respond in Simplified Chinese by default unless the user requests otherwise',
+            'Respond in Simplified Chinese. This is mandatory: do not respond in another language unless the user explicitly requests a different language.',
         )
         expect(resolveLanguageGuideline('zh-TW')).toBe(
-            'Respond in Traditional Chinese by default unless the user requests otherwise',
+            'Respond in Traditional Chinese. This is mandatory: do not respond in another language unless the user explicitly requests a different language.',
         )
         expect(resolveLanguageGuideline('zh-HK')).toBe(
-            'Respond in Traditional Chinese by default unless the user requests otherwise',
+            'Respond in Traditional Chinese. This is mandatory: do not respond in another language unless the user explicitly requests a different language.',
         )
         expect(resolveLanguageGuideline('zh-MO')).toBe(
-            'Respond in Traditional Chinese by default unless the user requests otherwise',
+            'Respond in Traditional Chinese. This is mandatory: do not respond in another language unless the user explicitly requests a different language.',
         )
         expect(resolveLanguageGuideline('zh-Hant-TW')).toBe(
-            'Respond in Traditional Chinese by default unless the user requests otherwise',
+            'Respond in Traditional Chinese. This is mandatory: do not respond in another language unless the user explicitly requests a different language.',
         )
     })
 
     it('maps English and other languages properly', () => {
         expect(resolveLanguageGuideline('en')).toBe(
-            'Respond in English by default unless the user requests otherwise',
+            'Respond in English. This is mandatory: do not respond in another language unless the user explicitly requests a different language.',
         )
         expect(resolveLanguageGuideline('en-US')).toBe(
-            'Respond in English by default unless the user requests otherwise',
+            'Respond in English. This is mandatory: do not respond in another language unless the user explicitly requests a different language.',
         )
         expect(resolveLanguageGuideline('en_US')).toBe(
-            'Respond in English by default unless the user requests otherwise',
+            'Respond in English. This is mandatory: do not respond in another language unless the user explicitly requests a different language.',
         )
         expect(resolveLanguageGuideline('en-GB')).toBe(
-            'Respond in English by default unless the user requests otherwise',
+            'Respond in English. This is mandatory: do not respond in another language unless the user explicitly requests a different language.',
         )
         expect(resolveLanguageGuideline('ja')).toBe(
-            'Respond in Japanese by default unless the user requests otherwise',
+            'Respond in Japanese. This is mandatory: do not respond in another language unless the user explicitly requests a different language.',
         )
         expect(resolveLanguageGuideline('fr')).toBe(
-            'Respond in French by default unless the user requests otherwise',
+            'Respond in French. This is mandatory: do not respond in another language unless the user explicitly requests a different language.',
         )
     })
 
