@@ -312,8 +312,15 @@ async function walkSkillsDir(input: {
     if (bridge.realPath) {
         try {
             realDir = await bridge.realPath(dir)
-        } catch {
-            realDir = dir
+        } catch (error) {
+            if (!isNotFoundError(error)) {
+                diagnostics.push({
+                    type: 'warning',
+                    message: `failed to resolve skill directory safely: ${errorMessage(error)}`,
+                    path: dir,
+                })
+            }
+            return
         }
     }
 
@@ -355,6 +362,7 @@ async function walkSkillsDir(input: {
         .filter((entry) => entry && typeof entry.name === 'string' && entry.name.length > 0)
         .sort((a, b) => compareCodePoints(a.name, b.name))
 
+    let hasSkillFile = false
     for (const entry of sorted) {
         if (entry.name !== SKILL_FILE) {
             continue
@@ -375,7 +383,8 @@ async function walkSkillsDir(input: {
             skillMap,
             diagnostics,
         })
-        return
+        hasSkillFile = true
+        break
     }
 
     for (const entry of sorted) {
@@ -396,6 +405,8 @@ async function walkSkillsDir(input: {
         }
 
         if (resolved.kind === 'directory') {
+            // Without canonical paths, directory symlinks cannot be traversed safely.
+            if (entry.isSymlink && !bridge.realPath) continue
             await walkSkillsDir({
                 dir: fullPath,
                 rootDir,
@@ -410,7 +421,7 @@ async function walkSkillsDir(input: {
             continue
         }
 
-        if (!includeRootFiles || !entry.name.endsWith('.md')) {
+        if (hasSkillFile || !includeRootFiles || !entry.name.endsWith('.md')) {
             continue
         }
 

@@ -214,41 +214,47 @@ export function SkillsSection() {
                 const discovered: SkillItem[] = []
                 const seen = new Set<string>()
 
-                const scanDir = async (dir: string) => {
+                const visitedDirs = new Set<string>()
+                const scanDir = async (dir: string): Promise<void> => {
+                    if (cancelled || visitedDirs.has(dir)) return
+                    visitedDirs.add(dir)
+                    const skillMdPath = `${dir}/SKILL.md`
+                    const directoryName = dir.replace(/\\/g, '/').split('/').pop()!
+                    try {
+                        const file =
+                            (await fs.readFileIfExists?.(skillMdPath)) ??
+                            (await fs.readFile(skillMdPath).catch(() => null))
+                        if (file && file.dataBase64) {
+                            const content = base64ToUtf8(file.dataBase64)
+                            const { frontmatter } = parseFrontmatter(content)
+                            const name = (frontmatter.name || directoryName).toLowerCase()
+                            if (!seen.has(name)) {
+                                seen.add(name)
+                                discovered.push({
+                                    name: frontmatter.name || directoryName,
+                                    description: frontmatter.description || '',
+                                    filePath: skillMdPath,
+                                    baseDir: dir,
+                                    disableModelInvocation: Boolean(
+                                        frontmatter['disable-model-invocation'],
+                                    ),
+                                })
+                            }
+                        }
+                    } catch {
+                        // Skip invalid skill file
+                    }
                     try {
                         const entries = await fs.readDir?.(dir)
                         if (!entries || !Array.isArray(entries)) return
                         for (const entry of entries) {
-                            if (entry.isDirectory) {
-                                const skillMdPath = `${entry.path}/SKILL.md`
-                                try {
-                                    const file =
-                                        (await fs.readFileIfExists?.(skillMdPath)) ??
-                                        (await fs.readFile(skillMdPath).catch(() => null))
-                                    if (file && file.dataBase64) {
-                                        const content = base64ToUtf8(file.dataBase64)
-                                        const { frontmatter } = parseFrontmatter(content)
-                                        const name = (frontmatter.name || entry.name).toLowerCase()
-                                        if (!seen.has(name)) {
-                                            seen.add(name)
-                                            discovered.push({
-                                                name: frontmatter.name || entry.name,
-                                                description: frontmatter.description || '',
-                                                filePath: skillMdPath,
-                                                baseDir: entry.path,
-                                                disableModelInvocation: Boolean(
-                                                    frontmatter['disable-model-invocation'],
-                                                ),
-                                            })
-                                        }
-                                    }
-                                } catch {
-                                    // Skip invalid skill file
-                                }
+                            // Do not follow directory symlinks without canonical path resolution.
+                            if (entry.isDirectory && !entry.isSymbolicLink) {
+                                await scanDir(entry.path)
                             }
                         }
                     } catch {
-                        // Directory does not exist, ignore
+                        // Directory does not exist, ignore.
                     }
                 }
 
