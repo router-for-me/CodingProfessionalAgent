@@ -53,6 +53,7 @@ const testModels: readonly ModelCatalogEntry[] = [
 let settingsState: AppSettings
 let modelsState: readonly ModelCatalogEntry[]
 let sessionsState: SessionItem[]
+let pendingSessionContext: { projectId: string | null; branch: string | null; speed?: 'standard' | 'fast' | 'max' }
 let activeRunsState: Record<string, any>
 let mockServices: any
 let settingsListeners: Set<() => void>
@@ -95,6 +96,7 @@ function resetState(): void {
     }
     modelsState = []
     sessionsState = []
+    pendingSessionContext = { projectId: null, branch: null }
     activeRunsState = {}
 
     mockServices = {
@@ -154,6 +156,10 @@ function resetState(): void {
             ),
         },
         ui: {
+            getPendingSessionContext: () => pendingSessionContext,
+            setPendingSessionContext: vi.fn((context: typeof pendingSessionContext) => {
+                pendingSessionContext = { ...pendingSessionContext, ...context }
+            }),
             pushToast: vi.fn(),
         },
     }
@@ -201,7 +207,7 @@ describe('ModelSelect', () => {
             catalogStatus = 'ready'
             modelsListeners.forEach((listener) => listener())
         })
-        expect(settingsState.speed).toBe('standard')
+        expect(settingsState.speed).toBe('fast')
         expect(sessionsState[0]?.speed).toBe('standard')
     })
 
@@ -360,7 +366,7 @@ describe('ModelSelect', () => {
         expect(screen.getByRole('menuitem', { name: 'Advanced' })).toBeVisible()
     })
 
-    it('toggles the lightning speed button between gray and blue for fast model', async () => {
+    it('does not modify the system speed when toggled before a new session exists', async () => {
         const user = userEvent.setup()
         modelsState = [testModels[1]!]
         renderModelSelect()
@@ -373,16 +379,33 @@ describe('ModelSelect', () => {
         expect(speedToggle).toHaveAttribute('aria-checked', 'false')
         expect(zapIcon).toHaveClass('text-[var(--text-muted)]')
         expect(settingsState.speed).toBe('standard')
+        mockServices.settings.setSpeed.mockClear()
 
         await user.click(speedToggle)
-        expect(settingsState.speed).toBe('fast')
-        expect(speedToggle).toHaveAttribute('aria-checked', 'true')
-        expect(zapIcon).toHaveClass('text-[var(--accent-blue)]')
-
-        await user.click(speedToggle)
+        expect(mockServices.settings.setSpeed).not.toHaveBeenCalled()
         expect(settingsState.speed).toBe('standard')
+    })
+
+    it('toggles pending speed for a new session without changing the system default', async () => {
+        const user = userEvent.setup()
+        modelsState = [testModels[1]!]
+        renderModelSelect()
+
+        await user.click(screen.getByRole('button', { name: 'Model' }))
+        const speedToggle = screen.getByRole('menuitemcheckbox', { name: 'Fast' })
+        mockServices.settings.setSpeed.mockClear()
+
+        await user.click(speedToggle)
+
+        expect(speedToggle).toHaveAttribute('aria-checked', 'true')
+        expect(pendingSessionContext.speed).toBe('fast')
+        expect(settingsState.speed).toBe('standard')
+        expect(mockServices.settings.setSpeed).not.toHaveBeenCalled()
+
+        await user.click(speedToggle)
         expect(speedToggle).toHaveAttribute('aria-checked', 'false')
-        expect(zapIcon).toHaveClass('text-[var(--text-muted)]')
+        expect(pendingSessionContext.speed).toBe('standard')
+        expect(settingsState.speed).toBe('standard')
     })
 
     it.each([

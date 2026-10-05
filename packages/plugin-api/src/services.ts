@@ -544,6 +544,7 @@ export interface PendingSessionContext {
     branch: string | null
     workLocation?: 'local' | 'worktree'
     environmentId?: string | null
+    speed?: Speed
     standalone?: boolean
 }
 

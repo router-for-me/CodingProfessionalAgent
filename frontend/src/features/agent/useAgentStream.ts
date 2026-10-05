@@ -2380,7 +2380,13 @@ export function useAgentStream(
             const targetSession = capturedSessionId
                 ? sessionState.sessions.find((s) => s.id === capturedSessionId)
                 : undefined
-            const settings = resolveSettingsForPayload(targetSession, payload)
+            const pendingSessionContext = useUiStore.getState().pendingSessionContext
+            const settings = {
+                ...resolveSettingsForPayload(targetSession, payload),
+                ...(!capturedSessionId && payload.speed === undefined && pendingSessionContext.speed
+                    ? { speed: pendingSessionContext.speed }
+                    : {}),
+            }
 
             if (payload.editMessageId && targetSessionId) {
                 const oldSteers = rt.pendingSteers.get(targetSessionId)
@@ -2721,6 +2727,10 @@ export function useAgentStream(
                         modelId: settings.modelId,
                         reasoningEffort: settings.reasoningLevel,
                         speed: settings.speed,
+                    })
+                    useUiStore.getState().setPendingSessionContext({
+                        ...useUiStore.getState().pendingSessionContext,
+                        speed: undefined,
                     })
                 }
 

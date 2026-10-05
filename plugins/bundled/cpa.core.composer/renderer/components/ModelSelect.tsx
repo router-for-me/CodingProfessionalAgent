@@ -53,6 +53,9 @@ export function ModelSelect({
     const modelSettings = settings.modelSettings
 
     const currentSessions = useSessions()
+    const [pendingSpeed, setPendingSpeed] = useState<Speed | undefined>(
+        () => services?.ui?.getPendingSessionContext?.().speed,
+    )
     const sessionRuntimeSettings = sessionId
         ? currentSessions.find((session: any) => session.id === sessionId)
         : undefined
@@ -61,7 +64,10 @@ export function ModelSelect({
     const reasoningLevel =
         (sessionRuntimeSettings?.reasoningEffort as ModelReasoningOption['id'] | undefined) ??
         selectedReasoningLevel
-    const speed = (sessionRuntimeSettings?.speed as Speed | undefined) ?? selectedSpeed
+    const speed =
+        (sessionRuntimeSettings?.speed as Speed | undefined) ??
+        (!sessionId ? pendingSpeed : undefined) ??
+        selectedSpeed
 
     const setModelId = (id: string) => services?.settings?.setModelId?.(id)
     const setReasoningLevel = (level: string) => services?.settings?.setReasoningLevel?.(level)
@@ -211,7 +217,16 @@ export function ModelSelect({
             changed = true
         }
         if (normalized.speed !== speed) {
-            setSpeed(normalized.speed)
+            if (!sessionId && pendingSpeed !== undefined) {
+                setPendingSpeed(normalized.speed)
+                const pendingContext = services?.ui?.getPendingSessionContext?.()
+                services?.ui?.setPendingSessionContext?.({
+                    ...pendingContext,
+                    speed: normalized.speed,
+                })
+            } else if (!sessionId) {
+                setSpeed(normalized.speed)
+            }
             changed = true
         }
         if (changed && sessionId) {
@@ -231,6 +246,8 @@ export function ModelSelect({
         speed,
         sessionId,
         disabled,
+        pendingSpeed,
+        services,
     ])
 
     useLayoutEffect(() => {
@@ -249,6 +266,12 @@ export function ModelSelect({
             return () => observer.disconnect()
         }
     }, [currentModelLabel, currentReasoningLabel, isFastEnabled])
+
+    useEffect(() => {
+        if (!sessionId) {
+            setPendingSpeed(services?.ui?.getPendingSessionContext?.()?.speed)
+        }
+    }, [sessionId, services])
 
     useEffect(() => {
         if (disabled && !isSessionRunning) setOpen(false)
@@ -323,14 +346,21 @@ export function ModelSelect({
     }
 
     const handleSpeedChange = (nextSpeed: Speed) => {
-        setSpeed(nextSpeed)
         if (sessionId) {
             setSessionRuntimeSettings(sessionId, {
                 modelId: matchedModel?.id ?? modelId,
                 reasoningEffort: reasoningLevel,
                 speed: nextSpeed,
             })
+            return
         }
+
+        setPendingSpeed(nextSpeed)
+        const pendingContext = services?.ui?.getPendingSessionContext?.()
+        services?.ui?.setPendingSessionContext?.({
+            ...pendingContext,
+            speed: nextSpeed,
+        })
     }
 
     return (

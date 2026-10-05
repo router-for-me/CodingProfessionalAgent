@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { SkillReference } from '@cpa/plugin-api'
+import type { SkillReference, Speed } from '@cpa/plugin-api'
 import { createId } from '@/lib/id'
 import { isMobileBrowser } from '@/lib/platform'
 import { useSessionStore } from '@/stores/sessionStore'
@@ -90,6 +90,7 @@ export interface PendingSessionContext {
   branch: string | null
   workLocation?: 'local' | 'worktree'
   environmentId?: string | null
+  speed?: Speed
 }
 
 export interface OpenRightPanelTabOptions {

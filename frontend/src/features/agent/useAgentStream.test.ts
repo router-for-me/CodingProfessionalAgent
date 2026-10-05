@@ -321,7 +321,11 @@ function resetStores(): void {
         openTabIdsByParent: {},
         focusedIdByParent: {},
     })
-    useUiStore.setState({ toasts: [], composerDraft: '' })
+    useUiStore.setState({
+        toasts: [],
+        composerDraft: '',
+        pendingSessionContext: { projectId: null, branch: null },
+    })
     useSettingsStore.getState().hydrate({
         modelId: model.id,
         reasoningLevel: 'medium',
@@ -1601,7 +1605,8 @@ describe('useAgentStream', () => {
         hook2.unmount()
     })
 
-    it('creates a new session when explicit sessionId is null even if currentSessionId is set', async () => {
+    it('creates a new session with the system default speed when explicit sessionId is null', async () => {
+        useSettingsStore.getState().setSpeed('fast')
         const oldSessionId = useSessionStore.getState().createSession({ title: 'Old Session' })
         useSessionStore.getState().setCurrentSession(oldSessionId)
 
@@ -1627,7 +1632,7 @@ describe('useAgentStream', () => {
         ).toMatchObject({
             modelId: 'test-model',
             reasoningEffort: 'medium',
-            speed: 'standard',
+            speed: 'fast',
         })
         expect(useMessageStore.getState().getEntries(oldSessionId)).toHaveLength(0)
         const newEntries = useMessageStore.getState().getEntries(createdSessionId!)
@@ -1637,6 +1642,33 @@ describe('useAgentStream', () => {
             type: 'text',
             text: 'New conversation starting from home',
         })
+    })
+
+    it('uses a pending composer speed for a new session without changing the system default', async () => {
+        useUiStore.setState({
+            pendingSessionContext: { projectId: null, branch: null, speed: 'fast' },
+        })
+
+        const { result } = renderHook(() => useAgentStream(), {
+            wrapper: wrapperFor(service),
+        })
+
+        let createdSessionId: string | null = null
+        await act(async () => {
+            createdSessionId = await result.current.send({
+                text: 'Use pending fast speed',
+                sessionId: null,
+            })
+        })
+
+        await waitFor(() => expect(result.current.isStreaming).toBe(false))
+
+        expect(createdSessionId).not.toBeNull()
+        expect(useSessionStore.getState().sessions.find((session) => session.id === createdSessionId))
+            .toMatchObject({ speed: 'fast' })
+        expect(useSettingsStore.getState().settings.speed).toBe('standard')
+        expect(useUiStore.getState().pendingSessionContext.speed).toBeUndefined()
+        expect(service.prepareInputs[0]?.speed).toBe('fast')
     })
 
     it.each(['resumeSession', 'retrySession'] as const)('authorizes removal of interrupted entries during %s', async (operation) => {
