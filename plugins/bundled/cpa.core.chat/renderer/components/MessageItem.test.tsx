@@ -118,6 +118,74 @@ describe('MessageItem user actions', () => {
     expect(screen.getByText('Original content')).toBeInTheDocument()
   })
 
+  it('keeps Cmd/Ctrl+Enter as the send shortcut by default', async () => {
+    const onEditMessage = vi.fn().mockResolvedValue(undefined)
+    render(
+      <MessageItem
+        message={message}
+        onEditMessage={onEditMessage}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /Edit/i }))
+    const input = screen.getByTestId('message-edit-input')
+    setContentEditableValue(input, 'Original content')
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    expect(input).toHaveAttribute('data-value', 'Original content\n')
+    expect(onEditMessage).not.toHaveBeenCalled()
+
+    fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true })
+    await waitFor(() => {
+      expect(onEditMessage).toHaveBeenCalledWith('u1', 'Original content', [])
+    })
+  })
+
+  it('uses the configured Enter send shortcut when editing a message', async () => {
+    const onEditMessage = vi.fn().mockResolvedValue(undefined)
+    const settingsSnapshot = { editor: { sendShortcut: 'enter' } }
+    render(
+      <HostServicesProvider services={{
+        settings: { getSnapshot: () => settingsSnapshot, subscribe: () => () => {} },
+      } as any}>
+        <MessageItem
+          message={message}
+          onEditMessage={onEditMessage}
+        />
+      </HostServicesProvider>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /Edit/i }))
+    fireEvent.keyDown(screen.getByTestId('message-edit-input'), { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(onEditMessage).toHaveBeenCalledWith('u1', 'Original content', [])
+    })
+  })
+
+  it('keeps Shift+Enter as a newline when Enter sends edited messages', () => {
+    const onEditMessage = vi.fn()
+    const settingsSnapshot = { editor: { sendShortcut: 'enter' } }
+    render(
+      <HostServicesProvider services={{
+        settings: { getSnapshot: () => settingsSnapshot, subscribe: () => () => {} },
+      } as any}>
+        <MessageItem
+          message={message}
+          onEditMessage={onEditMessage}
+        />
+      </HostServicesProvider>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /Edit/i }))
+    const input = screen.getByTestId('message-edit-input')
+    setContentEditableValue(input, 'Original content')
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: true })
+
+    expect(input).toHaveAttribute('data-value', 'Original content\n')
+    expect(onEditMessage).not.toHaveBeenCalled()
+  })
+
   it('submits edited text when saved', async () => {
     const onEditMessage = vi.fn().mockResolvedValue(undefined)
     render(

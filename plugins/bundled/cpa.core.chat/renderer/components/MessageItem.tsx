@@ -256,7 +256,9 @@ export const UserMessageRenderer = memo(function UserMessageRenderer(
     const [activeSkillIndex, setActiveSkillIndex] = useState(0)
     const [isSubmittingEdit, setIsSubmittingEdit] = useState(false)
     const usageCounts = useSkillUsageCounts()
-    const trigger = useSettings().skills?.trigger ?? '$'
+    const settings = useSettings()
+    const trigger = settings.skills?.trigger ?? '$'
+    const sendShortcut = settings.editor?.sendShortcut ?? 'cmdEnter'
 
     const isPending = Boolean(message.pendingStatus)
 
@@ -473,10 +475,11 @@ export const UserMessageRenderer = memo(function UserMessageRenderer(
                                             cancelEditing()
                                             return
                                         }
-                                        if (
-                                            event.key === 'Enter' &&
-                                            (event.metaKey || event.ctrlKey)
-                                        ) {
+                                        const shouldSend =
+                                            sendShortcut === 'cmdEnter'
+                                                ? event.key === 'Enter' && (event.metaKey || event.ctrlKey)
+                                                : event.key === 'Enter' && !event.shiftKey
+                                        if (shouldSend) {
                                             event.preventDefault()
                                             void submitEditing()
                                         }
