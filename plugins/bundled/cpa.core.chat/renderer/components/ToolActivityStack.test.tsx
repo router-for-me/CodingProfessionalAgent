@@ -312,6 +312,7 @@ describe('ToolActivityStack', () => {
   })
 
   it('shows localized copy for built-in memory and web search tools', () => {
+    expect(i18n.t('tool.display.memories_add')).toBe('Write memory')
     render(
       <ToolActivityStack
         parts={[namedToolPart('t1', 'memories_search', { queries: ['preference'] })]}
@@ -326,10 +327,12 @@ describe('ToolActivityStack', () => {
 
   it('shows Chinese copy for built-in tools instead of function names', async () => {
     await i18n.changeLanguage('zh-CN')
+    expect(i18n.t('tool.display.memories_add')).toBe('写入记忆')
     render(
       <ToolActivityStack
         parts={[
-          namedToolPart('t1', 'memories_list'),
+          namedToolPart('t1', 'memories_read', { ids: [1] }),
+          namedToolPart('t-add', 'memories_add', { title: 'note', note: 'remember this' }),
           namedToolPart('t2', 'web_search', { query: 'latest release' }, 'running'),
         ]}
         onApproveTool={() => undefined}
@@ -341,7 +344,8 @@ describe('ToolActivityStack', () => {
     expect(screen.queryByText(/web_search/)).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByTestId('tool-activity-expand'))
-    expect(screen.getByTestId('tool-activity-history')).toHaveTextContent('已列出记忆')
-    expect(screen.queryByText(/memories_list/)).not.toBeInTheDocument()
+    expect(screen.getByTestId('tool-activity-history')).toHaveTextContent('已读取记忆')
+    expect(screen.getByTestId('tool-activity-history')).toHaveTextContent('已写入记忆')
+    expect(screen.queryByText(/memories_read|memories_add/)).not.toBeInTheDocument()
   })
 })

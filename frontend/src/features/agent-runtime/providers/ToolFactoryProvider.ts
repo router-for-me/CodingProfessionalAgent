@@ -92,12 +92,9 @@ const KNOWN_APPROVAL_POLICIES: ReadonlyMap<string, ToolApprovalPolicy> = new Map
     ['manage_todo_list', { riskLevel: 'session', requiresApproval: false, approvalCategory: 'task-management' }],
 
     // Memory tools
-    ['memories_list', { riskLevel: 'read', requiresApproval: false, approvalCategory: 'memory-read' }],
     ['memories_read', { riskLevel: 'read', requiresApproval: false, approvalCategory: 'memory-read' }],
     ['memories_search', { riskLevel: 'read', requiresApproval: false, approvalCategory: 'memory-read' }],
-    ['memory_search', { riskLevel: 'read', requiresApproval: false, approvalCategory: 'memory-read' }],
-    ['memories_add_ad_hoc_note', { riskLevel: 'write', requiresApproval: false, approvalCategory: 'memory-write' }],
-    ['memory_store', { riskLevel: 'write', requiresApproval: false, approvalCategory: 'memory-write' }],
+    ['memories_add', { riskLevel: 'write', requiresApproval: false, approvalCategory: 'memory-write' }],
 ])
 
 /**
@@ -109,10 +106,6 @@ const KNOWN_TOOL_ALIASES: ReadonlyMap<string, readonly string[]> = new Map([
     ['bash', ['pwsh', 'powershell']],
     ['send_message', ['send_input']],
     ['send_input', ['send_message']],
-    ['memories_search', ['memory_search']],
-    ['memory_search', ['memories_search']],
-    ['memories_add_ad_hoc_note', ['memory_store']],
-    ['memory_store', ['memories_add_ad_hoc_note']],
 ])
 
 /**

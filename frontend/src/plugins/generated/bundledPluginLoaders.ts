@@ -843,11 +843,12 @@ export const bundledManifests: Readonly<Record<string, PluginManifest>> = Object
         "name": "Memories",
         "version": "1.0.0",
         "apiVersion": "1.0.0",
-        "description": "Core project memory system prompt and settings section",
+        "description": "Core local memory storage, tools, system prompt and settings section",
         "engines": {
                 "cpa": ">=1.0.0"
         },
         "entries": {
+                "main": "./main/index.ts",
                 "renderer": "./renderer/index.tsx",
                 "agent": "./agent/index.ts"
         },
@@ -857,15 +858,22 @@ export const bundledManifests: Readonly<Record<string, PluginManifest>> = Object
                 "cpa.core.settings": ">=1.0.0"
         },
         "capabilities": [
-                "filesystem.read",
-                "filesystem.write"
+                "memories.*"
         ],
         "contributes": {
+                "service": [
+                        "memoriesDatabaseService"
+                ],
+                "rpc": [
+                        "memories:search",
+                        "memories:read",
+                        "memories:add",
+                        "memories:clear"
+                ],
                 "tool-factory": [
-                        "memories_list",
-                        "memories_read",
                         "memories_search",
-                        "memories_add_ad_hoc_note"
+                        "memories_read",
+                        "memories_add"
                 ],
                 "resource-provider": [
                         "cpa.core.memories"

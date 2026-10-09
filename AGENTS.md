@@ -95,6 +95,7 @@ Electron Preload & Main (src/main, src/preload)
   - Layout under `~/.coding-professional-agent/`:
     - `sessions/data.db`: Persisted SQLite database storing session metadata, session entries, subagents, conversation turns, and skill invocations with WAL mode for fast querying, ACID transactions, and multi-dimensional metrics aggregation.
     - `sessions/`: Session storage directory containing `data.db` (legacy `sessions/<sessionId>.json` files automatically migrated to SQLite on access).
+    - `memories/memories.db`: Persisted SQLite database (WAL) storing local memories; legacy Markdown memory files are migrated on first access.
     - `settings.json`: Persisted global application settings and configuration.
     - `projects.json`: Persisted workspace projects list.
     - `cached_models.json`: Cached model catalog entries from remote endpoint.

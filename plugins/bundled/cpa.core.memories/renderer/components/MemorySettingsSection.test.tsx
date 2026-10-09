@@ -1,14 +1,19 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { HostServicesProvider } from '@cpa/plugin-ui'
-import type { HostServices, SettingsService, NotificationService, FileSystemService } from '@cpa/plugin-api'
+import type { HostServices, SettingsService, NotificationService } from '@cpa/plugin-api'
 import { MemorySettingsSection } from './MemorySettingsSection.js'
+
+vi.mock('@cpa/plugin-ui', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@cpa/plugin-ui')>(),
+    useTranslation: () => ({ t: (key: string, options?: { defaultValue?: string }) => options?.defaultValue ?? key }),
+}))
 
 describe('MemorySettingsSection', () => {
     let mockSettings: any
     let mockSettingsService: SettingsService
     let mockNotificationService: NotificationService
-    let mockFileSystemService: FileSystemService
+    let invoke: ReturnType<typeof vi.fn>
     let listeners: Array<() => void>
 
     beforeEach(() => {
@@ -35,22 +40,13 @@ describe('MemorySettingsSection', () => {
             show: vi.fn(),
         } as unknown as NotificationService
 
-        mockFileSystemService = {
-            readFile: vi.fn(),
-            writeFile: vi.fn(),
-            getRuntimeInfo: vi.fn().mockResolvedValue({ homeDir: '/test/home', appConfigDirName: '.cpa-test' }),
-            stat: vi.fn().mockImplementation(async (path: string) => ({ isDir: !path.endsWith('.md'), mode: 0 })),
-            mkdirAll: vi.fn(),
-            removeFile: vi.fn(),
-            readDir: vi.fn().mockResolvedValue([]),
-        } as unknown as FileSystemService
+        invoke = vi.fn().mockResolvedValue(undefined)
     })
 
     function renderWithServices(ui: React.ReactElement) {
         const services = {
             settings: mockSettingsService,
             notifications: mockNotificationService,
-            fileSystem: mockFileSystemService,
         } as unknown as HostServices
 
         return render(
@@ -67,6 +63,7 @@ describe('MemorySettingsSection', () => {
         expect(screen.getByText('Enable local memory')).toBeInTheDocument()
         expect(screen.getByText('Tool-assisted memory')).toBeInTheDocument()
         expect(screen.getByText('Delete local memory')).toBeInTheDocument()
+        expect(screen.getByText('Delete all memories stored in the local memory database. Legacy Markdown backup files in the memories folder are kept.')).toBeInTheDocument()
     })
 
     it('toggles local memory setting', () => {
@@ -91,31 +88,34 @@ describe('MemorySettingsSection', () => {
         })
     })
 
-    it('actually deletes memory through host services before showing success', async () => {
-        vi.mocked(mockFileSystemService.readDir!).mockResolvedValueOnce([
-            { name: 'MEMORY.md', isDirectory: false, isFile: true, path: '' },
-        ])
-        renderWithServices(<MemorySettingsSection backendOptions={{ bridge: undefined }} />)
+    it('clears memory through RPC before showing success', async () => {
+        let resolveClear!: () => void
+        invoke.mockReturnValueOnce(new Promise<void>((resolve) => { resolveClear = resolve }))
+        renderWithServices(<MemorySettingsSection capabilityClient={{ invoke }} />)
         fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+
+        expect(invoke).toHaveBeenCalledExactlyOnceWith('memories:clear', [])
+        expect(screen.getByRole('button', { name: 'Deleting...' })).toBeDisabled()
+        expect(mockNotificationService.show).not.toHaveBeenCalled()
+
+        await act(async () => { resolveClear() })
         await waitFor(() => {
-            expect(mockNotificationService.show).toHaveBeenCalledWith(expect.objectContaining({ title: 'Local memory deleted', type: 'info' }))
+            expect(mockNotificationService.show).toHaveBeenCalledWith(expect.objectContaining({ title: 'Local memory database cleared (legacy Markdown backups kept)', type: 'info' }))
         })
-        expect(mockFileSystemService.removeFile).toHaveBeenCalledWith('/test/home/.cpa-test/memories/MEMORY.md')
-        expect(mockFileSystemService.readDir).toHaveBeenCalledTimes(2)
+        expect(mockNotificationService.show).toHaveBeenCalledTimes(1)
+        expect(screen.getByRole('button', { name: 'Delete' })).toBeEnabled()
     })
 
-    it.each(['missing', 'rejected', 'no-op'] as const)('shows only failure when deletion is %s', async (failure) => {
-        vi.mocked(mockFileSystemService.readDir!).mockResolvedValue([
-            { name: 'MEMORY.md', isDirectory: false, isFile: true, path: '' },
-        ])
-        if (failure === 'missing') mockFileSystemService.removeFile = undefined
-        if (failure === 'rejected') vi.mocked(mockFileSystemService.removeFile!).mockRejectedValue(new Error('EACCES'))
-        renderWithServices(<MemorySettingsSection />)
+    it.each(['missing', 'rejected'] as const)('shows only failure when the capability client is %s', async (failure) => {
+        if (failure === 'rejected') invoke.mockRejectedValueOnce(new Error('RPC unavailable'))
+        renderWithServices(<MemorySettingsSection capabilityClient={failure === 'missing' ? undefined : { invoke }} />)
         fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
         await waitFor(() => {
             expect(mockNotificationService.show).toHaveBeenCalledWith(expect.objectContaining({ title: 'Failed to delete local memory', type: 'error' }))
         })
         expect(mockNotificationService.show).toHaveBeenCalledTimes(1)
+        if (failure === 'rejected') expect(invoke).toHaveBeenCalledExactlyOnceWith('memories:clear', [])
+        else expect(invoke).not.toHaveBeenCalled()
         expect(screen.getByRole('button', { name: 'Delete' })).toBeEnabled()
     })
 })

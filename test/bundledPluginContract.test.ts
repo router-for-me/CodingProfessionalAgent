@@ -850,7 +850,7 @@ describe('bundledPluginContract baseline', () => {
         expect(todoLegacy).toHaveLength(0)
     })
 
-    it('ensures cpa.core.memories is fully migrated with real renderer and agent entries, authoritative manifest, and zero legacy adapters', async () => {
+    it('ensures cpa.core.memories is fully migrated with real main, renderer and agent entries, authoritative manifest, and zero legacy adapters', async () => {
         const memoriesDir = path.join(repoRoot, 'plugins', 'bundled', 'cpa.core.memories')
         const manifestPath = path.join(memoriesDir, 'manifest.json')
         expect(fs.existsSync(manifestPath)).toBe(true)
@@ -860,42 +860,49 @@ describe('bundledPluginContract baseline', () => {
         expect(manifest.entries).toBeDefined()
         expect(manifest.entries.renderer).toBe('./renderer/index.tsx')
         expect(manifest.entries.agent).toBe('./agent/index.ts')
-        expect(manifest.entries.main).toBeUndefined()
+        expect(manifest.entries.main).toBe('./main/index.ts')
         expect(manifest.dependencies).toBeDefined()
         expect(manifest.capabilities).toBeDefined()
-        expect(manifest.capabilities).toEqual(
-            expect.arrayContaining(['filesystem.read', 'filesystem.write']),
-        )
+        expect(manifest.capabilities).toEqual(['memories.*'])
         expect(manifest.contributes).toBeDefined()
-        expect(manifest.contributes['tool-factory']).toEqual(
-            expect.arrayContaining([
-                'memories_list',
-                'memories_read',
-                'memories_search',
-                'memories_add_ad_hoc_note',
-            ]),
-        )
+        expect(manifest.contributes['tool-factory']).toEqual([
+            'memories_search',
+            'memories_read',
+            'memories_add',
+        ])
+        expect(manifest.contributes['service']).toEqual(['memoriesDatabaseService'])
+        expect(manifest.contributes['rpc']).toEqual([
+            'memories:search',
+            'memories:read',
+            'memories:add',
+            'memories:clear',
+        ])
         expect(manifest.contributes['resource-provider']).toEqual(['cpa.core.memories'])
         expect(manifest.contributes['component-wrapper']).toEqual(['cpa.memories.personalization-wrapper'])
 
         // Check real files exist
+        const mainEntryPath = path.join(memoriesDir, 'main', 'index.ts')
         const rendererEntryPath = path.join(memoriesDir, 'renderer', 'index.tsx')
         const agentEntryPath = path.join(memoriesDir, 'agent', 'index.ts')
+        expect(fs.existsSync(mainEntryPath)).toBe(true)
         expect(fs.existsSync(rendererEntryPath)).toBe(true)
         expect(fs.existsSync(agentEntryPath)).toBe(true)
 
         // Entries must use definePluginEntry and must NOT embed manifest
+        const mainCode = fs.readFileSync(mainEntryPath, 'utf8')
         const rendererCode = fs.readFileSync(rendererEntryPath, 'utf8')
         const agentCode = fs.readFileSync(agentEntryPath, 'utf8')
+        expect(mainCode).toContain('definePluginEntry')
         expect(rendererCode).toContain('definePluginEntry')
         expect(agentCode).toContain('definePluginEntry')
+        expect(mainCode).not.toMatch(/manifest:\s*\{/)
         expect(rendererCode).not.toMatch(/manifest:\s*\{/)
         expect(agentCode).not.toMatch(/manifest:\s*\{/)
 
-        // Ensure scanner reports renderer and agent as real entries
+        // Ensure scanner reports main, renderer and agent as real entries
         const report = await scanBundledPluginContracts(repoRoot)
         const memoriesRealEntries = report.realEntries.filter((e) => e.pluginId === 'cpa.core.memories')
-        expect(memoriesRealEntries.map((e) => e.runtime).sort()).toEqual(['agent', 'renderer'])
+        expect(memoriesRealEntries.map((e) => e.runtime).sort()).toEqual(['agent', 'main', 'renderer'])
 
         const memoriesLegacy = report.legacyEntries.filter((e) => e.pluginId === 'cpa.core.memories')
         expect(memoriesLegacy).toHaveLength(0)

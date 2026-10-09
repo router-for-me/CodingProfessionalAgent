@@ -18,7 +18,7 @@ export const memoriesRendererEntry = definePluginEntry({
                     return createElement(
                         BaseComponent,
                         props,
-                        createElement(MemorySettingsSection),
+                        createElement(MemorySettingsSection, { capabilityClient: context.capabilityClient }),
                     )
                 }
             },

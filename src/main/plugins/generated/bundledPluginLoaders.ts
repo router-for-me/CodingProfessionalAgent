@@ -263,6 +263,51 @@ export const bundledManifests: Readonly<Record<string, PluginManifest>> = Object
                 ]
         }
 }),
+    'cpa.core.memories': Object.freeze({
+        "id": "cpa.core.memories",
+        "name": "Memories",
+        "version": "1.0.0",
+        "apiVersion": "1.0.0",
+        "description": "Core local memory storage, tools, system prompt and settings section",
+        "engines": {
+                "cpa": ">=1.0.0"
+        },
+        "entries": {
+                "main": "./main/index.ts",
+                "renderer": "./renderer/index.tsx",
+                "agent": "./agent/index.ts"
+        },
+        "activationPriority": 150,
+        "dependencies": {
+                "cpa.core.resources": ">=1.0.0",
+                "cpa.core.settings": ">=1.0.0"
+        },
+        "capabilities": [
+                "memories.*"
+        ],
+        "contributes": {
+                "service": [
+                        "memoriesDatabaseService"
+                ],
+                "rpc": [
+                        "memories:search",
+                        "memories:read",
+                        "memories:add",
+                        "memories:clear"
+                ],
+                "tool-factory": [
+                        "memories_search",
+                        "memories_read",
+                        "memories_add"
+                ],
+                "resource-provider": [
+                        "cpa.core.memories"
+                ],
+                "component-wrapper": [
+                        "cpa.memories.personalization-wrapper"
+                ]
+        }
+}),
     'cpa.core.code-mode': Object.freeze({
         "id": "cpa.core.code-mode",
         "name": "Code Mode",
@@ -346,6 +391,12 @@ export const bundledMainPackages: readonly ResolvedPluginPackage[] = Object.free
         source: Object.freeze({ kind: 'bundled' as const, spec: 'bundled:cpa.core.settings' }),
     }),
     Object.freeze({
+        manifest: bundledManifests['cpa.core.memories'],
+        entries: bundledManifests['cpa.core.memories'].entries ?? {},
+        sourceRoot: 'plugins/bundled/cpa.core.memories',
+        source: Object.freeze({ kind: 'bundled' as const, spec: 'bundled:cpa.core.memories' }),
+    }),
+    Object.freeze({
         manifest: bundledManifests['cpa.core.code-mode'],
         entries: bundledManifests['cpa.core.code-mode'].entries ?? {},
         sourceRoot: 'plugins/bundled/cpa.core.code-mode',
@@ -371,6 +422,10 @@ export const bundledMainEntryLoaders: Readonly<Record<string, BundledEntryLoader
     },
     'cpa.core.settings': async () => {
         const mod = await import('../../../../plugins/bundled/cpa.core.settings/main/index.js')
+        return mod.default ?? mod.entry ?? mod
+    },
+    'cpa.core.memories': async () => {
+        const mod = await import('../../../../plugins/bundled/cpa.core.memories/main/index.js')
         return mod.default ?? mod.entry ?? mod
     },
     'cpa.core.code-mode': async () => {

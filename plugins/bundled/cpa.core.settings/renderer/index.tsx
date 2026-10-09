@@ -313,9 +313,9 @@ export const settingsRendererEntry = definePluginEntry({
                         keywords: ['tool assisted memory'],
                     },
                     {
-                        id: 'deleteLocalMemory',
-                        labelKey: 'settings.personalization.deleteLocalMemory',
-                        descriptionKey: 'settings.personalization.deleteLocalMemory.desc',
+                        id: 'clearLocalMemory',
+                        labelKey: 'settings.personalization.clearLocalMemory',
+                        descriptionKey: 'settings.personalization.clearLocalMemory.desc',
                         keywords: ['delete memory'],
                     },
                 ],

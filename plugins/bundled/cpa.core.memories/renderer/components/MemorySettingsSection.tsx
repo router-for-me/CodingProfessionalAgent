@@ -1,24 +1,21 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
+import type { PluginCapabilityClient } from '@cpa/plugin-api'
 import {
     cn,
     ToggleSwitch,
     useHostServices,
     useTranslation,
 } from '@cpa/plugin-ui'
-import {
-    deleteLocalMemory,
-    type LocalMemoriesBackendOptions,
-} from '../../agent/localMemoriesBackend.js'
 
 export interface MemorySettingsSectionProps {
-    backendOptions?: LocalMemoriesBackendOptions
+    capabilityClient?: Pick<PluginCapabilityClient, 'invoke'>
 }
 
 /**
  * MemorySettingsSection provides controls to enable/disable local memory,
  * configure tool-assisted memory extraction, and delete local memories.
  */
-export function MemorySettingsSection({ backendOptions }: MemorySettingsSectionProps = {}) {
+export function MemorySettingsSection({ capabilityClient }: MemorySettingsSectionProps) {
     const { t } = useTranslation()
     const services = useHostServices()
 
@@ -53,27 +50,6 @@ export function MemorySettingsSection({ backendOptions }: MemorySettingsSectionP
 
     const [deleting, setDeleting] = useState(false)
 
-    const adaptedBridge = useMemo(() => {
-        const fileSystemService = services?.fileSystem
-        if (!fileSystemService) return undefined
-        return {
-            RuntimeInfo: fileSystemService.getRuntimeInfo?.bind(fileSystemService),
-            ReadFile: (p: string) => fileSystemService.readFile(p),
-            ReadFileIfExists: (p: string) =>
-                fileSystemService.readFileIfExists
-                    ? fileSystemService.readFileIfExists(p)
-                    : Promise.resolve(null),
-            WriteFile: (p: string, d: string) => fileSystemService.writeFile(p, d),
-            MkdirAll: fileSystemService.mkdirAll?.bind(fileSystemService),
-            RemoveFile: fileSystemService.removeFile?.bind(fileSystemService),
-            Stat: fileSystemService.stat?.bind(fileSystemService),
-            ReadDir: fileSystemService.readDir ? async (p: string) => {
-                const list = await fileSystemService.readDir!(p)
-                return list.map((e) => ({ name: e.name, isDir: e.isDirectory, isSymbolicLink: e.isSymbolicLink }))
-            } : undefined,
-        }
-    }, [services?.fileSystem])
-
     const pushToast = useCallback(
         (msg: string, type: 'info' | 'error' = 'info') => {
             if (services?.notifications?.show) {
@@ -86,11 +62,9 @@ export function MemorySettingsSection({ backendOptions }: MemorySettingsSectionP
     const handleDeleteMemory = useCallback(async () => {
         setDeleting(true)
         try {
-            await deleteLocalMemory({
-                ...backendOptions,
-                bridge: backendOptions?.bridge ?? adaptedBridge,
-            })
-            pushToast(t('settings.personalization.memoryDeleted', { defaultValue: 'Local memory deleted' }))
+            if (!capabilityClient) throw new Error('Memories capability client is unavailable')
+            await capabilityClient.invoke('memories:clear', [])
+            pushToast(t('settings.personalization.memoryDeleted', { defaultValue: 'Local memory database cleared (legacy Markdown backups kept)' }))
         } catch {
             pushToast(
                 t('settings.personalization.deleteMemoryFailed', {
@@ -101,7 +75,7 @@ export function MemorySettingsSection({ backendOptions }: MemorySettingsSectionP
         } finally {
             setDeleting(false)
         }
-    }, [backendOptions, adaptedBridge, pushToast, t])
+    }, [capabilityClient, pushToast, t])
 
     const learnMore = useCallback(() => {
         pushToast(t('toast.comingSoon', { defaultValue: 'Coming soon' }))
@@ -178,13 +152,13 @@ export function MemorySettingsSection({ backendOptions }: MemorySettingsSectionP
                 <div className="flex items-center justify-between px-4 py-3">
                     <div className="min-w-0 flex-1 pr-4">
                         <div className="text-[13px] font-medium text-[var(--text-primary)]">
-                            {t('settings.personalization.deleteLocalMemory', {
+                            {t('settings.personalization.clearLocalMemory', {
                                 defaultValue: 'Delete local memory',
                             })}
                         </div>
                         <div className="mt-0.5 text-[12px] leading-relaxed text-[var(--text-muted)]">
-                            {t('settings.personalization.deleteLocalMemory.desc', {
-                                defaultValue: 'Delete all memories stored locally on this machine',
+                            {t('settings.personalization.clearLocalMemory.desc', {
+                                defaultValue: 'Delete all memories stored in the local memory database. Legacy Markdown backup files in the memories folder are kept.',
                             })}
                         </div>
                     </div>

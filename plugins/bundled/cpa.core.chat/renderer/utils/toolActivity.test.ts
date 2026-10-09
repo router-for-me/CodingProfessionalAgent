@@ -41,8 +41,6 @@ describe('summarizeToolActivity', () => {
     'tool.summary.setSessionTitle': 'Set session title to {{title}}',
     'tool.summary.setSessionTitleGeneric': 'Set session title',
     'tool.summary.updatingTodoList': 'Updating todo list',
-    'tool.summary.listingMemories': 'Listing memories',
-    'tool.summary.listedMemories': 'Listed memories',
     'tool.summary.readingMemory': 'Reading memory',
     'tool.summary.readMemory': 'Read memory',
     'tool.summary.searchingMemories': 'Searching memories',
@@ -58,7 +56,7 @@ describe('summarizeToolActivity', () => {
     'tool.summary.executingCodeGeneric': 'Running code mode',
     'tool.summary.executedCodeGeneric': 'Ran code mode',
     'tool.display.memories_search': 'Memory search',
-    'tool.display.memories_add_ad_hoc_note': 'Write memory',
+    'tool.display.memories_add': 'Write memory',
     'tool.display.web_search': 'Web search',
   }
   const t: any = (key: string, options?: any) => {
@@ -215,39 +213,29 @@ describe('summarizeToolActivity', () => {
     expect(runningSearch.text).toBe('Searching memories')
     expect(runningSearch.text).not.toContain('memories_search')
 
-    const listed = summarizeToolActivity(
+    const read = summarizeToolActivity(
       {
         id: 'm2',
-        name: 'memories_list',
-        args: {},
+        name: 'memories_read',
+        args: { ids: [1] },
         status: 'done',
       },
       t,
     )
-    expect(listed.text).toBe('Listed memories')
+    expect(read.kind).toBe('read')
+    expect(read.text).toBe('Read memory')
 
     const wrote = summarizeToolActivity(
       {
         id: 'm3',
-        name: 'memories_add_ad_hoc_note',
-        args: { filename: 'note.md', note: 'remember this' },
+        name: 'memories_add',
+        args: { title: 'note', note: 'remember this' },
         status: 'done',
       },
       t,
     )
     expect(wrote.kind).toBe('write')
     expect(wrote.text).toBe('Wrote memory')
-
-    const aliasSearch = summarizeToolActivity(
-      {
-        id: 'm4',
-        name: 'memory_search',
-        args: {},
-        status: 'done',
-      },
-      t,
-    )
-    expect(aliasSearch.text).toBe('Searched memories')
 
     const webSearch = summarizeToolActivity(
       {
@@ -311,7 +299,18 @@ describe('summarizeToolActivity', () => {
   it('localizes built-in tool display names', () => {
     expect(toolDisplayName('memories_search', t)).toBe('Memory search')
     expect(toolDisplayName('web_search', t)).toBe('Web search')
-    expect(toolDisplayName('memory_store', t)).toBe('Write memory')
+    expect(toolDisplayName('memories_add', t)).toBe('Write memory')
+  })
+
+  it.each(['search', 'store'])('does not map the retired memory %s alias', (operation) => {
+    const name = ['memory', operation].join('_')
+    const displayName = `Memory ${operation === 'search' ? 'Search' : 'Store'}`
+    expect(toolDisplayName(name, t)).toBe(displayName)
+    for (const status of ['running', 'done']) {
+      const summary = summarizeToolActivity({ id: 'legacy', name, args: {}, status }, t)
+      expect(summary.kind).toBe('other')
+      expect(summary.text).toBe(`${status === 'running' ? 'Using' : 'Used'} ${displayName}`)
+    }
   })
 
   it('extracts and trims title from args with length truncation', () => {

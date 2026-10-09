@@ -20,8 +20,6 @@ const TOOL_DISPLAY_ALIASES: Record<string, string> = {
   ask_user: 'ask',
   manage_todo_list: 'todo',
   set_session_title: 'title',
-  memory_search: 'memories_search',
-  memory_store: 'memories_add_ad_hoc_note',
   send_input: 'send_message',
   delegate_agent: 'spawn_agent',
   subagent: 'spawn_agent',
@@ -31,11 +29,6 @@ const BUILTIN_TOOL_SUMMARIES: Record<
   string,
   { kind: ToolActivityKind; running: string; done: string }
 > = {
-  memories_list: {
-    kind: 'read',
-    running: 'tool.summary.listingMemories',
-    done: 'tool.summary.listedMemories',
-  },
   memories_read: {
     kind: 'read',
     running: 'tool.summary.readingMemory',
@@ -46,7 +39,7 @@ const BUILTIN_TOOL_SUMMARIES: Record<
     running: 'tool.summary.searchingMemories',
     done: 'tool.summary.searchedMemories',
   },
-  memories_add_ad_hoc_note: {
+  memories_add: {
     kind: 'write',
     running: 'tool.summary.writingMemory',
     done: 'tool.summary.wroteMemory',

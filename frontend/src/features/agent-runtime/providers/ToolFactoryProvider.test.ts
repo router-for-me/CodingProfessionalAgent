@@ -337,6 +337,21 @@ describe('ToolFactoryProvider', () => {
         })
     })
 
+    it('assigns memory policies only to the three canonical tools', () => {
+        for (const name of ['memories_search', 'memories_read']) {
+            expect(selectApprovalPolicy(name)).toEqual({
+                riskLevel: 'read',
+                requiresApproval: false,
+                approvalCategory: 'memory-read',
+            })
+        }
+        expect(selectApprovalPolicy('memories_add')).toEqual({
+            riskLevel: 'write',
+            requiresApproval: false,
+            approvalCategory: 'memory-write',
+        })
+    })
+
     it('finds tools by name or alias', () => {
         const dummyTool = (name: string): AgentTool => ({
             name,
@@ -354,13 +369,27 @@ describe('ToolFactoryProvider', () => {
             dummyTool('write'),
             dummyTool('send_message'),
             dummyTool('memories_search'),
+            dummyTool('memories_read'),
+            dummyTool('memories_add'),
         ]
 
         expect(findToolByNameOrAlias(tools, 'read')?.name).toBe('read')
         expect(findToolByNameOrAlias(tools, 'pwsh')?.name).toBe('pwsh')
         expect(findToolByNameOrAlias(tools, 'powershell')?.name).toBe('pwsh')
         expect(findToolByNameOrAlias(tools, 'send_input')?.name).toBe('send_message')
-        expect(findToolByNameOrAlias(tools, 'memory_search')?.name).toBe('memories_search')
+        for (const name of ['memories_search', 'memories_read', 'memories_add']) {
+            expect(findToolByNameOrAlias(tools, name)?.name).toBe(name)
+        }
+        for (const tokens of [
+            ['memory', 'search'],
+            ['memory', 'store'],
+            ['memories', 'list'],
+            ['memories', 'add', 'ad', 'hoc', 'note'],
+        ]) {
+            const name = tokens.join('_')
+            expect(findToolByNameOrAlias(tools, name)).toBeUndefined()
+            expect(selectApprovalPolicy(name).approvalCategory).toBeUndefined()
+        }
         expect(findToolByNameOrAlias(tools, 'unknown_tool')).toBeUndefined()
 
         // Verify static methods on class
