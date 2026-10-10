@@ -26,7 +26,7 @@ describe('Code Mode agent tool factories', () => {
         expect(tool?.name).toBe('exec')
         const resources = registered.filter((item) => 'kind' in item && item.kind === 'system-prompt') as unknown as ResourceProvider[]
         const guidance = await resources[0]?.load({ agentTarget: 'main' })
-        expect(guidance).toEqual([expect.objectContaining({ id: 'code-mode-batch-guidance', content: expect.stringContaining('prefer one exec') })])
+        expect(guidance).toEqual([expect.objectContaining({ id: 'code-mode-batch-guidance', content: expect.stringContaining('Reserve `code mode` strictly') })])
         await entry.deactivate?.(context)
     })
 

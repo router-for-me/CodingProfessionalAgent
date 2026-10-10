@@ -92,11 +92,11 @@ describe('Code Mode schema to TypeScript', () => {
 })
 
 describe('Code Mode batch guidance', () => {
-    it('asks code mode to prefer exec for independent calls and stays silent otherwise', () => {
+    it('reserves code mode for multi-tool work and stays silent otherwise', () => {
         const guidance = codeModeBatchGuidance('code')
-        expect(guidance).toContain('prefer that direct tool')
-        expect(guidance).toContain('Do not wrap a single call in exec')
-        expect(guidance).toContain('prefer one exec')
+        expect(guidance).toContain('Do not use `code mode` for single or standalone tool invocations')
+        expect(guidance).toContain('Call the specific native tool directly (e.g., `bash`)')
+        expect(guidance).toContain('Reserve `code mode` strictly for multi-tool parallel orchestration')
         expect(guidance).toContain('Promise.all')
         expect(codeModeBatchGuidance('code-only')).toBeUndefined()
         expect(codeModeBatchGuidance('direct')).toBeUndefined()

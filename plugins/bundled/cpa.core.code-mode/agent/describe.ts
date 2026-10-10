@@ -150,8 +150,8 @@ export function codeModeBatchGuidance(mode: ToolMode): string | undefined {
     return [
         'Direct tools and code mode are both available.',
         DIRECT_TOOL_GUIDANCE,
-        'When you need only one tool call, prefer that direct tool. Do not wrap a single call in exec.',
-        'When you already plan several eligible nested tool calls that do not depend on each other, prefer one exec call instead of calling those tools directly.',
+        'Do not use `code mode` for single or standalone tool invocations. Call the specific native tool directly (e.g., `bash`) whenever a task requires only a single operation.',
+        'Reserve `code mode` strictly for multi-tool parallel orchestration, batch tasks, or operations requiring in-memory data filtering and aggregation.',
         'Put the independent calls in that same exec and start them together with Promise.all.',
         'If a later call depends on reading an earlier result before you can decide, use direct tool calls instead of guessing inside exec.',
     ].join('\n')
