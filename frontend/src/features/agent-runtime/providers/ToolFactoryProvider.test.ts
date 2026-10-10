@@ -497,6 +497,45 @@ describe('ToolFactoryProvider', () => {
         expect(execute).not.toHaveBeenCalled()
     })
 
+    it('does not leak empty placeholders when a factory intentionally returns null', async () => {
+        const bridge = new FakeNativeBridge()
+        await bridge.mkdirAll('/repo')
+        const registry = new RendererRegistry()
+        const transaction = registry.kernelRegistry.beginActivation({
+            id: 'cpa.core.code-mode',
+            version: '1.0.0',
+        })
+        transaction.register('tool-factory', 'exec', {
+            id: 'exec',
+            name: 'exec',
+            create: async () => null,
+        } satisfies ToolFactoryContribution)
+        transaction.register('tool-factory', 'wait', {
+            id: 'wait',
+            name: 'wait',
+            create: async () => null,
+        } satisfies ToolFactoryContribution)
+        transaction.register('tool-factory', 'legacy-only', {
+            name: 'legacy-only',
+            description: 'Still available',
+            parameters: { type: 'object', properties: {} },
+            execute: async () => ({ content: [{ type: 'text', text: 'ok' }] }),
+        })
+        transaction.commit()
+
+        const tools = await createToolsFromProviders({
+            cwd: '/repo',
+            bridge,
+            platform: 'darwin',
+            services: createMockHostServices(),
+            extensionRegistry: registry,
+        })
+
+        expect(tools.map((tool) => tool.name)).not.toContain('exec')
+        expect(tools.map((tool) => tool.name)).not.toContain('wait')
+        expect(tools.find((tool) => tool.name === 'legacy-only')?.description).toBe('Still available')
+    })
+
     it('does not inject requiresScheduledSession tools into non-scheduled sessions', async () => {
         const bridge = new FakeNativeBridge()
         bridge.setRuntimeInfo({ platform: 'darwin' })

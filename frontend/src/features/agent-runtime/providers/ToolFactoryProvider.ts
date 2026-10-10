@@ -328,6 +328,16 @@ export async function createToolsFromProviders(
     }
 
     const isScheduled = isScheduledSessionContext(context)
+    // Factories own their tools. A null or failed create() must not fall through
+    // to the description-less getAgentTools() placeholder.
+    const factoryToolNames = new Set<string>()
+    for (const factory of allFactories) {
+        for (const name of [factory.id, factory.name, ...(factory.aliases ?? [])]) {
+            if (typeof name === 'string' && name.length > 0) {
+                factoryToolNames.add(name)
+            }
+        }
+    }
 
     for (const factory of allFactories) {
         const requiresScheduled =
@@ -366,7 +376,7 @@ export async function createToolsFromProviders(
         ])
 
         const adaptedLegacyTools = legacyTools
-            .filter((lt) => !builtInNames.has(lt.name))
+            .filter((lt) => !builtInNames.has(lt.name) && !factoryToolNames.has(lt.name))
             .filter((lt) => {
                 if (lt.requiresScheduledSession && !isScheduled) {
                     return false
