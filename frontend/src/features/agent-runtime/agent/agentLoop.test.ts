@@ -308,7 +308,7 @@ describe('AgentLoop', () => {
         const loop = new AgentLoop({
             client,
             sleep,
-            generationSnapshot: { resources, hooks: [], middleware: [] } as AgentGenerationSnapshot,
+            generationSnapshot: { resources, hooks: [], middleware: [] } as unknown as AgentGenerationSnapshot,
         })
         await collect(loop.run({
             runId: 'run-skills', sessionId: 'sess-1', entries: [], userEntry: userEntry('u-skills', 'find a skill'),
@@ -357,7 +357,7 @@ describe('AgentLoop', () => {
                 },
                 hooks: [],
                 middleware: [],
-            } as AgentGenerationSnapshot,
+            } as unknown as AgentGenerationSnapshot,
         })
         await collect(loop.run({
             runId: 'run-skills-missing', sessionId: 'sess-1', entries: [], userEntry: userEntry('u-missing', 'find a skill'),
