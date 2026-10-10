@@ -1,6 +1,7 @@
 export interface AskOption {
     title: string
     description?: string
+    recommended?: boolean
 }
 
 export interface AskRequest {
@@ -13,10 +14,12 @@ export interface AskRequest {
     customPrompt?: string
     allowSkip: boolean
     createdAt: number
+    countdownDeadline?: number
 }
 
 export type AskDecision =
     | { type: 'selected'; option: AskOption; index: number }
+    | { type: 'timeout'; option: AskOption; index: number }
     | { type: 'custom'; text: string }
     | { type: 'skipped' }
     | { type: 'cancelled' }
@@ -25,8 +28,10 @@ export type AskDecision =
 export interface AskState {
     requestsBySession: Record<string, AskRequest | undefined>
     setRequest: (sessionId: string, request: AskRequest | null) => void
+    clearRequest: (sessionId: string, requestId: string) => void
     getRequest: (sessionId: string) => AskRequest | undefined
     submitAnswer: (sessionId: string, toolCallId: string, decision: AskDecision) => void
+    cancelCountdown: (sessionId: string, toolCallId: string) => void
     cancel: (sessionId: string, toolCallId?: string) => void
     clearSession: (sessionId: string) => void
     clearAll: () => void

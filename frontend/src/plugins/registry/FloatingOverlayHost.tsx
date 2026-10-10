@@ -5,6 +5,24 @@ import { rendererRegistry, RendererRegistry } from '../platform/rendererRegistry
 import { safePluginVisible } from '../platform/safePluginSurface'
 import { SlotErrorBoundary } from './SlotErrorBoundary'
 
+/**
+ * --floating-cover-inset reserves chat space for the maximum cover-bottom overlay
+ * height extending above its anchor. Entries are scoped to mounted overlay items.
+ */
+const floatingCoverInsets = new Map<symbol, number>()
+
+function publishCoverInset(key: symbol, inset?: number): void {
+    if (inset === undefined) {
+        floatingCoverInsets.delete(key)
+    } else {
+        floatingCoverInsets.set(key, inset)
+    }
+    const value = `${Math.max(0, ...floatingCoverInsets.values())}px`
+    if (document.documentElement.style.getPropertyValue('--floating-cover-inset') !== value) {
+        document.documentElement.style.setProperty('--floating-cover-inset', value)
+    }
+}
+
 export interface FloatingCoords {
     top: number
     left: number
@@ -219,6 +237,7 @@ function FloatingOverlayItem<P = Record<string, unknown>>({
     context,
 }: FloatingOverlayItemProps<P>): React.ReactNode {
     const overlayRef = useRef<HTMLDivElement>(null)
+    const insetKey = useRef(Symbol()).current
     const [isWidthSufficient, setIsWidthSufficient] = useState(true)
 
     const [coords, setCoords] = useState<FloatingCoords | null>(() => {
@@ -236,12 +255,14 @@ function FloatingOverlayItem<P = Record<string, unknown>>({
     const updatePosition = useCallback(() => {
         const anchorEl = findAnchorElement(item.anchor)
         if (!anchorEl || !isAnchorVisible(anchorEl)) {
+            publishCoverInset(insetKey)
             setCoords((prev) => (prev === null ? prev : null))
             return
         }
         const rect = anchorEl.getBoundingClientRect()
         if (rect.width <= 0 && rect.height <= 0) {
             // Anchor has collapsed / zero size
+            publishCoverInset(insetKey)
             setCoords((prev) => (prev === null ? prev : null))
             return
         }
@@ -255,6 +276,12 @@ function FloatingOverlayItem<P = Record<string, unknown>>({
         const overlayWidth = overlayRef.current ? overlayRef.current.offsetWidth : 0
         const sufficient = overlayWidth === 0 || rect.width >= overlayWidth - 4
         setIsWidthSufficient(sufficient)
+        const overlay = overlayRef.current
+        publishCoverInset(insetKey,
+            item.placement === 'cover-bottom' && sufficient && overlay
+                ? Math.max(0, overlay.offsetHeight - rect.height)
+                : undefined
+        )
 
         setCoords((prev) => {
             if (
@@ -267,7 +294,21 @@ function FloatingOverlayItem<P = Record<string, unknown>>({
             }
             return nextCoords
         })
-    }, [item.anchor, item.placement, item.offset])
+    }, [item.anchor, item.placement, item.offset, insetKey])
+
+    const hasCoords = coords !== null
+    useLayoutEffect(() => {
+        const overlay = overlayRef.current
+        updatePosition()
+        const observer = overlay && typeof ResizeObserver !== 'undefined'
+            ? new ResizeObserver(updatePosition)
+            : null
+        if (overlay) observer?.observe(overlay)
+        return () => {
+            observer?.disconnect()
+            publishCoverInset(insetKey)
+        }
+    }, [hasCoords, updatePosition, insetKey])
 
     useLayoutEffect(() => {
         let rafId: number | null = null

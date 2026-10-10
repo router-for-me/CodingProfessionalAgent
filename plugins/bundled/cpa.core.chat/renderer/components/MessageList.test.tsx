@@ -1,9 +1,99 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '@/i18n'
 import { HostServicesProvider } from '@cpa/plugin-ui'
 import type { DisplayMessage } from '../types.js'
 import { MessageList } from './MessageList.js'
+
+describe('MessageList floating inset', () => {
+  it.each([[false, false], [false, true], [true, false], [true, true]])('compensates browser clamping (pinned=%s, early scroll=%s)', (pinned, earlyScroll) => {
+    const callbacks = new Map<Element, () => void>()
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(private callback: () => void) {}
+      observe = (element: Element) => callbacks.set(element, this.callback)
+      disconnect = vi.fn()
+    })
+    try {
+      const { unmount } = render(<MessageList messages={[]} onApproveTool={() => {}} onRejectTool={() => {}} />)
+      const spacer = screen.getByTestId('message-list-floating-inset')
+      const scroller = screen.getByTestId('message-list-scroller')
+      let height = 300
+      let maxScroll = 1000
+      let scrollTop = 0
+      vi.spyOn(spacer, 'getBoundingClientRect').mockImplementation(() => ({ height } as DOMRect))
+      Object.defineProperty(scroller, 'scrollHeight', { configurable: true, get: () => maxScroll + 200 })
+      Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 200 })
+      Object.defineProperty(scroller, 'scrollTop', {
+        configurable: true,
+        get: () => scrollTop,
+        set: (value: number) => { scrollTop = Math.max(0, Math.min(maxScroll, value)) },
+      })
+      act(() => callbacks.get(spacer)!())
+      scroller.scrollTop = pinned ? 1000 : 900
+      fireEvent.scroll(scroller)
+      height = 0
+      maxScroll = 700
+      scroller.scrollTop = scroller.scrollTop
+      expect(scroller.scrollTop).toBe(700)
+      // Browsers may emit a clamp-induced scroll event before ResizeObserver delivery.
+      if (earlyScroll) fireEvent.scroll(scroller)
+      act(() => callbacks.get(spacer)!())
+      expect(scroller.scrollTop).toBe(pinned ? 700 : 600)
+      fireEvent.scroll(scroller)
+      height = 300
+      maxScroll = 1000
+      // A layout-induced event must not change the previously pinned state.
+      fireEvent.scroll(scroller)
+      act(() => callbacks.get(spacer)!())
+      expect(scroller.scrollTop).toBe(pinned ? 1000 : 900)
+      fireEvent.scroll(scroller)
+      height = 0
+      maxScroll = 700
+      scroller.scrollTop = scroller.scrollTop
+      // Also cover ResizeObserver delivery before the clamp scroll event.
+      act(() => callbacks.get(spacer)!())
+      expect(scroller.scrollTop).toBe(pinned ? 700 : 600)
+      fireEvent.scroll(scroller)
+      unmount()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('observes a gap-free spacer and preserves pinned or unpinned scroll position', () => {
+    const callbacks = new Map<Element, () => void>()
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(private callback: () => void) {}
+      observe = (element: Element) => callbacks.set(element, this.callback)
+      disconnect = vi.fn()
+    })
+    try {
+      const { unmount } = render(<MessageList messages={[]} onApproveTool={() => {}} onRejectTool={() => {}} />)
+      const spacer = screen.getByTestId('message-list-floating-inset')
+      const scroller = screen.getByTestId('message-list-scroller')
+      expect(spacer).toHaveAttribute('aria-hidden', 'true')
+      expect(spacer.style.height).toBe('var(--floating-cover-inset, 0px)')
+      expect(spacer.parentElement).not.toHaveClass('gap-4')
+      let height = 100
+      vi.spyOn(spacer, 'getBoundingClientRect').mockImplementation(() => ({ height } as DOMRect))
+      Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 1000 })
+      Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 200 })
+      act(() => callbacks.get(spacer)!())
+      expect(scroller.scrollTop).toBe(1000)
+      scroller.scrollTop = 300
+      fireEvent.scroll(scroller)
+      height = 150
+      act(() => callbacks.get(spacer)!())
+      expect(scroller.scrollTop).toBe(350)
+      height = 0
+      act(() => callbacks.get(spacer)!())
+      expect(scroller.scrollTop).toBe(200)
+      unmount()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+})
 
 describe('MessageList inline skill menu containment', () => {
     beforeEach(async () => {

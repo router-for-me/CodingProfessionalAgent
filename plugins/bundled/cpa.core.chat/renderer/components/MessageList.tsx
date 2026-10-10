@@ -121,7 +121,10 @@ export function MessageList({
   const { t } = useTranslation()
   const scrollerRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
+  const floatingInsetRef = useRef<HTMLDivElement>(null)
   const pinnedRef = useRef(true)
+  const lastKnownScrollTopRef = useRef(0)
+  const floatingInsetHeightRef = useRef(0)
   const [expandedAllHistory, setExpandedAllHistory] = useState(false)
   const lastUserMessage = findLastUserMessage(messages)
   const lastUserMessageKey = lastUserMessage
@@ -145,6 +148,7 @@ export function MessageList({
       const scroller = scrollerRef.current
       if (scroller) {
         scroller.scrollTop = scroller.scrollHeight
+        lastKnownScrollTopRef.current = scroller.scrollTop
       }
     }
   }, [lastUserMessageKey])
@@ -152,7 +156,12 @@ export function MessageList({
   useEffect(() => {
     const scroller = scrollerRef.current
     if (!scroller) return
+    lastKnownScrollTopRef.current = scroller.scrollTop
     const onScroll = () => {
+      const spacer = floatingInsetRef.current
+      // Preserve pre-layout state until the spacer observer compensates browser clamping.
+      if (spacer && spacer.getBoundingClientRect().height !== floatingInsetHeightRef.current) return
+      lastKnownScrollTopRef.current = scroller.scrollTop
       const gap =
         scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight
       pinnedRef.current = gap <= STICK_TO_BOTTOM_PX
@@ -167,6 +176,7 @@ export function MessageList({
     const scroller = scrollerRef.current
     if (!scroller || !pinnedRef.current) return
     scroller.scrollTop = scroller.scrollHeight
+    lastKnownScrollTopRef.current = scroller.scrollTop
   }, [scrollKey])
 
   useEffect(() => {
@@ -178,11 +188,35 @@ export function MessageList({
     const observer = new ResizeObserver(() => {
       if (!pinnedRef.current) return
       scroller.scrollTop = scroller.scrollHeight
+      lastKnownScrollTopRef.current = scroller.scrollTop
     })
     observer.observe(content)
     return () => {
       observer.disconnect()
     }
+  }, [sessionKey])
+
+  useEffect(() => {
+    const scroller = scrollerRef.current
+    const spacer = floatingInsetRef.current
+    if (!scroller || !spacer || typeof ResizeObserver === 'undefined') return
+    floatingInsetHeightRef.current = spacer.getBoundingClientRect().height
+    const observer = new ResizeObserver(() => {
+      const height = spacer.getBoundingClientRect().height
+      const delta = height - floatingInsetHeightRef.current
+      floatingInsetHeightRef.current = height
+      if (delta === 0) return
+      const wasPinned = pinnedRef.current
+      const maxScrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight)
+      const target = wasPinned
+        ? scroller.scrollHeight
+        : Math.max(0, Math.min(maxScrollTop, lastKnownScrollTopRef.current + delta))
+      scroller.scrollTop = target
+      lastKnownScrollTopRef.current = scroller.scrollTop
+      pinnedRef.current = wasPinned || maxScrollTop - scroller.scrollTop <= STICK_TO_BOTTOM_PX
+    })
+    observer.observe(spacer)
+    return () => observer.disconnect()
   }, [sessionKey])
 
   return (
@@ -311,6 +345,12 @@ export function MessageList({
             <CompactionDivider pending />
           ) : null}
           </div>
+          <div
+            ref={floatingInsetRef}
+            aria-hidden
+            data-testid="message-list-floating-inset"
+            style={{ height: 'var(--floating-cover-inset, 0px)', flexShrink: 0 }}
+          />
         </div>
       </div>
     </div>

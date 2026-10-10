@@ -3,8 +3,9 @@ import { defaultAskController, useAskStore } from '../shared/askStore.js'
 import type { AskOption, AskRequest } from '../shared/types.js'
 
 export const ASK_TOOL_NAME = 'ask'
+export const ASK_COUNTDOWN_SECONDS = 180
 
-export const ASK_TOOL_DESCRIPTION = `Ask the user a question with structured multiple-choice options or collect freeform text input. Use when you need clarification, confirmation, choices, or input from the user to proceed.`
+export const ASK_TOOL_DESCRIPTION = `Ask the user a question with structured multiple-choice options or collect freeform text input. Use when you need clarification, confirmation, choices, or input from the user to proceed. When providing options, exactly one must be marked recommended; it will be auto-selected after a 180-second countdown if the user does not respond.`
 
 export const ASK_TOOL_PARAMETERS = {
     type: 'object',
@@ -27,6 +28,10 @@ export const ASK_TOOL_PARAMETERS = {
                     description: {
                         type: 'string',
                         description: 'Optional detailed explanation for this option.',
+                    },
+                    recommended: {
+                        type: 'boolean',
+                        description: 'Mark exactly one option as the recommended default. If the user does not respond within 180 seconds, this option is selected automatically.',
                     },
                 },
                 required: ['title'],
@@ -56,6 +61,7 @@ export function parseAskOptions(rawOptions: unknown): AskOption[] {
         return []
     }
     const options: AskOption[] = []
+    let hasRecommended = false
     for (const item of rawOptions) {
         if (!item) continue
         if (typeof item === 'string') {
@@ -82,12 +88,18 @@ export function parseAskOptions(rawOptions: unknown): AskOption[] {
                         : typeof record.desc === 'string'
                           ? record.desc.trim()
                           : undefined
+                const recommended = record.recommended === true && !hasRecommended
+                if (recommended) hasRecommended = true
                 options.push({
                     title,
                     description: description || undefined,
+                    ...(recommended ? { recommended: true } : {}),
                 })
             }
         }
+    }
+    if (options.length > 0 && !hasRecommended) {
+        options[0].recommended = true
     }
     return options
 }
@@ -138,6 +150,7 @@ export function createAskTool(): AgentTool {
             }
 
             const options = parseAskOptions(args.options)
+            const recommendedIndex = options.findIndex(option => option.recommended)
             const allowCustom = args.allowCustom !== false
             const customPrompt =
                 typeof args.customPrompt === 'string'
@@ -165,6 +178,7 @@ export function createAskTool(): AgentTool {
                 customPrompt,
                 allowSkip,
                 createdAt: Date.now(),
+                countdownDeadline: options.length > 0 ? Date.now() + ASK_COUNTDOWN_SECONDS * 1000 : undefined,
             }
 
             // Register active request in store so UI renders overlay
@@ -176,16 +190,30 @@ export function createAskTool(): AgentTool {
                 const decision = await defaultAskController.waitForAnswer(
                     sessionId,
                     effectiveCallId,
-                    signal
+                    signal,
+                    options.length > 0 ? {
+                        timeoutMs: ASK_COUNTDOWN_SECONDS * 1000,
+                        decision: {
+                            type: 'timeout',
+                            option: options[recommendedIndex],
+                            index: recommendedIndex,
+                        },
+                    } : undefined
                 )
-
-                // Clear request in store
-                useAskStore.getState().setRequest(sessionId, null)
 
                 switch (decision.type) {
                     case 'selected': {
                         const opt = decision.option
                         const resultText = `User selected: ${opt.title}${opt.description ? ` (${opt.description})` : ''}`
+                        return {
+                            content: [{ type: 'text', text: resultText }],
+                            details: resultText,
+                            isError: false,
+                        }
+                    }
+                    case 'timeout': {
+                        const opt = decision.option
+                        const resultText = `No response from the user within 180 seconds. The countdown expired, so the recommended option was automatically selected: ${opt.title}${opt.description ? ` (${opt.description})` : ''}. Note: this was an automatic timeout decision, not an explicit user choice.`
                         return {
                             content: [{ type: 'text', text: resultText }],
                             details: resultText,
@@ -221,7 +249,7 @@ export function createAskTool(): AgentTool {
                     }
                 }
             } finally {
-                useAskStore.getState().setRequest(sessionId, null)
+                useAskStore.getState().clearRequest(sessionId, request.id)
             }
         },
     }

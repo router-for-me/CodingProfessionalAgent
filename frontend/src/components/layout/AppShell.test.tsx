@@ -243,15 +243,22 @@ describe('AppShell host slot skeleton', () => {
         })
         useUiStore.setState({ pinnedSummaryVisible: true })
 
-        let resizeCallback: ((entries: Array<{ target: Element; contentRect: { width: number } }>) => void) | null = null
+        type ResizeCallback = (entries: Array<{ target: Element; contentRect: { width: number } }>) => void
+        const resizeCallbacks = new Map<Element, ResizeCallback>()
 
         class MockResizeObserver {
-            constructor(cb: (entries: Array<{ target: Element; contentRect: { width: number } }>) => void) {
-                resizeCallback = cb
+            constructor(private readonly callback: ResizeCallback) {}
+            observe(target: Element) {
+                resizeCallbacks.set(target, this.callback)
             }
-            observe() {}
-            unobserve() {}
-            disconnect() {}
+            unobserve(target: Element) {
+                resizeCallbacks.delete(target)
+            }
+            disconnect() {
+                for (const [target, callback] of resizeCallbacks) {
+                    if (callback === this.callback) resizeCallbacks.delete(target)
+                }
+            }
         }
 
         const origResizeObserver = window.ResizeObserver
@@ -275,6 +282,9 @@ describe('AppShell host slot skeleton', () => {
             const contentContainer = screen.getByTestId('workspace-content-container')
             // At 1400px: no overlap -> 0px
             expect(contentContainer.parentElement?.style.getPropertyValue('--pinned-summary-shift')).toBe('0px')
+            // Route resize entries to the observer for this element, not the last observer created.
+            const resizeCallback = resizeCallbacks.get(contentContainer.parentElement as Element)
+            expect(resizeCallback).toBeDefined()
 
             // Simulate window resize to 1200px (overlap 76px -> 152px shift)
             act(() => {

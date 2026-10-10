@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { PluginEventBus } from '@cpa/plugin-kernel'
 import { AgentPluginRuntimeHost } from '../../../../frontend/src/plugins/platform/AgentPluginRuntimeHost'
 import { askAgentEntry, createAskTool, parseAskOptions } from './index.js'
@@ -19,6 +19,102 @@ describe('cpa.core.ask agent entry', () => {
         runtimeHost = new AgentPluginRuntimeHost({ eventBus })
     })
 
+    afterEach(() => {
+        __resetAskStoreForTests()
+        vi.useRealTimers()
+    })
+
+    it('normalizes exactly one recommended option using strict booleans', () => {
+        expect(parseAskOptions([
+            { title: 'A', recommended: 'true' },
+            { title: 'B', recommended: true },
+            { title: 'C', recommended: true },
+        ])).toEqual([
+            { title: 'A', description: undefined },
+            { title: 'B', description: undefined, recommended: true },
+            { title: 'C', description: undefined },
+        ])
+        expect(parseAskOptions(['A', 'B'])).toEqual([
+            { title: 'A', recommended: true }, { title: 'B' },
+        ])
+    })
+
+    it('sets a 180-second deadline and reports an automatic timeout decision', async () => {
+        vi.useFakeTimers()
+        const pending = createAskTool().execute('timeout', {
+            question: 'Pick', options: ['A', { title: 'B', description: 'Better', recommended: true }],
+        }, { sessionId: 'timeout-session' } as any)
+        expect(useAskStore.getState().getRequest('timeout-session')?.countdownDeadline).toBe(Date.now() + 180_000)
+        await vi.advanceTimersByTimeAsync(180_000)
+        const result = await pending
+        expect((result.content[0] as any).text).toBe('No response from the user within 180 seconds. The countdown expired, so the recommended option was automatically selected: B (Better). Note: this was an automatic timeout decision, not an explicit user choice.')
+        expect(useAskStore.getState().getRequest('timeout-session')).toBeUndefined()
+        expect(vi.getTimerCount()).toBe(0)
+    })
+
+    it('does not start a countdown for freeform requests', async () => {
+        vi.useFakeTimers()
+        const pending = createAskTool().execute('freeform', { question: 'Explain' }, { sessionId: 'freeform' } as any)
+        expect(useAskStore.getState().getRequest('freeform')?.countdownDeadline).toBeUndefined()
+        expect(vi.getTimerCount()).toBe(0)
+        defaultAskController.cancel('freeform', 'freeform')
+        await pending
+    })
+
+    it.each(['same-call', 'different-call'])('keeps the newer request visible when replacing %s', async (replacement) => {
+        vi.useFakeTimers()
+        const tool = createAskTool()
+        const first = tool.execute('first', { question: 'Old question', options: ['Old default'] }, { sessionId: 'replace-session' } as any)
+        const firstRequest = useAskStore.getState().getRequest('replace-session')!
+        const firstResolved = vi.fn()
+        void first.then(firstResolved)
+        await vi.advanceTimersByTimeAsync(60_000)
+        const secondCallId = replacement === 'same-call' ? 'first' : 'second'
+        const second = tool.execute(secondCallId, { question: 'New question', options: ['New default'] }, { sessionId: 'replace-session' } as any)
+        const secondRequest = useAskStore.getState().getRequest('replace-session')!
+        const secondResolved = vi.fn()
+        void second.then(secondResolved)
+        expect(secondRequest.id).not.toBe(firstRequest.id)
+        await vi.advanceTimersByTimeAsync(0)
+        expect(firstResolved).toHaveBeenCalledTimes(1)
+        const firstResult = await first
+        expect((firstResult.content[0] as any).text).toBe('User dismissed or cancelled this question.')
+        expect(useAskStore.getState().getRequest('replace-session')).toBe(secondRequest)
+        expect(secondRequest.countdownDeadline).toBe(Date.now() + 180_000)
+        expect(vi.getTimerCount()).toBe(1)
+        // Pass the old deadline while the new request still has a minute remaining.
+        await vi.advanceTimersByTimeAsync(120_001)
+        expect(Date.now()).toBeGreaterThan(firstRequest.countdownDeadline!)
+        expect(firstResolved).toHaveBeenCalledTimes(1)
+        expect(secondResolved).not.toHaveBeenCalled()
+        expect(useAskStore.getState().getRequest('replace-session')).toBe(secondRequest)
+        expect(secondRequest.countdownDeadline! - Date.now()).toBe(59_999)
+        expect(vi.getTimerCount()).toBe(1)
+        useAskStore.getState().cancelCountdown('replace-session', secondCallId)
+        await vi.advanceTimersByTimeAsync(180_000)
+        expect(secondResolved).not.toHaveBeenCalled()
+        expect(useAskStore.getState().getRequest('replace-session')?.id).toBe(secondRequest.id)
+        useAskStore.getState().submitAnswer('replace-session', secondCallId, { type: 'skipped' })
+        const secondResult = await second
+        expect((secondResult.content[0] as any).text).toBe('User skipped this question.')
+        expect(useAskStore.getState().getRequest('replace-session')).toBeUndefined()
+        expect(vi.getTimerCount()).toBe(0)
+    })
+
+    it('keeps the newer request when an older execution aborts in finally', async () => {
+        const abortController = new AbortController()
+        const tool = createAskTool()
+        const first = tool.execute('old', { question: 'Old' }, { sessionId: 'replace-abort', signal: abortController.signal } as any)
+        const rejected = expect(first).rejects.toThrow('Tool execution aborted')
+        abortController.abort()
+        const second = tool.execute('new', { question: 'New' }, { sessionId: 'replace-abort' } as any)
+        const secondRequest = useAskStore.getState().getRequest('replace-abort')
+        await rejected
+        expect(useAskStore.getState().getRequest('replace-abort')).toBe(secondRequest)
+        useAskStore.getState().submitAnswer('replace-abort', 'new', { type: 'skipped' })
+        await second
+    })
+
     it('has valid manifest metadata', () => {
         expect(manifest.id).toBe('cpa.core.ask')
         expect(manifest.name).toBe('Ask User Tool')
@@ -32,7 +128,7 @@ describe('cpa.core.ask agent entry', () => {
     it('parses various options shapes correctly', () => {
         const strings = parseAskOptions(['Option 1', 'Option 2'])
         expect(strings).toEqual([
-            { title: 'Option 1' },
+            { title: 'Option 1', recommended: true },
             { title: 'Option 2' },
         ])
 
@@ -43,7 +139,7 @@ describe('cpa.core.ask agent entry', () => {
             { value: 'D' },
         ])
         expect(objects).toEqual([
-            { title: 'A', description: 'Desc A' },
+            { title: 'A', description: 'Desc A', recommended: true },
             { title: 'B', description: 'Desc B' },
             { title: 'C', description: undefined },
             { title: 'D', description: undefined },

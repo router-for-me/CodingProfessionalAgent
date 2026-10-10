@@ -1,6 +1,6 @@
 import i18n from '@/i18n'
-import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { render, screen, fireEvent, act } from '@testing-library/react'
 import { PluginEventBus } from '@cpa/plugin-kernel'
 import { askRendererEntry } from './index.js'
 import { AskOverlay } from './AskOverlay.js'
@@ -37,6 +37,43 @@ describe('cpa.core.ask renderer entry and AskOverlay', () => {
         allowSkip: true,
         createdAt: Date.now(),
     }
+
+    afterEach(() => {
+        __resetAskStoreForTests()
+        vi.useRealTimers()
+    })
+
+    it('renders the recommended badge and accurate countdown, then cancels it', () => {
+        vi.useFakeTimers()
+        useAskStore.getState().setRequest(testSessionId, {
+            ...sampleRequest,
+            options: [{ title: 'A', recommended: true }],
+            countdownDeadline: Date.now() + 180_000,
+        })
+        render(<AskOverlay sessionId={testSessionId} />)
+        expect(screen.getByTestId('ask-option-recommended-badge')).toHaveTextContent('Recommended')
+        expect(screen.getByTestId('ask-countdown')).toHaveTextContent('3:00')
+        act(() => vi.advanceTimersByTime(61_000))
+        expect(screen.getByTestId('ask-countdown')).toHaveTextContent('1:59')
+        act(() => vi.advanceTimersByTime(180_000))
+        expect(screen.getByTestId('ask-countdown')).toHaveTextContent('0:00')
+        fireEvent.click(screen.getByTestId('ask-cancel-countdown-button'))
+        expect(useAskStore.getState().getRequest(testSessionId)?.countdownDeadline).toBeUndefined()
+        expect(screen.queryByTestId('ask-countdown')).not.toBeInTheDocument()
+        expect(screen.getByTestId('ask-question-text')).toBeInTheDocument()
+    })
+
+    it.each(['custom', 'keyboard'])('cancels countdown on %s interaction', (interaction) => {
+        useAskStore.getState().setRequest(testSessionId, { ...sampleRequest, countdownDeadline: Date.now() + 180_000 })
+        render(<AskOverlay sessionId={testSessionId} />)
+        if (interaction === 'custom') {
+            fireEvent.click(screen.getByTestId('ask-custom-inactive-row'))
+            fireEvent.change(screen.getByTestId('ask-custom-input'), { target: { value: 'hello' } })
+        } else {
+            fireEvent.keyDown(screen.getByTestId('ask-option-1'), { key: 'Tab' })
+        }
+        expect(useAskStore.getState().getRequest(testSessionId)?.countdownDeadline).toBeUndefined()
+    })
 
     it('has valid manifest and registers floating overlay', async () => {
         const registeredFloatings: any[] = []

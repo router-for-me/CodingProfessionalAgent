@@ -35,6 +35,25 @@ export function AskOverlay({ sessionId: propSessionId, className }: AskOverlayPr
     const [customText, setCustomText] = useState('')
     const [selectedIndex, setSelectedIndex] = useState<number | null>(null)
     const inputRef = useRef<HTMLInputElement>(null)
+    const [now, setNow] = useState(Date.now)
+    const countdownDeadline = request?.countdownDeadline
+
+    useEffect(() => {
+        if (countdownDeadline === undefined) return
+        setNow(Date.now())
+        const timer = setInterval(() => setNow(Date.now()), 1000)
+        return () => clearInterval(timer)
+    }, [countdownDeadline])
+
+    const cancelCountdown = useCallback(() => {
+        if (!request || !effectiveSessionId) return
+        useAskStore.getState().cancelCountdown(effectiveSessionId, request.toolCallId)
+    }, [request, effectiveSessionId])
+
+    const activateCustom = () => {
+        cancelCountdown()
+        setIsCustomActive(true)
+    }
 
     // Reset local state whenever request changes
     useEffect(() => {
@@ -142,10 +161,13 @@ export function AskOverlay({ sessionId: propSessionId, className }: AskOverlayPr
         })
 
     const skipLabel = t('ask.skip', { defaultValue: 'Skip' })
+    const remainingSeconds = Math.max(0, Math.ceil(((countdownDeadline ?? now) - now) / 1000))
+    const countdownTime = `${Math.floor(remainingSeconds / 60)}:${String(remainingSeconds % 60).padStart(2, '0')}`
 
     return (
         <div
             data-testid="ask-overlay-container"
+            onKeyDownCapture={cancelCountdown}
             className={cn(
                 'w-[min(768px,calc(100vw-3rem))] max-w-3xl select-none',
                 'rounded-[var(--radius-composer,20px)] border border-[var(--border-composer,#333333)] bg-[#1e1e1e] p-4 sm:p-5',
@@ -177,6 +199,25 @@ export function AskOverlay({ sessionId: propSessionId, className }: AskOverlayPr
                 </button>
             </div>
 
+            {countdownDeadline !== undefined ? (
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[var(--text-secondary)]">
+                    <span data-testid="ask-countdown">
+                        {t('ask.countdown', {
+                            time: countdownTime,
+                            defaultValue: 'Auto-selecting the recommended option in {{time}}',
+                        })}
+                    </span>
+                    <button
+                        type="button"
+                        data-testid="ask-cancel-countdown-button"
+                        onClick={cancelCountdown}
+                        className="rounded-full border border-[var(--border-subtle)] px-2 py-1 hover:bg-[var(--bg-sidebar-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--text-muted)]"
+                    >
+                        {t('ask.cancelCountdown', { defaultValue: 'Cancel countdown' })}
+                    </button>
+                </div>
+            ) : null}
+
             {/* Options List */}
             <div className="mt-3.5 flex flex-col gap-1.5" data-testid="ask-options-list">
                 {request.options.map((option, index) => {
@@ -205,6 +246,14 @@ export function AskOverlay({ sessionId: propSessionId, className }: AskOverlayPr
                                 <div className="flex flex-col min-w-0 flex-1">
                                     <span className="text-[13.5px] sm:text-sm font-medium text-neutral-100 leading-tight truncate">
                                         {option.title}
+                                        {option.recommended ? (
+                                            <span
+                                                data-testid="ask-option-recommended-badge"
+                                                className="ml-2 inline-block rounded-full bg-[var(--bg-elevated)] px-2 py-0.5 text-xs font-[inherit] text-[var(--text-secondary)]"
+                                            >
+                                                {t('ask.recommended', { defaultValue: 'Recommended' })}
+                                            </span>
+                                        ) : null}
                                     </span>
                                     {option.description ? (
                                         <span className="mt-1 text-[12px] sm:text-[12.5px] text-neutral-400 leading-relaxed break-words">
@@ -249,7 +298,10 @@ export function AskOverlay({ sessionId: propSessionId, className }: AskOverlayPr
                                 type="text"
                                 data-testid="ask-custom-input"
                                 value={customText}
-                                onChange={(e) => setCustomText(e.target.value)}
+                                onChange={(e) => {
+                                    cancelCountdown()
+                                    setCustomText(e.target.value)
+                                }}
                                 onKeyDown={(e) => {
                                     if (e.key === 'Escape') {
                                         if (customText.trim().length === 0) {
@@ -279,11 +331,11 @@ export function AskOverlay({ sessionId: propSessionId, className }: AskOverlayPr
                             role="button"
                             tabIndex={0}
                             data-testid="ask-custom-inactive-row"
-                            onClick={() => setIsCustomActive(true)}
+                            onClick={activateCustom}
                             onKeyDown={(e) => {
                                 if (e.key === 'Enter' || e.key === ' ') {
                                     e.preventDefault()
-                                    setIsCustomActive(true)
+                                    activateCustom()
                                 }
                             }}
                             className={cn(

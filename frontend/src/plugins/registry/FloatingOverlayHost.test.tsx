@@ -275,6 +275,49 @@ describe('FloatingOverlayHost & computeFloatingCoords', () => {
     })
 
     describe('FloatingOverlayHost component rendering', () => {
+        it('publishes the maximum cover inset, tracks overlay resizing and resets on removal', async () => {
+            const anchor = document.createElement('div')
+            anchor.id = 'cover-anchor'
+            document.body.appendChild(anchor)
+            vi.spyOn(anchor, 'getBoundingClientRect').mockReturnValue(sampleRect)
+            let height = 173
+            const heightSpy = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+                return this.dataset.floatingId === 'cover-one' ? height : 100
+            })
+            const callbacks: (() => void)[] = []
+            const observe = vi.fn()
+            vi.stubGlobal('ResizeObserver', class {
+                constructor(callback: () => void) { callbacks.push(callback) }
+                observe = observe
+                unobserve = vi.fn()
+                disconnect = vi.fn()
+            })
+            try {
+                const removeOne = registry.registerFloating({
+                    id: 'cover-one', pluginId: 'test-plugin', anchor: '#cover-anchor',
+                    placement: 'cover-bottom', component: () => <div>One</div>,
+                })
+                const removeTwo = registry.registerFloating({
+                    id: 'cover-two', pluginId: 'test-plugin', anchor: '#cover-anchor',
+                    placement: 'cover-bottom', component: () => <div>Two</div>,
+                })
+                const { unmount } = render(<FloatingOverlayHost registry={registry} />)
+                expect(document.documentElement.style.getPropertyValue('--floating-cover-inset')).toBe('123px')
+                expect(observe).toHaveBeenCalledWith(document.querySelector('[data-floating-id="cover-one"]'))
+                height = 250
+                act(() => callbacks.forEach(callback => callback()))
+                await waitFor(() => expect(document.documentElement.style.getPropertyValue('--floating-cover-inset')).toBe('200px'))
+                act(() => removeOne())
+                expect(document.documentElement.style.getPropertyValue('--floating-cover-inset')).toBe('50px')
+                act(() => removeTwo())
+                expect(document.documentElement.style.getPropertyValue('--floating-cover-inset')).toBe('0px')
+                unmount()
+            } finally {
+                heightSpy.mockRestore()
+                vi.unstubAllGlobals()
+            }
+        })
+
         it('renders empty when no floatings are registered', () => {
             const { container } = render(<FloatingOverlayHost registry={registry} />)
             expect(container).toBeEmptyDOMElement()
