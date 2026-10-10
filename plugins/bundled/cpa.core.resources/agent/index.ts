@@ -16,7 +16,14 @@ import type {
     PluginContext,
     ResourceProvider,
     ResourceProviderInput,
+    ToolFactoryContribution,
 } from '@cpa/plugin-api'
+import {
+    createSkillSearchTool,
+    SKILL_SEARCH_TOOL_DESCRIPTION,
+    SKILL_SEARCH_TOOL_NAME,
+    SKILL_SEARCH_TOOL_PARAMETERS,
+} from './skillSearchTool.js'
 
 export {
     loadContextFiles,
@@ -121,6 +128,23 @@ export const resourcesAgentEntry = definePluginEntry({
                     })
                     return [res]
                 },
+            },
+        })
+
+        context.register<ToolFactoryContribution>({
+            kind: 'tool-factory',
+            id: SKILL_SEARCH_TOOL_NAME,
+            value: {
+                id: SKILL_SEARCH_TOOL_NAME,
+                name: SKILL_SEARCH_TOOL_NAME,
+                label: 'Skill search',
+                description: SKILL_SEARCH_TOOL_DESCRIPTION,
+                parameters: SKILL_SEARCH_TOOL_PARAMETERS,
+                order: 80,
+                targets: ['all'],
+                riskLevel: 'read',
+                requiresApproval: false,
+                create: () => createSkillSearchTool(),
             },
         })
     },

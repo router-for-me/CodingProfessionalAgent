@@ -20,6 +20,9 @@
             "cpa.core.context",
             "cpa.core.skills",
             "cpa.core.prompt-templates"
+        ],
+        "tool-factory": [
+            "skill_search"
         ]
     }
 }

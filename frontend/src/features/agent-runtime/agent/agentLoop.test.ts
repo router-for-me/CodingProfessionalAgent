@@ -16,6 +16,7 @@ import type {
     UserEntry,
 } from '../session/types'
 import type { AgentRunEvent, AgentTool, AssistantStreamEvent, ToolResult } from './types'
+import type { AgentGenerationSnapshot } from '../providers/generationSnapshot'
 import { AgentLoop } from './agentLoop'
 import { ApprovalController, TOOL_REJECTED_MESSAGE } from './approvals'
 
@@ -266,6 +267,103 @@ describe('AgentLoop', () => {
         expect(
             client.calls[1]!.entries.filter((e) => e.kind === 'user'),
         ).toHaveLength(1)
+    })
+
+    it('passes searchable skills to tools without bodies or explicit-mode entries', async () => {
+        const client = new FakeCPAClient()
+        client.queue(
+            {
+                kind: 'stream',
+                final: (seed) => doneAssistant(seed, {
+                    stopReason: 'toolUse',
+                    content: [{ type: 'toolCall', id: 'call-probe', name: 'probe', arguments: {} }],
+                }),
+            },
+            {
+                kind: 'stream',
+                final: (seed) => doneAssistant(seed, {
+                    stopReason: 'stop',
+                    content: [{ type: 'text', text: 'done' }],
+                }),
+            },
+        )
+        let seen: unknown
+        const tools = [makeTool('probe', async (_id, _args, context) => {
+            seen = context.skills
+            return { content: [{ type: 'text', text: 'ok' }] }
+        })]
+        const resources = {
+            contextFiles: [],
+            prompts: [],
+            systemPrompt: 'sys',
+            diagnostics: [],
+            skills: [
+                { name: 'auto', description: 'Automatic', filePath: '/skills/auto/SKILL.md', baseDir: '/skills/auto', disableModelInvocation: false, body: 'SECRET AUTO' },
+                { name: 'manual', description: 'Explicit', filePath: '/skills/manual/SKILL.md', baseDir: '/skills/manual', disableModelInvocation: false, body: 'SECRET MANUAL' },
+            ],
+            searchableSkills: [
+                { name: 'auto', description: 'Automatic', filePath: '/skills/auto/SKILL.md', baseDir: '/skills/auto', disableModelInvocation: false, body: 'SECRET AUTO' },
+            ],
+        }
+        const loop = new AgentLoop({
+            client,
+            sleep,
+            generationSnapshot: { resources, hooks: [], middleware: [] } as AgentGenerationSnapshot,
+        })
+        await collect(loop.run({
+            runId: 'run-skills', sessionId: 'sess-1', entries: [], userEntry: userEntry('u-skills', 'find a skill'),
+            model, systemPrompt: 'sys', tools,
+        }))
+        expect(seen).toEqual([
+            { name: 'auto', description: 'Automatic', filePath: '/skills/auto/SKILL.md', disableModelInvocation: false },
+        ])
+    })
+
+    it('does not fall back to explicit skills when searchableSkills is absent', async () => {
+        const client = new FakeCPAClient()
+        client.queue(
+            {
+                kind: 'stream',
+                final: (seed) => doneAssistant(seed, {
+                    stopReason: 'toolUse',
+                    content: [{ type: 'toolCall', id: 'call-probe', name: 'probe', arguments: {} }],
+                }),
+            },
+            {
+                kind: 'stream',
+                final: (seed) => doneAssistant(seed, {
+                    stopReason: 'stop',
+                    content: [{ type: 'text', text: 'done' }],
+                }),
+            },
+        )
+        let seen: unknown
+        const tools = [makeTool('probe', async (_id, _args, context) => {
+            seen = context.skills
+            return { content: [{ type: 'text', text: 'ok' }] }
+        })]
+        const loop = new AgentLoop({
+            client,
+            sleep,
+            generationSnapshot: {
+                resources: {
+                    contextFiles: [],
+                    prompts: [],
+                    systemPrompt: 'sys',
+                    diagnostics: [],
+                    skills: [
+                        { name: 'manual', description: 'Explicit', filePath: '/skills/manual/SKILL.md', baseDir: '/skills/manual', disableModelInvocation: false, body: 'SECRET MANUAL' },
+                    ],
+                },
+                hooks: [],
+                middleware: [],
+            } as AgentGenerationSnapshot,
+        })
+        await collect(loop.run({
+            runId: 'run-skills-missing', sessionId: 'sess-1', entries: [], userEntry: userEntry('u-missing', 'find a skill'),
+            model, systemPrompt: 'sys', tools,
+        }))
+        expect(seen).toEqual([])
     })
 
     it('exposes isolated invocation only to network tools and overwrites plugin-authored accounting', async () => {

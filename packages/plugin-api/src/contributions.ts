@@ -393,6 +393,14 @@ export interface ToolSetPreparation {
     systemMessage?: string
 }
 
+/** Skill metadata a tool may search. Bodies stay out of the tool context. */
+export interface ToolSkillCatalogEntry {
+    name: string
+    description: string
+    filePath: string
+    disableModelInvocation?: boolean
+}
+
 export interface ToolExecutionContext {
     dispatchNestedTool?: NestedToolDispatcher
     /** User cancellation, distinct from normal run-iterator cleanup. */
@@ -402,6 +410,8 @@ export interface ToolExecutionContext {
     sessionId?: string
     onUpdate?: (partial: ToolResult) => void
     modelInvoker?: IsolatedModelInvoker
+    /** Model-visible skills for this run. Absent when the run has no resource snapshot. */
+    skills?: readonly ToolSkillCatalogEntry[]
     [key: string]: unknown
 }
 

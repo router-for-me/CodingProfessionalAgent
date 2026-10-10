@@ -1833,6 +1833,18 @@ export class AgentLoop {
         }
     }
 
+    private skillCatalog() {
+        const resources = this.generationSnapshot?.resources
+        if (!resources) return undefined
+        const listed = resources.searchableSkills ?? []
+        return listed.map((skill) => ({
+            name: skill.name,
+            description: skill.description,
+            filePath: skill.filePath,
+            disableModelInvocation: skill.disableModelInvocation,
+        }))
+    }
+
     private async *executeToolBatch(args: {
         toolCalls: AssistantToolCallBlock[]
         toolsByName: Map<string, AgentTool>
@@ -2234,6 +2246,7 @@ export class AgentLoop {
                     cwd,
                     sessionId: scope.sessionId,
                     onUpdate,
+                    skills: this.skillCatalog(),
                     modelInvoker: selectApprovalPolicy(tool).riskLevel === 'network'
                         ? this.modelInvoker?.forToolCall(toolCallId)
                         : undefined,

@@ -685,6 +685,9 @@ export const bundledManifests: Readonly<Record<string, PluginManifest>> = Object
                         "cpa.core.context",
                         "cpa.core.skills",
                         "cpa.core.prompt-templates"
+                ],
+                "tool-factory": [
+                        "skill_search"
                 ]
         }
 }),

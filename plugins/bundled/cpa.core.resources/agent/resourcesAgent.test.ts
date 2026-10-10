@@ -6,16 +6,21 @@ import { FakeNativeBridge } from './testUtils.js'
 describe('cpa.core.resources agent entry', () => {
     it('activates and registers context, skills, and prompt-templates resource providers', async () => {
         const registered = new Map<string, ResourceProvider<any>>()
+        const tools = new Map<string, { id: string }>()
         const fakeContext: Partial<PluginContext> = {
             register: ((contrib: any) => {
                 if (contrib.kind === 'resource-provider') {
                     registered.set(contrib.id, contrib.value)
+                }
+                if (contrib.kind === 'tool-factory') {
+                    tools.set(contrib.id, contrib.value)
                 }
             }) as any,
         }
 
         resourcesAgentEntry.activate(fakeContext as PluginContext)
 
+        expect(tools.has('skill_search')).toBe(true)
         expect(registered.has('cpa.core.context')).toBe(true)
         expect(registered.has('cpa.core.skills')).toBe(true)
         expect(registered.has('cpa.core.prompt-templates')).toBe(true)

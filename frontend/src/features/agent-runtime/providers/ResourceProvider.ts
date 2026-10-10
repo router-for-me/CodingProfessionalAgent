@@ -33,6 +33,7 @@ import {
     expandSkillCommand,
     formatGitSettingsForPrompt,
     formatSkillsForPrompt,
+    SKILL_SEARCH_TOOL_NAME,
     formatSubagentRolesForPrompt,
     getEffectiveSkillMode,
     isAbsolutePath,
@@ -78,6 +79,8 @@ export interface ResourceSnapshot {
     readonly system?: PromptSource
     readonly appendSystem?: PromptSource
     readonly skills: readonly Skill[]
+    /** Auto-mode skills the model may discover. Explicit-mode skills stay on `skills` for direct expansion only. */
+    readonly searchableSkills?: readonly Skill[]
     readonly prompts: readonly PromptTemplate[]
     readonly systemPrompt: string
     readonly systemPromptParts?: readonly ResourcePromptPart[]
@@ -142,6 +145,7 @@ export async function loadResourcesFromProviders(
     const diagnostics: ResourceDiagnostic[] = []
     const tools = input.tools ?? []
     const hasReadTool = tools.some((tool) => tool.name === 'read')
+    const hasSkillSearchTool = tools.some((tool) => tool.name === SKILL_SEARCH_TOOL_NAME)
     const agentTarget: AgentTarget = input.agentTarget ?? 'main'
 
     const agentCheck = validateAbsoluteResourcePath(input.agentDir, 'agentDir')
@@ -156,6 +160,7 @@ export async function loadResourcesFromProviders(
         return freezeSnapshot({
             contextFiles: [],
             skills: [],
+            searchableSkills: [],
             prompts: [],
             systemPrompt: buildSystemPrompt({
                 tools,
@@ -386,7 +391,8 @@ export async function loadResourcesFromProviders(
         personality: input.personality,
     })
 
-    const skillsSection = formatSkillsForPrompt(autoRegisteredSkills, hasReadTool)
+    const searchableSkills = autoRegisteredSkills.filter((skill) => !skill.disableModelInvocation)
+    const skillsSection = formatSkillsForPrompt(searchableSkills, hasReadTool, hasSkillSearchTool)
     const hasSpawnAgentTool = tools.some((tool) => tool.name === 'spawn_agent')
     const subagentRoles =
         hasSpawnAgentTool && input.subagentsSettings?.enabled !== false
@@ -485,6 +491,7 @@ export async function loadResourcesFromProviders(
         ...(system ? { system } : {}),
         ...(appendSystem ? { appendSystem } : {}),
         skills,
+        searchableSkills,
         prompts,
         systemPrompt,
         systemPromptParts,
@@ -561,6 +568,7 @@ function freezeSnapshot(snapshot: {
     system?: PromptSource
     appendSystem?: PromptSource
     skills: Skill[]
+    searchableSkills: Skill[]
     prompts: PromptTemplate[]
     systemPrompt: string
     systemPromptParts?: ResourcePromptPart[]
@@ -598,6 +606,7 @@ function freezeSnapshot(snapshot: {
         ...(snapshot.system ? { system: snapshot.system } : {}),
         ...(snapshot.appendSystem ? { appendSystem: snapshot.appendSystem } : {}),
         skills: Object.freeze([...snapshot.skills]),
+        searchableSkills: Object.freeze([...snapshot.searchableSkills]),
         prompts: Object.freeze([...snapshot.prompts]),
         systemPrompt: snapshot.systemPrompt,
         ...(snapshot.systemPromptParts ? { systemPromptParts: Object.freeze([...snapshot.systemPromptParts]) } : {}),

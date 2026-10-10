@@ -152,11 +152,125 @@ async function resolveHomeDir(options: LoadSkillsOptions): Promise<string | unde
     return undefined
 }
 
+export const SKILL_SEARCH_TOOL_NAME = 'skill_search'
+export const SKILL_SEARCH_DEFAULT_LIMIT = 8
+const SKILL_SEARCH_MAX_LIMIT = 20
+
+export interface SkillSearchMatch {
+    name: string
+    description: string
+    location: string
+}
+
+export interface SkillSearchDocument {
+    name: string
+    description: string
+    filePath: string
+    disableModelInvocation?: boolean
+}
+
+export function searchSkills(
+    skills: readonly SkillSearchDocument[],
+    query: string,
+    limit = SKILL_SEARCH_DEFAULT_LIMIT,
+): SkillSearchMatch[] {
+    const trimmed = query.trim()
+    if (trimmed.length === 0) {
+        throw new Error('query must not be empty')
+    }
+    if (!Number.isInteger(limit) || limit <= 0) {
+        throw new Error('limit must be greater than zero')
+    }
+
+    const capped = Math.min(limit, SKILL_SEARCH_MAX_LIMIT)
+    const visible = skills.filter((skill) => !skill.disableModelInvocation)
+    const queryTokens = uniqueTokens(tokenize(trimmed))
+    if (queryTokens.length === 0 || visible.length === 0) {
+        return []
+    }
+
+    const documents = visible.map((skill) => {
+        const nameTokens = tokenize(skill.name)
+        const descriptionTokens = tokenize(skill.description)
+        return {
+            skill,
+            nameTokens,
+            tokens: [...nameTokens, ...descriptionTokens],
+        }
+    })
+    const documentFrequency = new Map<string, number>()
+    for (const token of queryTokens) {
+        let count = 0
+        for (const document of documents) {
+            if (document.tokens.includes(token)) count += 1
+        }
+        documentFrequency.set(token, count)
+    }
+
+    const total = documents.length
+    const ranked: { skill: SkillSearchDocument; score: number }[] = []
+    for (const document of documents) {
+        const frequencies = new Map<string, number>()
+        for (const token of document.tokens) {
+            frequencies.set(token, (frequencies.get(token) ?? 0) + 1)
+        }
+        const nameTokens = new Set(document.nameTokens)
+        let score = 0
+        for (const token of queryTokens) {
+            const frequency = frequencies.get(token) ?? 0
+            if (frequency === 0) continue
+            const seen = documentFrequency.get(token) ?? 0
+            const idf = Math.log(1 + (total - seen + 0.5) / (seen + 0.5))
+            score += idf * (frequency * 2.2) / (frequency + 1.2)
+            if (nameTokens.has(token)) score += 1.5
+        }
+        if (score > 0) ranked.push({ skill: document.skill, score })
+    }
+
+    ranked.sort((left, right) => {
+        if (right.score !== left.score) return right.score - left.score
+        return compareCodePoints(left.skill.name, right.skill.name)
+    })
+    return ranked.slice(0, capped).map((item) => ({
+        name: item.skill.name,
+        description: item.skill.description,
+        location: item.skill.filePath,
+    }))
+}
+
+function uniqueTokens(tokens: readonly string[]): string[] {
+    return [...new Set(tokens)]
+}
+
+function tokenize(text: string): string[] {
+    const tokens: string[] = []
+    const words = text.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? []
+    for (const word of words) {
+        for (const piece of word.split('_')) {
+            if (piece.length === 0) continue
+            const runs = piece.match(/\p{Script=Han}+|[^\p{Script=Han}]+/gu) ?? []
+            for (const run of runs) {
+                if (/^\p{Script=Han}+$/u.test(run)) {
+                    const chars = Array.from(run)
+                    for (const char of chars) tokens.push(char)
+                    for (let index = 0; index < chars.length - 1; index += 1) {
+                        tokens.push(chars[index] + chars[index + 1])
+                    }
+                } else {
+                    tokens.push(run)
+                }
+            }
+        }
+    }
+    return tokens
+}
+
 export function formatSkillsForPrompt(
     skills: readonly Skill[],
     hasReadTool: boolean,
+    hasSkillSearchTool = false,
 ): string {
-    if (!hasReadTool) {
+    if (!hasReadTool || !hasSkillSearchTool) {
         return ''
     }
 
@@ -165,23 +279,21 @@ export function formatSkillsForPrompt(
         return ''
     }
 
+    const noun = visible.length === 1 ? 'skill' : 'skills'
+    const names = [...visible].sort((left, right) => compareCodePoints(left.name, right.name))
     const lines = [
-        '\n\nThe following skills provide specialized instructions for specific tasks.',
-        "Use the read tool to load a skill's file when the task matches its description.",
-        "When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
         '',
-        '<available_skills>',
+        '',
+        'Skills provide specialized instructions for specific tasks.',
+        `${visible.length} ${noun} available. Names are listed below. Descriptions and paths are not included; call ${SKILL_SEARCH_TOOL_NAME} when a listed name might match the task, then use the read tool to load the returned location.`,
+        'When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.',
+        '',
+        '<skill_names>',
     ]
-
-    for (const skill of visible) {
-        lines.push('  <skill>')
-        lines.push(`    <name>${escapeXml(skill.name)}</name>`)
-        lines.push(`    <description>${escapeXml(skill.description)}</description>`)
-        lines.push(`    <location>${escapeXml(skill.filePath)}</location>`)
-        lines.push('  </skill>')
+    for (const skill of names) {
+        lines.push(`- ${escapeXml(skill.name)}`)
     }
-
-    lines.push('</available_skills>')
+    lines.push('</skill_names>')
     return lines.join('\n')
 }
 

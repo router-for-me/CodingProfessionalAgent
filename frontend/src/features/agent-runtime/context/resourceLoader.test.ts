@@ -51,6 +51,7 @@ describe('loadResourcesFromProviders', () => {
             tools: [
                 { name: 'read', description: 'Read files' },
                 { name: 'bash', description: 'Run commands' },
+                { name: 'skill_search', description: 'Search skills' },
             ],
         })
 
@@ -61,11 +62,14 @@ describe('loadResourcesFromProviders', () => {
         expect(snapshot.system?.content).toBe('CUSTOM SYSTEM')
         expect(snapshot.appendSystem?.content).toBe('APPEND HERE')
         expect(snapshot.skills.map((s) => s.name)).toEqual(['demo'])
+        expect((snapshot.searchableSkills ?? []).map((s) => s.name)).toEqual(['demo'])
         expect(snapshot.prompts.map((p) => p.name)).toEqual(['fix'])
         expect(snapshot.systemPrompt).toContain('CUSTOM SYSTEM')
         expect(snapshot.systemPrompt).toContain('APPEND HERE')
         expect(snapshot.systemPrompt).toContain('<project_context>')
-        expect(snapshot.systemPrompt).toContain('<available_skills>')
+        expect(snapshot.systemPrompt).toContain('<skill_names>')
+        expect(snapshot.systemPrompt).toContain('- demo')
+        expect(snapshot.systemPrompt).not.toContain('Demo skill')
         expect(snapshot.systemPrompt).toContain('Current working directory: /repo')
         expect(snapshot.systemPrompt).toContain(
             'Allowed project paths:\n- /repo\n- /shared',
@@ -85,14 +89,17 @@ describe('loadResourcesFromProviders', () => {
             cwd: REPO,
             agentDir: AGENT,
             bridge,
-            tools: [{ name: 'read', description: 'Read' }],
+            tools: [
+                { name: 'read', description: 'Read' },
+                { name: 'skill_search', description: 'Search skills' },
+            ],
         })
 
         const prompt = snapshot.systemPrompt
         const idxBase = prompt.indexOf('Coding Professional Agent')
         const idxAppend = prompt.indexOf('APPEND_MARKER')
         const idxProject = prompt.indexOf('PROJECT_MARKER')
-        const idxSkills = prompt.indexOf('<available_skills>')
+        const idxSkills = prompt.indexOf('<skill_names>')
         const idxCwd = prompt.indexOf('Current working directory:')
 
         expect(idxBase).toBeGreaterThanOrEqual(0)
@@ -117,9 +124,32 @@ describe('loadResourcesFromProviders', () => {
         })
 
         expect(snapshot.skills).toHaveLength(1)
-        expect(snapshot.systemPrompt).not.toContain('<available_skills>')
+        expect(snapshot.searchableSkills ?? []).toHaveLength(1)
+        expect(snapshot.systemPrompt).not.toContain('skill_search')
+        expect(snapshot.systemPrompt).not.toContain('<skill_names>')
         expect(snapshot.systemPrompt).not.toContain('Use the read tool')
         // Explicit expansion still works from snapshot skills.
+        expect(expandSkillCommand('/skill:s', snapshot.skills)).toBe('BODY')
+    })
+
+    it('omits the skill discovery section when skill_search is not available', async () => {
+        const bridge = new FakeNativeBridge()
+        bridge.setFile(
+            `${AGENT}/skills/s/SKILL.md`,
+            skillMd('s', 'Secret skill text', 'BODY'),
+        )
+
+        const snapshot = await loadResourcesFromProviders({
+            cwd: REPO,
+            agentDir: AGENT,
+            bridge,
+            tools: [{ name: 'read', description: 'Read' }],
+        })
+
+        expect(snapshot.searchableSkills ?? []).toHaveLength(1)
+        expect(snapshot.systemPrompt).not.toContain('skill_search')
+        expect(snapshot.systemPrompt).not.toContain('<skill_names>')
+        expect(snapshot.systemPrompt).not.toContain('Secret skill text')
         expect(expandSkillCommand('/skill:s', snapshot.skills)).toBe('BODY')
     })
 
@@ -236,14 +266,49 @@ describe('loadResourcesFromProviders', () => {
         const snapshot = await loadResourcesFromProviders({
             agentDir: AGENT,
             bridge,
-            tools: [{ name: 'read', description: 'Read' }],
+            tools: [
+                { name: 'read', description: 'Read' },
+                { name: 'skill_search', description: 'Search skills' },
+            ],
         })
 
         expect(snapshot.skills.map((s) => s.name)).toEqual(['g'])
         expect(snapshot.prompts.map((p) => p.name)).toEqual(['g'])
         expect(snapshot.contextFiles.some((f) => f.path.includes(REPO))).toBe(false)
         expect(snapshot.systemPrompt).not.toContain('Current working directory:')
-        expect(snapshot.systemPrompt).toContain('<available_skills>')
+        expect(snapshot.systemPrompt).toContain('<skill_names>')
+        expect(snapshot.systemPrompt).toContain('- g')
+        expect(snapshot.systemPrompt).not.toContain('Global skill')
+    })
+
+    it('keeps explicit-mode skills expandable but out of the searchable catalog', async () => {
+        const bridge = new FakeNativeBridge()
+        bridge.setFile(
+            `${AGENT}/skills/auto/SKILL.md`,
+            skillMd('auto', 'Automatic skill', 'AUTO'),
+        )
+        bridge.setFile(
+            `${AGENT}/skills/manual/SKILL.md`,
+            skillMd('manual', 'Explicit only skill', 'MANUAL'),
+        )
+
+        const snapshot = await loadResourcesFromProviders({
+            cwd: REPO,
+            agentDir: AGENT,
+            bridge,
+            tools: [
+                { name: 'read', description: 'Read' },
+                { name: 'skill_search', description: 'Search skills' },
+            ],
+            skillsSettings: { defaultMode: 'auto', skills: { manual: 'explicit' } },
+        })
+
+        expect(snapshot.skills.map((item) => item.name)).toEqual(['auto', 'manual'])
+        expect((snapshot.searchableSkills ?? []).map((item) => item.name)).toEqual(['auto'])
+        expect(snapshot.systemPrompt).toContain('- auto')
+        expect(snapshot.systemPrompt).not.toContain('manual')
+        expect(snapshot.systemPrompt).not.toContain('Automatic skill')
+        expect(expandSkillCommand('/skill:manual', snapshot.skills)).toBe('MANUAL')
     })
 
     it('keeps single-resource failures non-blocking', async () => {

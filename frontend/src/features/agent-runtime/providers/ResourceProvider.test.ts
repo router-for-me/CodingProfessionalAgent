@@ -114,6 +114,7 @@ describe('ResourceProvider', () => {
             tools: [
                 { name: 'read', description: 'Read files' },
                 { name: 'bash', description: 'Run commands' },
+                { name: 'skill_search', description: 'Search skills' },
             ],
             extensionRegistry: registry,
             localMemoryEnabled: true,
@@ -146,7 +147,7 @@ describe('ResourceProvider', () => {
         const idxMemory = prompt.indexOf('Memory summary content.')
         const idxPlugin = prompt.indexOf('[EXTRA PLUGIN PROMPT BLOCK]')
         const idxProject = prompt.indexOf('<project_context>')
-        const idxSkills = prompt.indexOf('<available_skills>')
+        const idxSkills = prompt.indexOf('<skill_names>')
         const idxCwd = prompt.indexOf('Current working directory: /repo')
         const idxPaths = prompt.indexOf('Allowed project paths:')
 
@@ -184,14 +185,19 @@ describe('ResourceProvider', () => {
             agentDir: AGENT,
             bridge,
             agentTarget: 'main',
-            tools: [{ name: 'read', description: 'Read files' }],
+            tools: [
+                { name: 'read', description: 'Read files' },
+                { name: 'skill_search', description: 'Search skills' },
+            ],
             extensionRegistry: registry,
         }
 
         const snapshot = await loadResourcesFromProviders(input)
 
         expect(snapshot.skills.some((s) => s.name === 'custom-tool-skill')).toBe(true)
-        expect(snapshot.systemPrompt).toContain('custom-tool-skill')
+        expect((snapshot.searchableSkills ?? []).some((s) => s.name === 'custom-tool-skill')).toBe(true)
+        expect(snapshot.systemPrompt).toContain('- custom-tool-skill')
+        expect(snapshot.systemPrompt).not.toContain('Skill provided dynamically')
     })
 
     it('respects agentTarget filtering when loading resource providers', async () => {
@@ -524,7 +530,10 @@ describe('ResourceProvider', () => {
             bridge,
             agentTarget: 'main',
             extensionRegistry: registry,
-            tools: [{ name: 'read', description: 'Read files' }],
+            tools: [
+                { name: 'read', description: 'Read files' },
+                { name: 'skill_search', description: 'Search skills' },
+            ],
             skillsSettings: {
                 defaultMode: 'auto',
                 skills: {
@@ -534,16 +543,20 @@ describe('ResourceProvider', () => {
             },
         })
 
-        // Alpha is auto: in system prompt and in snapshot
-        expect(snapshot.systemPrompt).toContain('<name>alpha</name>')
+        // Alpha is auto: searchable, but the prompt only points at skill_search.
+        expect((snapshot.searchableSkills ?? []).map((s) => s.name)).toEqual(['alpha'])
+        expect(snapshot.systemPrompt).toContain('- alpha')
+        expect(snapshot.systemPrompt).not.toContain('Alpha skill')
         expect(snapshot.skills.some((s) => s.name === 'alpha')).toBe(true)
 
-        // Beta is explicit: NOT in system prompt, but preserved in snapshot for $ invocation
-        expect(snapshot.systemPrompt).not.toContain('<name>beta</name>')
+        // Beta is explicit: not searchable, but preserved for direct invocation.
+        expect((snapshot.searchableSkills ?? []).some((s) => s.name === 'beta')).toBe(false)
+        expect(snapshot.systemPrompt).not.toContain('Beta skill')
         expect(snapshot.skills.some((s) => s.name === 'beta')).toBe(true)
 
-        // Gamma is disabled: NOT in system prompt, and completely removed from snapshot
-        expect(snapshot.systemPrompt).not.toContain('<name>gamma</name>')
+        // Gamma is disabled: omitted from both catalogs.
+        expect((snapshot.searchableSkills ?? []).some((s) => s.name === 'gamma')).toBe(false)
+        expect(snapshot.systemPrompt).not.toContain('Gamma skill')
         expect(snapshot.skills.some((s) => s.name === 'gamma')).toBe(false)
     })
 
@@ -565,7 +578,10 @@ describe('ResourceProvider', () => {
             bridge,
             agentTarget: 'main',
             extensionRegistry: registry,
-            tools: [{ name: 'read', description: 'Read files' }],
+            tools: [
+                { name: 'read', description: 'Read files' },
+                { name: 'skill_search', description: 'Search skills' },
+            ],
             skillsSettings: {
                 defaultMode: 'explicit',
                 skills: {
@@ -574,8 +590,8 @@ describe('ResourceProvider', () => {
             },
         })
 
-        expect(snapshotExplicit.systemPrompt).not.toContain('<name>s1</name>')
-        expect(snapshotExplicit.systemPrompt).not.toContain('<name>s2</name>')
+        expect(snapshotExplicit.searchableSkills).toEqual([])
+        expect(snapshotExplicit.systemPrompt).not.toContain('<skill_names>')
         expect(snapshotExplicit.skills.map((s) => s.name)).toEqual(['s1', 's2'])
 
         // When defaultMode is 'disabled', s1 is disabled unless overridden to auto
@@ -585,7 +601,10 @@ describe('ResourceProvider', () => {
             bridge,
             agentTarget: 'main',
             extensionRegistry: registry,
-            tools: [{ name: 'read', description: 'Read files' }],
+            tools: [
+                { name: 'read', description: 'Read files' },
+                { name: 'skill_search', description: 'Search skills' },
+            ],
             skillsSettings: {
                 defaultMode: 'disabled',
                 skills: {
@@ -594,7 +613,9 @@ describe('ResourceProvider', () => {
             },
         })
 
-        expect(snapshotDisabled.systemPrompt).toContain('<name>s1</name>')
+        expect((snapshotDisabled.searchableSkills ?? []).map((s) => s.name)).toEqual(['s1'])
+        expect(snapshotDisabled.systemPrompt).toContain('- s1')
+        expect(snapshotDisabled.systemPrompt).not.toContain('Skill One')
         expect(snapshotDisabled.skills.map((s) => s.name)).toEqual(['s1'])
     })
 })
