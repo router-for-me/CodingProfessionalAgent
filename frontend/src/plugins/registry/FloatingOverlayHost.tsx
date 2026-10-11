@@ -556,7 +556,7 @@ function FloatingOverlayItem<P = Record<string, unknown>>({
                 top: `${coords.top}px`,
                 left: `${coords.left}px`,
                 transform: coords.transform,
-                zIndex: 50,
+                zIndex: typeof item.zIndex === 'number' && Number.isFinite(item.zIndex) ? item.zIndex : 50,
                 pointerEvents: isWidthSufficient ? 'auto' : 'none',
                 opacity: isWidthSufficient ? 1 : 0,
                 visibility: isWidthSufficient ? 'visible' : 'hidden',
@@ -579,14 +579,16 @@ export function FloatingOverlayHost({
 }: FloatingOverlayHostProps): React.ReactNode {
     const floatings = useFloatings(registry)
 
-    const visibleFloatings = floatings.filter((item) => {
-        return safePluginVisible(
-            item.visible,
-            context ?? {},
-            item.pluginId,
-            true
-        )
-    })
+    const visibleFloatings = floatings
+        .filter((item) => {
+            return safePluginVisible(
+                item.visible,
+                context ?? {},
+                item.pluginId,
+                true
+            )
+        })
+        .sort((left, right) => (left.zIndex ?? 50) - (right.zIndex ?? 50))
 
     if (visibleFloatings.length === 0) {
         return null

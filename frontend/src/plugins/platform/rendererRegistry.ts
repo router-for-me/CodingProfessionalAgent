@@ -434,6 +434,9 @@ export class RendererRegistry {
                     anchor: raw?.anchor,
                     placement: raw?.placement,
                     offset: raw?.offset,
+                    zIndex: typeof raw?.zIndex === 'number' && Number.isFinite(raw.zIndex)
+                        ? raw.zIndex
+                        : undefined,
                     component: raw?.component ?? raw,
                     visible: raw?.visible,
                 }

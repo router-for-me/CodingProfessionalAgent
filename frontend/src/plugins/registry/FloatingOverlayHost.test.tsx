@@ -358,6 +358,39 @@ describe('FloatingOverlayHost & computeFloatingCoords', () => {
             expect(wrapper.style.pointerEvents).toBe('auto')
         })
 
+        it('paints a higher zIndex floating overlay above the default layer', () => {
+            const anchor = document.createElement('div')
+            anchor.id = 'stack-anchor'
+            document.body.appendChild(anchor)
+            vi.spyOn(anchor, 'getBoundingClientRect').mockReturnValue(sampleRect)
+
+            registry.registerFloating({
+                id: 'ask-overlay',
+                pluginId: 'cpa.core.ask',
+                anchor: '#stack-anchor',
+                placement: 'cover-bottom',
+                zIndex: 60,
+                component: () => <div data-testid="ask-layer">Ask</div>,
+            })
+            registry.registerFloating({
+                id: 'todo-progress-bar',
+                pluginId: 'cpa.core.manage-todo-list',
+                anchor: '#stack-anchor',
+                placement: 'top-center',
+                component: () => <div data-testid="todo-layer">Todo</div>,
+            })
+
+            render(<FloatingOverlayHost registry={registry} />)
+
+            const askWrapper = screen.getByTestId('ask-layer').closest('[data-floating-id]') as HTMLElement
+            const todoWrapper = screen.getByTestId('todo-layer').closest('[data-floating-id]') as HTMLElement
+            expect(todoWrapper.style.zIndex).toBe('50')
+            expect(askWrapper.style.zIndex).toBe('60')
+            const layers = document.querySelectorAll('[data-floating-id]')
+            expect(layers[0]?.getAttribute('data-floating-id')).toBe('todo-progress-bar')
+            expect(layers[1]?.getAttribute('data-floating-id')).toBe('ask-overlay')
+        })
+
         it('supports various placements and custom offsets', () => {
             const anchor = document.createElement('div')
             anchor.id = 'bottom-anchor'

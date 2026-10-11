@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react'
 import {
     ArrowRight,
     Pencil,
@@ -18,6 +18,28 @@ export interface AskOverlayProps {
     className?: string
 }
 
+const ASK_CUSTOM_INPUT_LINE_HEIGHT_PX = 20
+const ASK_CUSTOM_INPUT_MAX_LINES = 5
+
+function syncAskCustomInputHeight(element: HTMLTextAreaElement): void {
+    const computed = window.getComputedStyle(element)
+    const parsedLineHeight = Number.parseFloat(computed.lineHeight)
+    const lineHeight = Number.isFinite(parsedLineHeight) && parsedLineHeight > 0
+        ? parsedLineHeight
+        : ASK_CUSTOM_INPUT_LINE_HEIGHT_PX
+    const paddingTop = Number.parseFloat(computed.paddingTop) || 0
+    const paddingBottom = Number.parseFloat(computed.paddingBottom) || 0
+    const borderTop = Number.parseFloat(computed.borderTopWidth) || 0
+    const borderBottom = Number.parseFloat(computed.borderBottomWidth) || 0
+    const maxHeight = lineHeight * ASK_CUSTOM_INPUT_MAX_LINES + paddingTop + paddingBottom + borderTop + borderBottom
+
+    element.style.height = 'auto'
+    const nextHeight = Math.min(Math.max(element.scrollHeight, lineHeight), maxHeight)
+    element.style.height = `${nextHeight}px`
+    element.style.overflowX = 'hidden'
+    element.style.overflowY = element.scrollHeight > maxHeight + 1 ? 'auto' : 'hidden'
+}
+
 export function AskOverlay({ sessionId: propSessionId, className }: AskOverlayProps) {
     const { t } = useTranslation()
     const services = useHostServices()
@@ -34,7 +56,7 @@ export function AskOverlay({ sessionId: propSessionId, className }: AskOverlayPr
     const [isCustomActive, setIsCustomActive] = useState(false)
     const [customText, setCustomText] = useState('')
     const [selectedIndex, setSelectedIndex] = useState<number | null>(null)
-    const inputRef = useRef<HTMLInputElement>(null)
+    const inputRef = useRef<HTMLTextAreaElement>(null)
     const [now, setNow] = useState(Date.now)
     const countdownDeadline = request?.countdownDeadline
 
@@ -68,6 +90,26 @@ export function AskOverlay({ sessionId: propSessionId, className }: AskOverlayPr
             inputRef.current?.focus()
         }
     }, [isCustomActive])
+
+    useLayoutEffect(() => {
+        const element = inputRef.current
+        if (!isCustomActive || !element) return
+
+        let lastWidth = -1
+        const measure = () => {
+            syncAskCustomInputHeight(element)
+            lastWidth = element.clientWidth
+        }
+        measure()
+
+        if (typeof ResizeObserver === 'undefined') return
+        const observer = new ResizeObserver(() => {
+            if (element.clientWidth === lastWidth) return
+            measure()
+        })
+        observer.observe(element)
+        return () => observer.disconnect()
+    }, [isCustomActive, customText])
 
     const handleSelectOption = useCallback(
         (option: AskOption, index: number) => {
@@ -286,16 +328,17 @@ export function AskOverlay({ sessionId: propSessionId, className }: AskOverlayPr
                             onSubmit={handleCustomSubmit}
                             data-testid="ask-custom-active-container"
                             className={cn(
-                                'mt-1 flex w-full items-center gap-2.5 rounded-full border border-blue-500/80 bg-[#141414] px-3.5 py-1.5',
+                                'mt-1 flex w-full items-end gap-2.5 rounded-2xl border border-blue-500/80 bg-[#141414] px-3.5 py-2',
                                 'ring-1 ring-blue-500/40 shadow-inner transition-all'
                             )}
                         >
-                            <div className="flex size-6 shrink-0 items-center justify-center rounded-full bg-[#2a2a2a] text-neutral-300">
+                            <div className="flex size-6 shrink-0 items-center justify-center self-start rounded-full bg-[#2a2a2a] text-neutral-300">
                                 <Pencil className="size-3" aria-hidden />
                             </div>
-                            <input
+                            <textarea
                                 ref={inputRef}
-                                type="text"
+                                rows={1}
+                                wrap="soft"
                                 data-testid="ask-custom-input"
                                 value={customText}
                                 onChange={(e) => {
@@ -307,19 +350,26 @@ export function AskOverlay({ sessionId: propSessionId, className }: AskOverlayPr
                                         if (customText.trim().length === 0) {
                                             setIsCustomActive(false)
                                         }
+                                        return
+                                    }
+                                    const nativeKeyCode = 'keyCode' in e.nativeEvent ? e.nativeEvent.keyCode : 0
+                                    const isImeEnter = e.nativeEvent.isComposing || nativeKeyCode === 229
+                                    if (e.key === 'Enter' && !e.shiftKey && !isImeEnter) {
+                                        e.preventDefault()
+                                        handleCustomSubmit()
                                     }
                                 }}
                                 placeholder={t('ask.inputPlaceholder', {
                                     defaultValue: 'Enter answer...',
                                 })}
-                                className="min-w-0 flex-1 bg-transparent text-sm text-neutral-100 placeholder-neutral-500 outline-none"
+                                className="min-h-5 min-w-0 flex-1 resize-none overflow-hidden border-0 bg-transparent py-0.5 text-sm leading-5 text-neutral-100 placeholder-neutral-500 outline-none select-text [overflow-wrap:anywhere]"
                             />
                             {request.allowSkip ? (
                                 <button
                                     type="button"
                                     data-testid="ask-custom-skip-button"
                                     onClick={handleSkip}
-                                    className="shrink-0 rounded-full bg-[#2e2e2e] px-3 py-1 text-xs font-medium text-neutral-300 hover:bg-[#3d3d3d] transition-colors cursor-pointer"
+                                    className="mb-0.5 shrink-0 self-end rounded-full bg-[#2e2e2e] px-3 py-1 text-xs font-medium text-neutral-300 hover:bg-[#3d3d3d] transition-colors cursor-pointer"
                                 >
                                     {skipLabel}
                                 </button>

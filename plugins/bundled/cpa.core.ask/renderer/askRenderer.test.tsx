@@ -99,6 +99,7 @@ describe('cpa.core.ask renderer entry and AskOverlay', () => {
         expect(registeredFloatings[0].anchor).toBe('[data-element="composer-container"]')
         expect(registeredFloatings[0].placement).toBe('cover-bottom')
         expect(registeredFloatings[0].offset).toEqual({ y: 0 })
+        expect(registeredFloatings[0].zIndex).toBe(60)
         expect(registeredFloatings[0].visible({ sessionId: testSessionId })).toBe(false)
 
         useAskStore.getState().setRequest(testSessionId, sampleRequest)
@@ -250,6 +251,111 @@ describe('cpa.core.ask renderer entry and AskOverlay', () => {
                 index: 1,
             })
         )
+    })
+
+    it('grows the custom answer field up to five lines and submits multiline text', () => {
+        useAskStore.getState().setRequest(testSessionId, sampleRequest)
+        const submitSpy = vi.spyOn(defaultAskController, 'submitAnswer')
+        render(<AskOverlay sessionId={testSessionId} />)
+
+        fireEvent.click(screen.getByTestId('ask-custom-inactive-row'))
+        const input = screen.getByTestId('ask-custom-input') as HTMLTextAreaElement
+        expect(input.tagName).toBe('TEXTAREA')
+        expect(input).toHaveAttribute('rows', '1')
+
+        const computed = window.getComputedStyle(input)
+        const lineHeight = Number.parseFloat(computed.lineHeight) || 20
+        const chrome =
+            (Number.parseFloat(computed.paddingTop) || 0) +
+            (Number.parseFloat(computed.paddingBottom) || 0) +
+            (Number.parseFloat(computed.borderTopWidth) || 0) +
+            (Number.parseFloat(computed.borderBottomWidth) || 0)
+        const maxHeight = lineHeight * 5 + chrome
+        let scrollHeight = lineHeight * 3
+        Object.defineProperty(input, 'scrollHeight', {
+            configurable: true,
+            get: () => scrollHeight,
+        })
+
+        fireEvent.change(input, { target: { value: 'one two three four five six seven' } })
+        expect(input.style.height).toBe(`${lineHeight * 3}px`)
+        expect(input.style.overflowY).toBe('hidden')
+
+        scrollHeight = lineHeight * 8
+        fireEvent.change(input, { target: { value: 'line one\nline two\nline three\nline four\nline five\nline six' } })
+        expect(input.style.height).toBe(`${maxHeight}px`)
+        expect(input.style.overflowY).toBe('auto')
+
+        submitSpy.mockClear()
+        fireEvent.keyDown(input, { key: 'Enter', shiftKey: true })
+        fireEvent.keyDown(input, { key: 'Enter', isComposing: true })
+        expect(submitSpy).not.toHaveBeenCalled()
+
+        fireEvent.keyDown(input, { key: 'Enter' })
+        expect(submitSpy).toHaveBeenCalledWith(
+            testSessionId,
+            'tool-call-1',
+            expect.objectContaining({
+                type: 'custom',
+                text: 'line one\nline two\nline three\nline four\nline five\nline six',
+            })
+        )
+    })
+
+    it('recomputes custom input height when only the field width changes', () => {
+        const callbacks: Array<() => void> = []
+        vi.stubGlobal('ResizeObserver', class {
+            constructor(callback: () => void) {
+                callbacks.push(callback)
+            }
+            observe = vi.fn()
+            unobserve = vi.fn()
+            disconnect = vi.fn()
+        })
+
+        try {
+            useAskStore.getState().setRequest(testSessionId, sampleRequest)
+            render(<AskOverlay sessionId={testSessionId} />)
+            fireEvent.click(screen.getByTestId('ask-custom-inactive-row'))
+            const input = screen.getByTestId('ask-custom-input') as HTMLTextAreaElement
+
+            const computed = window.getComputedStyle(input)
+            const lineHeight = Number.parseFloat(computed.lineHeight) || 20
+            const chrome =
+                (Number.parseFloat(computed.paddingTop) || 0) +
+                (Number.parseFloat(computed.paddingBottom) || 0) +
+                (Number.parseFloat(computed.borderTopWidth) || 0) +
+                (Number.parseFloat(computed.borderBottomWidth) || 0)
+            const maxHeight = lineHeight * 5 + chrome
+
+            let width = 420
+            let scrollHeight = lineHeight
+            Object.defineProperty(input, 'clientWidth', { configurable: true, get: () => width })
+            Object.defineProperty(input, 'scrollHeight', { configurable: true, get: () => scrollHeight })
+
+            width = 160
+            scrollHeight = lineHeight * 3
+            act(() => {
+                callbacks.forEach((callback) => callback())
+            })
+            expect(input.style.height).toBe(`${lineHeight * 3}px`)
+            expect(input.style.overflowY).toBe('hidden')
+
+            scrollHeight = lineHeight * 8
+            act(() => {
+                callbacks.forEach((callback) => callback())
+            })
+            expect(input.style.height).toBe(`${lineHeight * 3}px`)
+
+            width = 120
+            act(() => {
+                callbacks.forEach((callback) => callback())
+            })
+            expect(input.style.height).toBe(`${maxHeight}px`)
+            expect(input.style.overflowY).toBe('auto')
+        } finally {
+            vi.unstubAllGlobals()
+        }
     })
 
     it('cancels via Escape shortcut when in inactive mode', () => {

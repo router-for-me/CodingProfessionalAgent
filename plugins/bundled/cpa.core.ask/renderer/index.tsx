@@ -18,6 +18,8 @@ export const askRendererEntry = definePluginEntry({
                 anchor: '[data-element="composer-container"]',
                 placement: 'cover-bottom',
                 offset: { y: 0 },
+                // Above the default floating layer (z-index 50), including the todo progress bar.
+                zIndex: 60,
                 visible: (ctx: any) => {
                     const hostServices = (context as any).services ?? getDefaultHostServices()
                     const sid =

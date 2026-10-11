@@ -599,6 +599,12 @@ export interface FloatingContribution<P = Record<string, unknown>> {
     placement?: FloatingPlacement
     offset?: FloatingOffset
     order?: number
+    /**
+     * Stacking level among floating overlays. Defaults to 50.
+     * Interactive overlays that must stay above sibling floaters (for example
+     * the ask dialog over the todo progress bar) should set a higher value.
+     */
+    zIndex?: number
     component: ComponentType<P>
     visible?: (context: Record<string, unknown>) => boolean
 }
