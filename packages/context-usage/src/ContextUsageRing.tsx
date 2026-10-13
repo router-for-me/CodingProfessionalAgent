@@ -2,6 +2,7 @@ import {
     useCallback,
     useEffect,
     useId,
+    useLayoutEffect,
     useRef,
     useState,
     type ReactElement,
@@ -17,11 +18,19 @@ import {
 } from '@cpa/plugin-ui'
 import {
     computeContextUsageBreakdown,
+    computeSessionTotalUsageBreakdown,
     DEFAULT_COMPACTION_THRESHOLD_PERCENT,
     DEFAULT_CONTEXT_WINDOW,
 } from './tokenEstimate.js'
 
 const EMPTY_ENTRIES: readonly any[] = []
+
+function formatCacheRate(cacheReadTokens: number, totalTokens: number): string {
+    if (totalTokens <= 0 || cacheReadTokens <= 0) {
+        return '0.00%'
+    }
+    return `${((cacheReadTokens / totalTokens) * 100).toFixed(2)}%`
+}
 
 export interface ContextUsageRingProps {
     sessionId?: string
@@ -126,7 +135,12 @@ function ContextUsageRingInner({
         }
     }, [targetSessionId, services?.chatMessages])
 
-    const breakdown = computeContextUsageBreakdown(
+    const contextBreakdown = computeContextUsageBreakdown(
+        entries,
+        contextWindow,
+        compactionThresholdPercent,
+    )
+    const totalBreakdown = computeSessionTotalUsageBreakdown(
         entries,
         contextWindow,
         compactionThresholdPercent,
@@ -154,27 +168,52 @@ function ContextUsageRingInner({
         }
     }, [])
 
+    const estimatedHeight =
+        300 +
+        (contextBreakdown.cacheReadTokens > 0 ? 48 : 0) +
+        (contextBreakdown.cacheWriteTokens > 0 ? 24 : 0) +
+        (totalBreakdown.cacheReadTokens > 0 ? 48 : 0) +
+        (totalBreakdown.cacheWriteTokens > 0 ? 24 : 0)
+
     const updatePosition = useCallback(() => {
         const trigger = triggerRef.current
         if (!trigger) return
         const rect = trigger.getBoundingClientRect()
-        const POPUP_WIDTH = 260
-        const ESTIMATED_HEIGHT = 220
+        const POPUP_WIDTH = 290
         const margin = 8
+        const gap = 8
+
+        const measuredHeight =
+            popoverRef.current?.offsetHeight ||
+            popoverRef.current?.getBoundingClientRect().height ||
+            0
+        const popupHeight = measuredHeight > 0 ? measuredHeight : estimatedHeight
 
         let left = Math.round(rect.left + rect.width / 2 - POPUP_WIDTH / 2)
         left = Math.max(margin, Math.min(left, window.innerWidth - POPUP_WIDTH - margin))
 
-        const placeAbove = rect.top >= ESTIMATED_HEIGHT + margin + 8
+        const placeAbove = rect.top >= popupHeight + margin + gap
 
-        if (placeAbove) {
-            const bottom = Math.round(window.innerHeight - rect.top + 8)
-            setPosition({ left, bottom })
-        } else {
-            const top = Math.round(rect.bottom + 8)
-            setPosition({ left, top })
-        }
-    }, [])
+        const next = placeAbove
+            ? { left, bottom: Math.round(window.innerHeight - rect.top + gap) }
+            : { left, top: Math.round(rect.bottom + gap) }
+
+        setPosition((prev) => {
+            if (
+                prev.left === next.left &&
+                prev.top === next.top &&
+                prev.bottom === next.bottom
+            ) {
+                return prev
+            }
+            return next
+        })
+    }, [estimatedHeight])
+
+    useLayoutEffect(() => {
+        if (!open) return
+        updatePosition()
+    }, [open, updatePosition])
 
     const handleOpen = useCallback(() => {
         cancelClose()
@@ -230,8 +269,8 @@ function ContextUsageRingInner({
                 tabIndex={0}
                 aria-describedby={open ? tooltipId : undefined}
                 aria-label={t('contextUsage.used', {
-                    percent: breakdown.percentLabel,
-                    defaultValue: `Context: ${breakdown.percentLabel} used`,
+                    percent: contextBreakdown.percentLabel,
+                    defaultValue: `Context: ${contextBreakdown.percentLabel} used`,
                 })}
                 className={cn(
                     'inline-flex shrink-0 cursor-pointer items-center justify-center rounded-full p-0.5',
@@ -251,7 +290,7 @@ function ContextUsageRingInner({
                 <UsageRing
                     size={size}
                     strokeWidth={strokeWidth}
-                    percent={breakdown.percentUsed}
+                    percent={contextBreakdown.percentUsed}
                     testId="usage-ring"
                 />
             </span>
@@ -267,7 +306,7 @@ function ContextUsageRingInner({
                           })}
                           data-testid="context-usage-popover"
                           className={cn(
-                              'fixed z-50 w-[260px] rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3.5 shadow-2xl',
+                              'fixed z-50 w-[290px] rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3.5 shadow-2xl',
                               'text-[var(--text-primary)] backdrop-blur-md',
                           )}
                           style={{
@@ -277,18 +316,19 @@ function ContextUsageRingInner({
                           }}
                           onMouseEnter={handleOpen}
                           onMouseLeave={handleClose}
+                          onFocus={handleOpen}
                           onClick={(e) => e.stopPropagation()}
                       >
                           <div className="flex items-center gap-3">
                               <UsageRing
                                   size={32}
                                   strokeWidth={3.5}
-                                  percent={breakdown.percentUsed}
+                                  percent={contextBreakdown.percentUsed}
                               />
                               <span className="text-[13px] font-medium text-[var(--text-primary)]">
                                   {t('contextUsage.used', {
-                                      percent: breakdown.percentLabel,
-                                      defaultValue: `Context: ${breakdown.percentLabel} used`,
+                                      percent: contextBreakdown.percentLabel,
+                                      defaultValue: `Context: ${contextBreakdown.percentLabel} used`,
                                   })}
                               </span>
                           </div>
@@ -297,7 +337,7 @@ function ContextUsageRingInner({
                               <div
                                   className="h-full rounded-full bg-[var(--accent-blue)] transition-all duration-300"
                                   style={{
-                                      width: `${Math.min(100, Math.max(0, breakdown.percentUsed))}%`,
+                                      width: `${Math.min(100, Math.max(0, contextBreakdown.percentUsed))}%`,
                                   }}
                               />
                           </div>
@@ -309,7 +349,7 @@ function ContextUsageRingInner({
                                       <span>{t('contextUsage.totalTokens', { defaultValue: 'Total tokens' })}</span>
                                   </div>
                                   <span className="font-mono text-[var(--text-primary)]">
-                                      {breakdown.totalTokens.toLocaleString()}
+                                      {contextBreakdown.totalTokens.toLocaleString()}
                                   </span>
                               </div>
 
@@ -319,7 +359,7 @@ function ContextUsageRingInner({
                                       <span>{t('contextUsage.inputTokens', { defaultValue: 'Input tokens' })}</span>
                                   </div>
                                   <span className="font-mono text-[var(--text-primary)]">
-                                      {breakdown.inputTokens.toLocaleString()}
+                                      {contextBreakdown.inputTokens.toLocaleString()}
                                   </span>
                               </div>
 
@@ -329,30 +369,42 @@ function ContextUsageRingInner({
                                       <span>{t('contextUsage.outputTokens', { defaultValue: 'Output tokens' })}</span>
                                   </div>
                                   <span className="font-mono text-[var(--text-primary)]">
-                                      {breakdown.outputTokens.toLocaleString()}
+                                      {contextBreakdown.outputTokens.toLocaleString()}
                                   </span>
                               </div>
 
-                              {breakdown.cacheReadTokens > 0 && (
-                                  <div className="flex items-center justify-between text-[var(--text-secondary)]">
-                                      <div className="flex items-center gap-2">
-                                          <span className="size-2 shrink-0 rounded-full bg-cyan-400" />
-                                          <span>{t('contextUsage.cacheReadTokens', { defaultValue: 'Cache read tokens' })}</span>
+                              {contextBreakdown.cacheReadTokens > 0 && (
+                                  <>
+                                      <div className="flex items-center justify-between text-[var(--text-secondary)]">
+                                          <div className="flex items-center gap-2">
+                                              <span className="size-2 shrink-0 rounded-full bg-cyan-400" />
+                                              <span>{t('contextUsage.cacheReadTokens', { defaultValue: 'Cache read tokens' })}</span>
+                                          </div>
+                                          <span className="font-mono text-[var(--text-primary)]">
+                                              {contextBreakdown.cacheReadTokens.toLocaleString()}
+                                          </span>
                                       </div>
-                                      <span className="font-mono text-[var(--text-primary)]">
-                                          {breakdown.cacheReadTokens.toLocaleString()}
-                                      </span>
-                                  </div>
+
+                                      <div className="flex items-center justify-between text-[var(--text-secondary)]">
+                                          <div className="flex items-center gap-2">
+                                              <span className="size-2 shrink-0 rounded-full bg-emerald-400" />
+                                              <span>{t('contextUsage.cacheRate', { defaultValue: 'Cache rate' })}</span>
+                                          </div>
+                                          <span className="font-mono text-[var(--text-primary)]">
+                                              {formatCacheRate(contextBreakdown.cacheReadTokens, contextBreakdown.totalTokens)}
+                                          </span>
+                                      </div>
+                                  </>
                               )}
 
-                              {breakdown.cacheWriteTokens > 0 && (
+                              {contextBreakdown.cacheWriteTokens > 0 && (
                                   <div className="flex items-center justify-between text-[var(--text-secondary)]">
                                       <div className="flex items-center gap-2">
                                           <span className="size-2 shrink-0 rounded-full bg-purple-400" />
                                           <span>{t('contextUsage.cacheWriteTokens', { defaultValue: 'Cache creation tokens' })}</span>
                                       </div>
                                       <span className="font-mono text-[var(--text-primary)]">
-                                          {breakdown.cacheWriteTokens.toLocaleString()}
+                                          {contextBreakdown.cacheWriteTokens.toLocaleString()}
                                       </span>
                                   </div>
                               )}
@@ -363,7 +415,7 @@ function ContextUsageRingInner({
                                       <span>{t('contextUsage.compactionWindow', { defaultValue: 'Compaction window' })}</span>
                                   </div>
                                   <span className="font-mono text-[var(--text-primary)]">
-                                      {breakdown.compactionWindow.toLocaleString()}
+                                      {contextBreakdown.compactionWindow.toLocaleString()}
                                   </span>
                               </div>
 
@@ -373,9 +425,80 @@ function ContextUsageRingInner({
                                       <span>{t('contextUsage.contextWindow', { defaultValue: 'Context window' })}</span>
                                   </div>
                                   <span className="font-mono text-[var(--text-primary)]">
-                                      {breakdown.contextWindow.toLocaleString()}
+                                      {contextBreakdown.contextWindow.toLocaleString()}
                                   </span>
                               </div>
+
+                              <div
+                                  data-testid="context-usage-total-divider"
+                                  className="my-1.5 border-t border-[var(--border-subtle)]"
+                              />
+
+                              <div className="flex items-center justify-between text-[var(--text-secondary)]">
+                                  <div className="flex items-center gap-2">
+                                      <span className="size-2 shrink-0 rounded-full bg-zinc-200" />
+                                      <span>{t('contextUsage.sessionTotalTokens', { defaultValue: 'Session total tokens' })}</span>
+                                  </div>
+                                  <span className="font-mono text-[var(--text-primary)]">
+                                      {totalBreakdown.totalTokens.toLocaleString()}
+                                  </span>
+                              </div>
+
+                              <div className="flex items-center justify-between text-[var(--text-secondary)]">
+                                  <div className="flex items-center gap-2">
+                                      <span className="size-2 shrink-0 rounded-full bg-sky-500" />
+                                      <span>{t('contextUsage.sessionInputTokens', { defaultValue: 'Session input tokens' })}</span>
+                                  </div>
+                                  <span className="font-mono text-[var(--text-primary)]">
+                                      {totalBreakdown.inputTokens.toLocaleString()}
+                                  </span>
+                              </div>
+
+                              <div className="flex items-center justify-between text-[var(--text-secondary)]">
+                                  <div className="flex items-center gap-2">
+                                      <span className="size-2 shrink-0 rounded-full bg-blue-400" />
+                                      <span>{t('contextUsage.sessionOutputTokens', { defaultValue: 'Session output tokens' })}</span>
+                                  </div>
+                                  <span className="font-mono text-[var(--text-primary)]">
+                                      {totalBreakdown.outputTokens.toLocaleString()}
+                                  </span>
+                              </div>
+
+                              {totalBreakdown.cacheReadTokens > 0 && (
+                                  <>
+                                      <div className="flex items-center justify-between text-[var(--text-secondary)]">
+                                          <div className="flex items-center gap-2">
+                                              <span className="size-2 shrink-0 rounded-full bg-cyan-400" />
+                                              <span>{t('contextUsage.sessionCacheReadTokens', { defaultValue: 'Session cache read tokens' })}</span>
+                                          </div>
+                                          <span className="font-mono text-[var(--text-primary)]">
+                                              {totalBreakdown.cacheReadTokens.toLocaleString()}
+                                          </span>
+                                      </div>
+
+                                      <div className="flex items-center justify-between text-[var(--text-secondary)]">
+                                          <div className="flex items-center gap-2">
+                                              <span className="size-2 shrink-0 rounded-full bg-emerald-400" />
+                                              <span>{t('contextUsage.sessionCacheRate', { defaultValue: 'Session cache rate' })}</span>
+                                          </div>
+                                          <span className="font-mono text-[var(--text-primary)]">
+                                              {formatCacheRate(totalBreakdown.cacheReadTokens, totalBreakdown.totalTokens)}
+                                          </span>
+                                      </div>
+                                  </>
+                              )}
+
+                              {totalBreakdown.cacheWriteTokens > 0 && (
+                                  <div className="flex items-center justify-between text-[var(--text-secondary)]">
+                                      <div className="flex items-center gap-2">
+                                          <span className="size-2 shrink-0 rounded-full bg-purple-400" />
+                                          <span>{t('contextUsage.sessionCacheWriteTokens', { defaultValue: 'Session cache creation tokens' })}</span>
+                                      </div>
+                                      <span className="font-mono text-[var(--text-primary)]">
+                                          {totalBreakdown.cacheWriteTokens.toLocaleString()}
+                                      </span>
+                                  </div>
+                              )}
                           </div>
                       </div>,
                       document.body,

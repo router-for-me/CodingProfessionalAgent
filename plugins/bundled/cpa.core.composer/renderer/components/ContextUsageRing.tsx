@@ -1,6 +1,7 @@
 export {
     ContextUsageRing,
     computeContextUsageBreakdown,
+    computeSessionTotalUsageBreakdown,
     estimateContextTokens,
     estimateTokens,
     thresholdRatioFromPercent,

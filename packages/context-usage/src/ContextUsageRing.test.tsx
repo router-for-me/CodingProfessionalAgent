@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { setDefaultHostServices } from '@cpa/plugin-ui'
 import {
     computeContextUsageBreakdown,
+    computeSessionTotalUsageBreakdown,
     ContextUsageRing,
 } from './index.js'
 
@@ -148,6 +149,98 @@ describe('computeContextUsageBreakdown', () => {
     it('calculates custom compaction threshold correctly', () => {
         const breakdown = computeContextUsageBreakdown([], 100_000, 80)
         expect(breakdown.compactionWindow).toBe(80_000)
+    })
+})
+
+describe('computeSessionTotalUsageBreakdown', () => {
+    it('accumulates usage across multiple assistant turns, compaction, and isolated invocations', () => {
+        const entries: any[] = [
+            {
+                id: 'a1',
+                sessionId: 's1',
+                createdAt: 1000,
+                kind: 'assistant',
+                status: 'done',
+                stopReason: 'stop',
+                content: [{ type: 'text', text: 'turn 1' }],
+                usage: {
+                    input: 1000,
+                    output: 200,
+                    cacheRead: 300,
+                    cacheWrite: 100,
+                    totalTokens: 1600,
+                },
+            },
+            {
+                id: 'c1',
+                sessionId: 's1',
+                createdAt: 1500,
+                kind: 'compaction',
+                summary: 'compacted summary',
+                firstKeptEntryId: 'a1',
+                usage: {
+                    input: 1600,
+                    output: 100,
+                    cacheRead: 0,
+                    cacheWrite: 0,
+                    totalTokens: 1700,
+                },
+            },
+            {
+                id: 'a2',
+                sessionId: 's1',
+                createdAt: 2000,
+                kind: 'assistant',
+                status: 'done',
+                stopReason: 'stop',
+                content: [{ type: 'text', text: 'turn 2' }],
+                usage: {
+                    input: 1500,
+                    output: 400,
+                    cacheRead: 500,
+                    cacheWrite: 50,
+                    totalTokens: 2450,
+                },
+            },
+            {
+                id: 'tr1',
+                sessionId: 's1',
+                createdAt: 2500,
+                kind: 'toolResult',
+                toolCallId: 'tc1',
+                toolName: 'web_search',
+                content: [],
+                isError: false,
+                isolatedModelInvocations: [
+                    {
+                        id: 'inv1',
+                        model: 'gpt-5-codex',
+                        parentToolCallId: 'tc1',
+                        usage: {
+                            input: 200,
+                            output: 50,
+                            cacheRead: 0,
+                            cacheWrite: 0,
+                            totalTokens: 250,
+                        },
+                    },
+                ],
+            },
+        ]
+
+        const totalBreakdown = computeSessionTotalUsageBreakdown(entries, 100_000, 95)
+        // 1000 + 1600 + 1500 + 200 = 4300 input (plus 0 trailing since tr1 has empty content)
+        expect(totalBreakdown.inputTokens).toBe(4300)
+        // 200 + 100 + 400 + 50 = 750 output
+        expect(totalBreakdown.outputTokens).toBe(750)
+        // 300 + 0 + 500 + 0 = 800 cacheRead
+        expect(totalBreakdown.cacheReadTokens).toBe(800)
+        // 100 + 0 + 50 + 0 = 150 cacheWrite
+        expect(totalBreakdown.cacheWriteTokens).toBe(150)
+        // 1600 + 1700 + 2450 + 250 = 6000 total
+        expect(totalBreakdown.totalTokens).toBe(6000)
+        expect(totalBreakdown.percentUsed).toBe(6)
+        expect(totalBreakdown.percentLabel).toBe('6%')
     })
 })
 
@@ -364,5 +457,132 @@ describe('ContextUsageRing Component', () => {
         expect(handleRingClick).toHaveBeenCalledTimes(1)
         expect(handleParentClick).toHaveBeenCalledTimes(1)
         expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
+    })
+
+    it('renders session total usage breakdown below a divider at the bottom of the original list', async () => {
+        mockEntriesBySession['s1'] = [
+            {
+                id: 'a1',
+                sessionId: 's1',
+                createdAt: 1000,
+                kind: 'assistant',
+                status: 'done',
+                stopReason: 'stop',
+                content: [{ type: 'text', text: 'first turn' }],
+                usage: {
+                    input: 1000,
+                    output: 300,
+                    cacheRead: 200,
+                    cacheWrite: 100,
+                    totalTokens: 1600,
+                },
+            },
+            {
+                id: 'a2',
+                sessionId: 's1',
+                createdAt: 2000,
+                kind: 'assistant',
+                status: 'done',
+                stopReason: 'stop',
+                content: [{ type: 'text', text: 'second turn' }],
+                usage: {
+                    input: 2500,
+                    output: 500,
+                    cacheRead: 1000,
+                    cacheWrite: 200,
+                    totalTokens: 4200,
+                },
+            },
+        ]
+
+        render(<ContextUsageRing sessionId="s1" />)
+        const ring = screen.getByTestId('context-usage-ring')
+
+        fireEvent.mouseEnter(ring)
+        const tooltip = await screen.findByRole('tooltip')
+
+        // Original context usage (latest turn)
+        expect(tooltip).toHaveTextContent('Context: 2% used')
+        expect(tooltip).toHaveTextContent('4,200')
+        expect(tooltip).toHaveTextContent('2,500')
+        expect(tooltip).toHaveTextContent('500')
+        expect(tooltip).toHaveTextContent('190,000')
+        expect(tooltip).toHaveTextContent('200,000')
+
+        // Divider + session total usage at the bottom with "Session " prefixed labels and cache rates
+        expect(screen.getByTestId('context-usage-total-divider')).toBeInTheDocument()
+        expect(tooltip).toHaveTextContent('Cache rate')
+        expect(tooltip).toHaveTextContent('23.81%') // 1000 / 4200
+        expect(tooltip).toHaveTextContent('Session total tokens')
+        expect(tooltip).toHaveTextContent('Session input tokens')
+        expect(tooltip).toHaveTextContent('Session output tokens')
+        expect(tooltip).toHaveTextContent('Session cache read tokens')
+        expect(tooltip).toHaveTextContent('Session cache rate')
+        expect(tooltip).toHaveTextContent('20.69%') // 1200 / 5800
+        expect(tooltip).toHaveTextContent('Session cache creation tokens')
+        expect(tooltip).toHaveTextContent('5,800')
+        expect(tooltip).toHaveTextContent('3,500')
+        expect(tooltip).toHaveTextContent('800')
+        expect(tooltip).toHaveTextContent('1,200')
+        expect(tooltip).toHaveTextContent('300')
+    })
+
+    it('positions popover below trigger when card height would exceed top of viewport, and above when sufficient top space exists', async () => {
+        mockEntriesBySession['s1'] = [
+            {
+                id: 'a1',
+                sessionId: 's1',
+                createdAt: 1000,
+                kind: 'assistant',
+                status: 'done',
+                stopReason: 'stop',
+                content: [{ type: 'text', text: 'turn' }],
+                usage: {
+                    input: 2500,
+                    output: 500,
+                    cacheRead: 1000,
+                    cacheWrite: 200,
+                    totalTokens: 4200,
+                },
+            },
+        ]
+
+        render(<ContextUsageRing sessionId="s1" />)
+        const ring = screen.getByTestId('context-usage-ring')
+
+        // Case 1: Trigger is at top=260px, which is smaller than the tall card height (~444px) -> should place below (top = 276 + 8 = 284px)
+        vi.spyOn(ring, 'getBoundingClientRect').mockReturnValue({
+            top: 260,
+            bottom: 276,
+            left: 200,
+            right: 216,
+            width: 16,
+            height: 16,
+            x: 200,
+            y: 260,
+            toJSON: () => ({}),
+        })
+
+        fireEvent.mouseEnter(ring)
+        const tooltip = await screen.findByRole('tooltip')
+        expect(tooltip.style.top).toBe('284px')
+        expect(tooltip.style.bottom).toBe('')
+
+        // Case 2: Trigger is at top=600px, sufficient room above for the card -> should place above (bottom = innerHeight - 600 + 8)
+        vi.spyOn(ring, 'getBoundingClientRect').mockReturnValue({
+            top: 600,
+            bottom: 616,
+            left: 200,
+            right: 216,
+            width: 16,
+            height: 16,
+            x: 200,
+            y: 600,
+            toJSON: () => ({}),
+        })
+
+        fireEvent(window, new Event('resize'))
+        expect(tooltip.style.bottom).toBe(`${Math.round(window.innerHeight - 600 + 8)}px`)
+        expect(tooltip.style.top).toBe('')
     })
 })

@@ -250,3 +250,104 @@ export function computeContextUsageBreakdown(
         percentLabel,
     }
 }
+
+export function computeSessionTotalUsageBreakdown(
+    entries: readonly any[],
+    contextWindow: number,
+    compactionThresholdPercent: number = DEFAULT_COMPACTION_THRESHOLD_PERCENT,
+): ContextUsageBreakdown {
+    const safeContextWindow = Math.max(1, contextWindow || DEFAULT_CONTEXT_WINDOW)
+    const thresholdRatio = thresholdRatioFromPercent(compactionThresholdPercent)
+    const compactionWindow = Math.round(safeContextWindow * thresholdRatio)
+
+    let totalTokens = 0
+    let inputTokens = 0
+    let outputTokens = 0
+    let cacheReadTokens = 0
+    let cacheWriteTokens = 0
+    let lastUsageIndex: number | null = null
+
+    for (let i = 0; i < entries.length; i++) {
+        const entry = entries[i]
+        if (!entry) continue
+
+        if ((entry.kind === 'assistant' || entry.kind === 'compaction') && entry.usage) {
+            const u = entry.usage
+            const baseInput = typeof u.input === 'number' && Number.isFinite(u.input) ? u.input : 0
+            const baseOutput = typeof u.output === 'number' && Number.isFinite(u.output) ? u.output : 0
+            const baseCacheRead = typeof u.cacheRead === 'number' && Number.isFinite(u.cacheRead) ? u.cacheRead : 0
+            const baseCacheWrite = typeof u.cacheWrite === 'number' && Number.isFinite(u.cacheWrite) ? u.cacheWrite : 0
+            const baseTotal =
+                typeof u.totalTokens === 'number' && Number.isFinite(u.totalTokens) && u.totalTokens > 0
+                    ? u.totalTokens
+                    : baseInput + baseOutput + baseCacheRead + baseCacheWrite
+
+            inputTokens += baseInput
+            outputTokens += baseOutput
+            cacheReadTokens += baseCacheRead
+            cacheWriteTokens += baseCacheWrite
+            totalTokens += baseTotal
+            lastUsageIndex = i
+        }
+
+        if (entry.kind === 'toolResult' && Array.isArray(entry.isolatedModelInvocations)) {
+            for (const inv of entry.isolatedModelInvocations) {
+                const u = inv?.usage
+                if (!u || typeof u !== 'object') continue
+                const baseInput = typeof u.input === 'number' && Number.isFinite(u.input) ? u.input : 0
+                const baseOutput = typeof u.output === 'number' && Number.isFinite(u.output) ? u.output : 0
+                const baseCacheRead = typeof u.cacheRead === 'number' && Number.isFinite(u.cacheRead) ? u.cacheRead : 0
+                const baseCacheWrite = typeof u.cacheWrite === 'number' && Number.isFinite(u.cacheWrite) ? u.cacheWrite : 0
+                const baseTotal =
+                    typeof u.totalTokens === 'number' && Number.isFinite(u.totalTokens) && u.totalTokens > 0
+                        ? u.totalTokens
+                        : baseInput + baseOutput + baseCacheRead + baseCacheWrite
+
+                inputTokens += baseInput
+                outputTokens += baseOutput
+                cacheReadTokens += baseCacheRead
+                cacheWriteTokens += baseCacheWrite
+                totalTokens += baseTotal
+            }
+        }
+    }
+
+    if (lastUsageIndex !== null) {
+        let trailingTokens = 0
+        for (let i = lastUsageIndex + 1; i < entries.length; i++) {
+            const e = entries[i]
+            if (e) trailingTokens += estimateTokens(e)
+        }
+        inputTokens += trailingTokens
+        totalTokens += trailingTokens
+    } else {
+        let estimated = 0
+        for (let i = 0; i < entries.length; i++) {
+            const e = entries[i]
+            if (e) estimated += estimateTokens(e)
+        }
+        totalTokens += estimated
+        inputTokens += estimated
+    }
+
+    const ratio = totalTokens / safeContextWindow
+    const percentUsed = Math.min(100, Math.max(0, ratio * 100))
+    let percentLabel = `${Math.round(percentUsed)}%`
+    if (totalTokens === 0) {
+        percentLabel = '0%'
+    } else if (percentUsed > 0 && percentUsed < 1) {
+        percentLabel = '<1%'
+    }
+
+    return {
+        totalTokens,
+        inputTokens,
+        outputTokens,
+        cacheReadTokens,
+        cacheWriteTokens,
+        compactionWindow,
+        contextWindow: safeContextWindow,
+        percentUsed,
+        percentLabel,
+    }
+}
