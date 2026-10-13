@@ -93,10 +93,31 @@ export function ModelSelect({
     const triggerRef = useRef<HTMLButtonElement>(null)
     const measureRef = useRef<HTMLSpanElement>(null)
     const prevOpenRef = useRef(open)
+    const wasOpenLayoutRef = useRef(open)
+    const isClosing = (prevOpenRef.current && !open) || isFolding
+
+    useLayoutEffect(() => {
+        const wasOpen = wasOpenLayoutRef.current
+        wasOpenLayoutRef.current = open
+        if (!wasOpen && open && triggerRef.current) {
+            const trigger = triggerRef.current
+            const startWidth =
+                compactWidth ??
+                Math.ceil(measureRef.current?.getBoundingClientRect().width ?? 0)
+            if (startWidth > 0 && !isFolding) {
+                trigger.style.transition = 'none'
+                trigger.style.width = `${startWidth}px`
+                void trigger.offsetWidth
+                trigger.style.transition = ''
+                trigger.style.width = `${MODEL_MENU_WIDTH_PX}px`
+            }
+        }
+    }, [open, compactWidth, isFolding])
 
     useEffect(() => {
         if (prevOpenRef.current && !open) {
             setIsFolding(true)
+            prevOpenRef.current = open
             const timer = setTimeout(() => {
                 setIsFolding(false)
             }, 220)
@@ -372,7 +393,7 @@ export function ModelSelect({
                 style={{
                     width: open
                         ? `${MODEL_MENU_WIDTH_PX}px`
-                        : isFolding && compactWidth
+                        : isClosing && compactWidth
                             ? `${compactWidth}px`
                             : undefined,
                 }}
@@ -392,11 +413,13 @@ export function ModelSelect({
                 onClick={() => {
                     if (isTriggerDisabled) return
                     if (!open && triggerRef.current) {
-                        setMenuPosition(
-                            computeModelMenuPosition(
-                                triggerRef.current.getBoundingClientRect(),
-                            ),
-                        )
+                        const rect = triggerRef.current.getBoundingClientRect()
+                        const startWidth = compactWidth ?? Math.ceil(rect.width)
+                        if (startWidth > 0 && !isFolding) {
+                            triggerRef.current.style.width = `${startWidth}px`
+                            void triggerRef.current.offsetWidth
+                        }
+                        setMenuPosition(computeModelMenuPosition(rect))
                     }
                     setOpen((prev) => !prev)
                 }}
@@ -412,7 +435,13 @@ export function ModelSelect({
                     {currentModelLabel} {currentReasoningLabel}
                     {isFastEnabled ? ` ${t('composer.speed.fast', { defaultValue: 'Fast' })}` : ''}
                 </span>
-                <ChevronDown className="size-3 shrink-0 opacity-70" aria-hidden />
+                <ChevronDown
+                    className={cn(
+                        'size-3 shrink-0 opacity-70 transition-transform duration-200 ease-out',
+                        open && 'rotate-180',
+                    )}
+                    aria-hidden
+                />
             </button>
 
             {/* Hidden element for measuring natural compact width */}

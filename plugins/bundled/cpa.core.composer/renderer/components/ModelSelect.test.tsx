@@ -775,4 +775,56 @@ describe('ModelSelect', () => {
         expect(trigger).toHaveTextContent('Primary Model')
         expect(trigger.style.width).toBe('')
     })
+
+    it('rotates chevron arrow upward when expanded and downward when collapsed, while transitioning width between compactWidth and menu width', async () => {
+        vi.useFakeTimers()
+        try {
+            modelsState = testModels
+            const rectSpy = vi
+                .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+                .mockImplementation(
+                    () =>
+                        ({
+                            width: 142,
+                            height: 28,
+                            top: 500,
+                            left: 200,
+                            right: 342,
+                            bottom: 528,
+                            x: 200,
+                            y: 500,
+                            toJSON: () => ({}),
+                        }) as DOMRect,
+                )
+
+            render(<ModelSelect />)
+            const trigger = screen.getByRole('button', { name: 'Model' })
+            const chevron = trigger.querySelector('.lucide-chevron-down')
+
+            // Closed steady state: chevron points down (no rotate-180), width unset
+            expect(chevron).not.toBeNull()
+            expect(chevron).not.toHaveClass('rotate-180')
+            expect(trigger.style.width).toBe('')
+
+            // Click to expand: width transitions to menu width (234px), chevron rotates upward (rotate-180)
+            fireEvent.click(trigger)
+            expect(trigger.style.width).toBe('234px')
+            expect(chevron).toHaveClass('rotate-180')
+
+            // Click to collapse: width immediately transitions to measured compactWidth (142px), chevron points down
+            fireEvent.click(trigger)
+            expect(trigger.style.width).toBe('142px')
+            expect(chevron).not.toHaveClass('rotate-180')
+
+            // After folding transition completes, inline width is cleared back to unset
+            act(() => {
+                vi.advanceTimersByTime(250)
+            })
+            expect(trigger.style.width).toBe('')
+
+            rectSpy.mockRestore()
+        } finally {
+            vi.useRealTimers()
+        }
+    })
 })
