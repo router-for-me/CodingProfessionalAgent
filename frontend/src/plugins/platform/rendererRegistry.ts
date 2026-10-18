@@ -262,6 +262,15 @@ export class RendererRegistry {
         this.invalidateCaches()
     }
 
+    /**
+     * Invalidate cached floating contributions and notify floating overlay hosts to re-evaluate visibility.
+     */
+    refreshFloatings(): void {
+        this.invalidateCaches('floating')
+        this.notifyKey('floating')
+        this.notifyKey('floatings')
+    }
+
     private notifyKind(kind: ContributionKind, target?: string): void {
         this.invalidateCaches(kind)
 

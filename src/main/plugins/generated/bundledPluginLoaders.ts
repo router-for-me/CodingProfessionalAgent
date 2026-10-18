@@ -263,6 +263,48 @@ export const bundledManifests: Readonly<Record<string, PluginManifest>> = Object
                 ]
         }
 }),
+    'cpa.core.ask': Object.freeze({
+        "id": "cpa.core.ask",
+        "name": "Ask User Tool",
+        "version": "1.0.0",
+        "apiVersion": "1.0.0",
+        "description": "Core interactive user question tool and modal overlay",
+        "engines": {
+                "cpa": ">=1.0.0"
+        },
+        "entries": {
+                "main": "./main/index.ts",
+                "renderer": "./renderer/index.tsx",
+                "agent": "./agent/index.ts"
+        },
+        "activationPriority": 130,
+        "dependencies": {
+                "cpa.core.chat": ">=1.0.0"
+        },
+        "capabilities": [
+                "ui.overlay"
+        ],
+        "contributes": {
+                "rpc": [
+                        "ask:setRequest",
+                        "ask:clearRequest",
+                        "ask:getRequests",
+                        "ask:submitAnswer",
+                        "ask:cancelCountdown",
+                        "ask:cancel"
+                ],
+                "native-event": [
+                        "ask:state-changed",
+                        "ask:action"
+                ],
+                "floating": [
+                        "ask-overlay"
+                ],
+                "tool-factory": [
+                        "ask"
+                ]
+        }
+}),
     'cpa.core.memories': Object.freeze({
         "id": "cpa.core.memories",
         "name": "Memories",
@@ -391,6 +433,12 @@ export const bundledMainPackages: readonly ResolvedPluginPackage[] = Object.free
         source: Object.freeze({ kind: 'bundled' as const, spec: 'bundled:cpa.core.settings' }),
     }),
     Object.freeze({
+        manifest: bundledManifests['cpa.core.ask'],
+        entries: bundledManifests['cpa.core.ask'].entries ?? {},
+        sourceRoot: 'plugins/bundled/cpa.core.ask',
+        source: Object.freeze({ kind: 'bundled' as const, spec: 'bundled:cpa.core.ask' }),
+    }),
+    Object.freeze({
         manifest: bundledManifests['cpa.core.memories'],
         entries: bundledManifests['cpa.core.memories'].entries ?? {},
         sourceRoot: 'plugins/bundled/cpa.core.memories',
@@ -422,6 +470,10 @@ export const bundledMainEntryLoaders: Readonly<Record<string, BundledEntryLoader
     },
     'cpa.core.settings': async () => {
         const mod = await import('../../../../plugins/bundled/cpa.core.settings/main/index.js')
+        return mod.default ?? mod.entry ?? mod
+    },
+    'cpa.core.ask': async () => {
+        const mod = await import('../../../../plugins/bundled/cpa.core.ask/main/index.js')
         return mod.default ?? mod.entry ?? mod
     },
     'cpa.core.memories': async () => {

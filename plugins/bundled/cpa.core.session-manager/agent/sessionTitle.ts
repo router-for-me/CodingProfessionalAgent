@@ -92,10 +92,19 @@ export function createSetSessionTitleTool(
                     } else {
                         (effectiveOnRename as (sid: string, title: string) => void)(sessionId, trimmedTitle)
                     }
+                    if (effectiveCapClient && typeof effectiveCapClient.invoke === 'function') {
+                        await effectiveCapClient.invoke('session:setMeta', [{ id: sessionId, title: trimmedTitle }])
+                    }
+                } else if ((effectiveServices as any)?.sessions?.update) {
+                    if ((effectiveServices as any)?.sessions?.renameSession) {
+                        await (effectiveServices as any).sessions.renameSession(sessionId, trimmedTitle)
+                    }
+                    await (effectiveServices as any).sessions.update(sessionId, { title: trimmedTitle })
                 } else if ((effectiveServices as any)?.sessions?.renameSession) {
                     await (effectiveServices as any).sessions.renameSession(sessionId, trimmedTitle)
-                } else if ((effectiveServices as any)?.sessions?.update) {
-                    await (effectiveServices as any).sessions.update(sessionId, { title: trimmedTitle })
+                    if (effectiveCapClient && typeof effectiveCapClient.invoke === 'function') {
+                        await effectiveCapClient.invoke('session:setMeta', [{ id: sessionId, title: trimmedTitle }])
+                    }
                 } else if (effectiveCapClient && typeof effectiveCapClient.invoke === 'function') {
                     await effectiveCapClient.invoke('session:setMeta', [{ id: sessionId, title: trimmedTitle }])
                 }

@@ -131,6 +131,34 @@ describe('cpa.core.session-manager agent entry', () => {
             expect(invoke).toHaveBeenCalledWith('session:setMeta', [{ id: 'sess_789', title: 'Cap Title' }])
             expect(result.isError).toBe(false)
         })
+
+        it('updates both in-memory renameSession and capabilityClient session:setMeta when both are provided', async () => {
+            const renameSession = vi.fn()
+            const invoke = vi.fn().mockResolvedValue(true)
+            const mockServices = {
+                sessions: {
+                    renameSession,
+                },
+            } as unknown as HostServices
+            const mockCapClient = {
+                has: () => true,
+                invoke,
+                subscribe: () => () => {},
+            }
+
+            const tool = createSetSessionTitleTool({
+                services: mockServices,
+                capabilityClient: mockCapClient as any,
+            })
+
+            const result = await tool.execute('call_4', { title: 'Synced Web Title' }, {
+                sessionId: 'sess_web',
+            } as ToolExecutionContext)
+
+            expect(renameSession).toHaveBeenCalledWith('sess_web', 'Synced Web Title')
+            expect(invoke).toHaveBeenCalledWith('session:setMeta', [{ id: 'sess_web', title: 'Synced Web Title' }])
+            expect(result.isError).toBe(false)
+        })
     })
 
     describe('time parsing helpers', () => {

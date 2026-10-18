@@ -8,6 +8,7 @@
         "cpa": ">=1.0.0"
     },
     "entries": {
+        "main": "./main/index.ts",
         "renderer": "./renderer/index.tsx",
         "agent": "./agent/index.ts"
     },
@@ -19,6 +20,18 @@
         "ui.overlay"
     ],
     "contributes": {
+        "rpc": [
+            "ask:setRequest",
+            "ask:clearRequest",
+            "ask:getRequests",
+            "ask:submitAnswer",
+            "ask:cancelCountdown",
+            "ask:cancel"
+        ],
+        "native-event": [
+            "ask:state-changed",
+            "ask:action"
+        ],
         "floating": [
             "ask-overlay"
         ],

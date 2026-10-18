@@ -887,6 +887,28 @@ export class WebServerService {
         }
     }
 
+    sendToClient(clientId: string, message: unknown): boolean {
+        if (!this.running || !clientId || this.clients.size === 0) {
+            return false
+        }
+        const payload = JSON.stringify(message)
+        let sent = false
+        for (const client of this.clients) {
+            if (this.clientIds.get(client) !== clientId) {
+                continue
+            }
+            if (client.readyState === 1) { // WebSocket.OPEN
+                try {
+                    client.send(payload)
+                    sent = true
+                } catch {
+                    // Ignore send errors for closing clients
+                }
+            }
+        }
+        return sent
+    }
+
     private resolveDistDir(): string | null {
         if (this.customDistDir && fsSync.existsSync(this.customDistDir)) {
             return this.customDistDir

@@ -792,6 +792,7 @@ export const bundledManifests: Readonly<Record<string, PluginManifest>> = Object
                 "cpa": ">=1.0.0"
         },
         "entries": {
+                "main": "./main/index.ts",
                 "renderer": "./renderer/index.tsx",
                 "agent": "./agent/index.ts"
         },
@@ -803,6 +804,18 @@ export const bundledManifests: Readonly<Record<string, PluginManifest>> = Object
                 "ui.overlay"
         ],
         "contributes": {
+                "rpc": [
+                        "ask:setRequest",
+                        "ask:clearRequest",
+                        "ask:getRequests",
+                        "ask:submitAnswer",
+                        "ask:cancelCountdown",
+                        "ask:cancel"
+                ],
+                "native-event": [
+                        "ask:state-changed",
+                        "ask:action"
+                ],
                 "floating": [
                         "ask-overlay"
                 ],

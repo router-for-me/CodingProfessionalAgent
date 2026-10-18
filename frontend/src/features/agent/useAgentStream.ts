@@ -5,7 +5,7 @@
  * isolating multiple AgentServiceProvider trees.
  */
 
-import { isBrowserEnvironment } from '@/lib/platform'
+import { isBrowserEnvironment, isMobileBrowser } from '@/lib/platform'
 import { getHashRoutePathname } from '@cpa/plugin-ui'
 import { getHostBridge, subscribeHostNativeEvents, onHostReconnect } from '@/application/services/hostTransport'
 import { registerHostAgentController } from '@/application/services/createHostServices'
@@ -43,9 +43,12 @@ import type {
 import type { Skill, PromptTemplate } from '@cpa/plugin-sdk'
 import { useMessageStore } from '@/stores/messageStore'
 import {
+    allowPreRunSessionFlush,
     deleteSessionEntries,
     ensureSessionLoaded,
     flushPendingPersistence,
+    hasPendingSessionMetadata,
+    recordDeferredRemoteSessionMetadata,
     schedulePersist,
     awaitSessionWakeBarrier,
     withSuppressedPersistence,
@@ -416,6 +419,21 @@ function bindNativeSync(service: AgentService): void {
                 withSuppressedPersistence(() => {
                     adapter.apply(parsed.event!)
                 })
+            } catch {
+                // Ignore JSON parse error
+            }
+        } else if (nativeEvent.kind === 'session:meta-updated') {
+            try {
+                const sessionItem = JSON.parse(nativeEvent.data) as Session
+                if (sessionItem && sessionItem.id) {
+                    if (!hasPendingSessionMetadata(sessionItem.id)) {
+                        withSuppressedPersistence(() => {
+                            useSessionStore.getState().upsertRemoteSession(sessionItem)
+                        })
+                    } else {
+                        recordDeferredRemoteSessionMetadata(sessionItem)
+                    }
+                }
             } catch {
                 // Ignore JSON parse error
             }
@@ -3446,14 +3464,17 @@ export function useAgentStream(
                         .getState()
                         .setSessionFirstPromptAt(sessionId, userEntry.createdAt)
                 }
+                const previousRun = useSessionRunStore.getState().activeRuns[sessionId]
+                const isAlreadyRunning = Boolean(previousRun && previousRun.status !== 'idle')
+                if (!isAlreadyRunning) {
+                    allowPreRunSessionFlush(sessionId)
+                }
                 schedulePersist(true)
                 const onAccepted = payload.onSessionAccepted ?? opts?.onSessionAccepted
                 onAccepted?.(sessionId)
 
                 const bridge = getHostBridge()
                 if (bridge?.SessionDelegateRun) {
-                    const previousRun = useSessionRunStore.getState().activeRuns[sessionId]
-                    const isAlreadyRunning = previousRun && previousRun.status !== 'idle'
                     const optimisticRunId = isAlreadyRunning ? null : `delegated-${Date.now()}`
                     if (!isAlreadyRunning) {
                         useSessionRunStore.getState().setRun(sessionId, {
@@ -3493,7 +3514,9 @@ export function useAgentStream(
                     }
                 }
 
-                useUiStore.getState().setPinnedSummaryVisible(true)
+                if (!isMobileBrowser()) {
+                    useUiStore.getState().setPinnedSummaryVisible(true)
+                }
 
                 return sessionId
             }

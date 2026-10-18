@@ -104,6 +104,8 @@ describe('Mobile Web Typography & Icon Sizing', () => {
     expect(cssContent).toContain('html[data-mobile-browser="true"] aside[data-mobile="true"][data-state="open"]')
     expect(cssContent).toContain('z-index: 60 !important;')
     expect(cssContent).toContain('html[data-mobile-browser="true"]:has(aside[data-mobile="true"][data-state="open"]) [data-floating-id]')
+    expect(cssContent).toContain('html[data-mobile-browser="true"] [data-testid="todo-progress-pill"]')
+    expect(cssContent).toContain('white-space: nowrap !important;')
 
     // Mobile Action Sheet text selection suppression
     expect(cssContent).toContain('[data-testid="session-action-sheet"]')

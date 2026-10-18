@@ -239,6 +239,13 @@ function FloatingOverlayItem<P = Record<string, unknown>>({
     const overlayRef = useRef<HTMLDivElement>(null)
     const insetKey = useRef(Symbol()).current
     const [isWidthSufficient, setIsWidthSufficient] = useState(true)
+    const [anchorWidth, setAnchorWidth] = useState<number>(() => {
+        const anchorEl = findAnchorElement(item.anchor)
+        if (!anchorEl || !isAnchorVisible(anchorEl)) {
+            return 0
+        }
+        return anchorEl.getBoundingClientRect().width
+    })
 
     const [coords, setCoords] = useState<FloatingCoords | null>(() => {
         const anchorEl = findAnchorElement(item.anchor)
@@ -276,6 +283,7 @@ function FloatingOverlayItem<P = Record<string, unknown>>({
         const overlayWidth = overlayRef.current ? overlayRef.current.offsetWidth : 0
         const sufficient = overlayWidth === 0 || rect.width >= overlayWidth - 4
         setIsWidthSufficient(sufficient)
+        setAnchorWidth((prev) => (prev === rect.width ? prev : rect.width))
         const overlay = overlayRef.current
         publishCoverInset(insetKey,
             item.placement === 'cover-bottom' && sufficient && overlay
@@ -556,6 +564,10 @@ function FloatingOverlayItem<P = Record<string, unknown>>({
                 top: `${coords.top}px`,
                 left: `${coords.left}px`,
                 transform: coords.transform,
+                width: 'max-content',
+                ...(anchorWidth > 0
+                    ? ({ '--floating-anchor-width': `${anchorWidth}px` } as React.CSSProperties)
+                    : {}),
                 zIndex: typeof item.zIndex === 'number' && Number.isFinite(item.zIndex) ? item.zIndex : 50,
                 pointerEvents: isWidthSufficient ? 'auto' : 'none',
                 opacity: isWidthSufficient ? 1 : 0,

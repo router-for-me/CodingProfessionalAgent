@@ -775,9 +775,9 @@ describe('bundledPluginContract baseline', () => {
         const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
         expect(manifest.id).toBe('cpa.core.ask')
         expect(manifest.entries).toBeDefined()
+        expect(manifest.entries.main).toBe('./main/index.ts')
         expect(manifest.entries.renderer).toBe('./renderer/index.tsx')
         expect(manifest.entries.agent).toBe('./agent/index.ts')
-        expect(manifest.entries.main).toBeUndefined()
         expect(manifest.dependencies).toBeDefined()
         expect(manifest.capabilities).toBeDefined()
         expect(manifest.capabilities).toContain('ui.overlay')
@@ -786,23 +786,28 @@ describe('bundledPluginContract baseline', () => {
         expect(manifest.contributes['tool-factory']).toEqual(['ask'])
 
         // Check real files exist
+        const mainEntryPath = path.join(askDir, 'main', 'index.ts')
         const rendererEntryPath = path.join(askDir, 'renderer', 'index.tsx')
         const agentEntryPath = path.join(askDir, 'agent', 'index.ts')
+        expect(fs.existsSync(mainEntryPath)).toBe(true)
         expect(fs.existsSync(rendererEntryPath)).toBe(true)
         expect(fs.existsSync(agentEntryPath)).toBe(true)
 
         // Entries must use definePluginEntry and must NOT embed manifest
+        const mainCode = fs.readFileSync(mainEntryPath, 'utf8')
         const rendererCode = fs.readFileSync(rendererEntryPath, 'utf8')
         const agentCode = fs.readFileSync(agentEntryPath, 'utf8')
+        expect(mainCode).toContain('definePluginEntry')
         expect(rendererCode).toContain('definePluginEntry')
         expect(agentCode).toContain('definePluginEntry')
+        expect(mainCode).not.toMatch(/manifest:\s*\{/)
         expect(rendererCode).not.toMatch(/manifest:\s*\{/)
         expect(agentCode).not.toMatch(/manifest:\s*\{/)
 
-        // Ensure scanner reports renderer and agent as real entries
+        // Ensure scanner reports main, renderer, and agent as real entries
         const report = await scanBundledPluginContracts(repoRoot)
         const askRealEntries = report.realEntries.filter((e) => e.pluginId === 'cpa.core.ask')
-        expect(askRealEntries.map((e) => e.runtime).sort()).toEqual(['agent', 'renderer'])
+        expect(askRealEntries.map((e) => e.runtime).sort()).toEqual(['agent', 'main', 'renderer'])
 
         const askLegacy = report.legacyEntries.filter((e) => e.pluginId === 'cpa.core.ask')
         expect(askLegacy).toHaveLength(0)

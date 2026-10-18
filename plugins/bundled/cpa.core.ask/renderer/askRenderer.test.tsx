@@ -7,6 +7,7 @@ import { AskOverlay } from './AskOverlay.js'
 import {
     useAskStore,
     defaultAskController,
+    getAskCapabilityClient,
     __resetAskStoreForTests,
 } from '../shared/askStore.js'
 import type { AskRequest } from '../shared/types.js'
@@ -367,5 +368,180 @@ describe('cpa.core.ask renderer entry and AskOverlay', () => {
         fireEvent.keyDown(window, { key: 'Escape' })
 
         expect(cancelSpy).toHaveBeenCalledWith(testSessionId, 'tool-call-1')
+    })
+
+    it('hydrates remote ask requests on web renderer activation, emits floating:refresh, and forwards answers via capabilityClient', async () => {
+        let stateChangedListener: ((payload: any) => void) | undefined
+        const invokeMock = vi.fn(async (method: string) => {
+            if (method === 'ask:getRequests') {
+                return { [testSessionId]: sampleRequest }
+            }
+            return true
+        })
+        const subscribeMock = vi.fn((eventName: string, listener: (payload: any) => void) => {
+            if (eventName === 'ask:state-changed') {
+                stateChangedListener = listener
+            }
+            return () => {}
+        })
+        const emitSpy = vi.spyOn(eventBus, 'emit')
+
+        const context: any = {
+            manifest,
+            generation: 1,
+            capabilities: new Set(['ui.overlay']),
+            capabilityClient: {
+                has: () => true,
+                invoke: invokeMock,
+                subscribe: subscribeMock,
+            },
+            events: eventBus,
+            register: vi.fn(() => () => {}),
+            getService: vi.fn(),
+        }
+
+        await askRendererEntry.activate(context)
+        await act(async () => {
+            await Promise.resolve()
+        })
+
+        expect(invokeMock).toHaveBeenCalledWith('ask:getRequests', [])
+        expect(useAskStore.getState().getRequest(testSessionId)).toEqual(sampleRequest)
+        expect(emitSpy).toHaveBeenCalledWith('floating:refresh')
+
+        render(<AskOverlay sessionId={testSessionId} />)
+        expect(screen.getByTestId('ask-question-text')).toHaveTextContent(sampleRequest.question)
+
+        fireEvent.click(screen.getByTestId('ask-option-1'))
+        expect(invokeMock).toHaveBeenCalledWith('ask:submitAnswer', [
+            testSessionId,
+            'tool-call-1',
+            {
+                type: 'selected',
+                option: sampleRequest.options[0],
+                index: 0,
+            },
+        ])
+
+        // Simulate a new request arriving via ask:state-changed native event
+        const secondRequest: AskRequest = {
+            ...sampleRequest,
+            id: 'ask-req-2',
+            toolCallId: 'tool-call-2',
+            question: 'Remote question from host?',
+        }
+        act(() => {
+            stateChangedListener?.({
+                kind: 'ask:state-changed',
+                data: JSON.stringify({
+                    sessionId: testSessionId,
+                    request: secondRequest,
+                }),
+            })
+        })
+
+        expect(screen.getByTestId('ask-question-text')).toHaveTextContent('Remote question from host?')
+
+        // Simulate RPC failure on remote web client: overlay should restore request so user can retry
+        invokeMock.mockRejectedValueOnce(new Error('Network disconnected'))
+        fireEvent.click(screen.getByTestId('ask-option-1'))
+        await act(async () => {
+            await Promise.resolve()
+        })
+        expect(useAskStore.getState().getRequest(testSessionId)?.id).toBe('ask-req-2')
+        expect(screen.getByTestId('ask-question-text')).toHaveTextContent('Remote question from host?')
+
+        // Simulate RPC returning false (e.g. already answered on another client or expired): overlay must NOT resurrect
+        invokeMock.mockResolvedValueOnce(false)
+        fireEvent.click(screen.getByTestId('ask-option-1'))
+        await act(async () => {
+            await Promise.resolve()
+        })
+        expect(useAskStore.getState().getRequest(testSessionId)).toBeUndefined()
+
+        // Simulate host:reconnected event re-syncing active requests from main
+        invokeMock.mockResolvedValueOnce({ [testSessionId]: secondRequest })
+        await act(async () => {
+            await eventBus.emit('host:reconnected')
+            await Promise.resolve()
+        })
+        expect(useAskStore.getState().getRequest(testSessionId)?.id).toBe('ask-req-2')
+
+        // Simulate window focus wake when remote request has been cleared on main
+        invokeMock.mockResolvedValueOnce({})
+        await act(async () => {
+            window.dispatchEvent(new Event('focus'))
+            await Promise.resolve()
+        })
+        expect(useAskStore.getState().getRequest(testSessionId)).toBeUndefined()
+
+        // Verify staged generation rollback restores previous context's capabilityClient and sync eligibility
+        const stagedClient: any = {
+            has: () => true,
+            invoke: vi.fn().mockResolvedValue({}),
+            subscribe: vi.fn(() => () => {}),
+        }
+        const stagedContext: any = {
+            ...context,
+            generation: 2,
+            capabilityClient: stagedClient,
+        }
+        await askRendererEntry.activate(stagedContext)
+        expect(getAskCapabilityClient()).toBe(stagedClient)
+        await askRendererEntry.deactivate?.(stagedContext)
+        expect(getAskCapabilityClient()).toBe(context.capabilityClient)
+
+        // Original context can still sync remote requests after staged context rolled back
+        invokeMock.mockResolvedValueOnce({ [testSessionId]: secondRequest })
+        await act(async () => {
+            window.dispatchEvent(new Event('focus'))
+            await Promise.resolve()
+        })
+        expect(useAskStore.getState().getRequest(testSessionId)?.id).toBe('ask-req-2')
+
+        // Verify out-of-order concurrent ask:getRequests snapshots discard older response
+        let resolveSlowFetch!: (val: any) => void
+        let resolveFastFetch!: (val: any) => void
+        invokeMock
+            .mockImplementationOnce(
+                () =>
+                    new Promise((resolve) => {
+                        resolveSlowFetch = resolve
+                    }),
+            )
+            .mockImplementationOnce(
+                () =>
+                    new Promise((resolve) => {
+                        resolveFastFetch = resolve
+                    }),
+            )
+        window.dispatchEvent(new Event('focus'))
+        window.dispatchEvent(new Event('focus'))
+        await act(async () => {
+            resolveFastFetch({})
+            await Promise.resolve()
+        })
+        expect(useAskStore.getState().getRequest(testSessionId)).toBeUndefined()
+        await act(async () => {
+            resolveSlowFetch({ [testSessionId]: secondRequest })
+            await Promise.resolve()
+        })
+        expect(useAskStore.getState().getRequest(testSessionId)).toBeUndefined()
+
+        // Verify in-flight ask:getRequests resolving after context deactivation does not write stale state
+        let resolveLateFetch!: (val: any) => void
+        invokeMock.mockImplementationOnce(
+            () =>
+                new Promise((resolve) => {
+                    resolveLateFetch = resolve
+                }),
+        )
+        window.dispatchEvent(new Event('focus'))
+        await askRendererEntry.deactivate?.(context)
+        await act(async () => {
+            resolveLateFetch({ [testSessionId]: sampleRequest })
+            await Promise.resolve()
+        })
+        expect(useAskStore.getState().getRequest(testSessionId)).toBeUndefined()
     })
 })

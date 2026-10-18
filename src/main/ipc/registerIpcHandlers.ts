@@ -243,6 +243,7 @@ export function createServices(
 
   const webServerService = registry.getService<WebServerService>('webServerService')
   const capabilityBroker = options?.pluginRuntimeHost?.capabilityBroker
+  const activeWebSubscriptions = new Map<string, () => void>()
 
   const toWebCapabilityContext = (
     context?: RpcInvocationContext,
@@ -325,6 +326,92 @@ export function createServices(
       )
     }
 
+    if (capabilityBroker && method === 'capability:subscribe') {
+      const payload = args[0] as
+        | { handle?: unknown; eventName?: unknown; subscriptionId?: unknown; runtime?: unknown }
+        | undefined
+      const handle =
+        typeof payload?.handle === 'string'
+          ? payload.handle
+          : typeof args[0] === 'string'
+            ? args[0]
+            : ''
+      const eventName =
+        typeof payload?.eventName === 'string'
+          ? payload.eventName
+          : typeof args[1] === 'string'
+            ? args[1]
+            : ''
+      const subscriptionId =
+        typeof payload?.subscriptionId === 'string'
+          ? payload.subscriptionId
+          : typeof args[2] === 'string'
+            ? args[2]
+            : ''
+      const runtimeArg = payload?.runtime ?? args[3]
+      const runtime =
+        runtimeArg === 'main' || runtimeArg === 'renderer' || runtimeArg === 'agent'
+          ? runtimeArg
+          : context?.runtime
+      const clientId = context?.clientId ?? ''
+
+      if (!handle.trim() || !eventName.trim() || !subscriptionId.trim() || !clientId.trim()) {
+        throw new PluginCapabilityError('Invalid capability subscribe request payload')
+      }
+
+      const subKey = `${clientId}:${subscriptionId}`
+      const existingUnsub = activeWebSubscriptions.get(subKey)
+      if (existingUnsub) {
+        try {
+          existingUnsub()
+        } catch {
+          // Ignore cleanup error
+        }
+        activeWebSubscriptions.delete(subKey)
+      }
+
+      const unsub = capabilityBroker.subscribe(
+        handle as CapabilityHandle,
+        eventName,
+        (eventPayload) => {
+          webServerService.sendToClient(clientId, {
+            type: 'capability_event',
+            subscriptionId,
+            payload: eventPayload,
+          })
+        },
+        toWebCapabilityContext(context, runtime),
+      )
+      activeWebSubscriptions.set(subKey, unsub)
+      return { ok: true, value: true }
+    }
+
+    if (capabilityBroker && method === 'capability:unsubscribe') {
+      const payload = args[0] as { subscriptionId?: unknown } | string | undefined
+      const subscriptionId =
+        typeof payload === 'string'
+          ? payload
+          : typeof payload?.subscriptionId === 'string'
+            ? payload.subscriptionId
+            : ''
+      const clientId = context?.clientId ?? ''
+      if (!subscriptionId.trim() || !clientId.trim()) {
+        return { ok: true, value: false }
+      }
+      const subKey = `${clientId}:${subscriptionId}`
+      const unsub = activeWebSubscriptions.get(subKey)
+      if (unsub) {
+        activeWebSubscriptions.delete(subKey)
+        try {
+          unsub()
+        } catch {
+          // Ignore cleanup error
+        }
+        return { ok: true, value: true }
+      }
+      return { ok: true, value: false }
+    }
+
     return registry.dispatchRpc(method, args, context)
   })
 
@@ -338,6 +425,17 @@ export function createServices(
       }
     } catch {
       // Session run registry may be unavailable during early startup/shutdown.
+    }
+    const subPrefix = `${clientId}:`
+    for (const [subKey, unsub] of Array.from(activeWebSubscriptions.entries())) {
+      if (subKey.startsWith(subPrefix)) {
+        activeWebSubscriptions.delete(subKey)
+        try {
+          unsub()
+        } catch {
+          // Ignore cleanup error
+        }
+      }
     }
     const docKey = `web:${clientId}`
     options?.pluginActivationCoordinator?.clearDocumentIssuance?.(docKey)

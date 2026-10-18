@@ -332,7 +332,7 @@ export function TodoProgressBar({
                 <div
                     data-testid="todo-progress-popover"
                     className={cn(
-                        'absolute bottom-full mb-2 left-1/2 -translate-x-1/2 z-30 min-w-[260px] max-w-[420px]',
+                        'absolute bottom-full mb-2 left-1/2 -translate-x-1/2 z-30 min-w-[260px] max-w-[min(420px,calc(100vw-2rem))]',
                         'rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)]/95 p-3',
                         'shadow-2xl shadow-black/60 backdrop-blur-md',
                         'animate-in fade-in zoom-in-95 duration-150'
@@ -416,7 +416,7 @@ export function TodoProgressBar({
                     }
                 }}
                 className={cn(
-                    'inline-flex items-center gap-2 rounded-full border border-[var(--border-subtle)]',
+                    'inline-flex max-w-[min(var(--floating-anchor-width,calc(100vw-3rem)),calc(100vw-3rem))] items-center gap-2 whitespace-nowrap rounded-full border border-[var(--border-subtle)]',
                     'bg-[var(--bg-card)]/90 px-3.5 py-1 text-[13px] text-[var(--text-primary)]',
                     'shadow-lg backdrop-blur-md transition-all duration-150 cursor-pointer',
                     'hover:bg-[var(--bg-sidebar-hover)] hover:border-[var(--border-medium)]',
@@ -427,34 +427,34 @@ export function TodoProgressBar({
                     allCompleted ? (
                         <CheckCircle2
                             data-testid="todo-pill-icon-completed"
-                            className="size-3.5 text-emerald-400"
+                            className="size-3.5 shrink-0 text-emerald-400"
                         />
                     ) : isRunning ? (
                         <Loader2
                             data-testid="todo-pill-icon-running"
-                            className="size-3.5 animate-spin-steps-24 text-sky-400"
+                            className="size-3.5 shrink-0 animate-spin-steps-24 text-sky-400"
                         />
                     ) : null
                 ) : (
                     <FileEdit
                         data-testid="todo-pill-icon-file-edit"
-                        className="size-3.5 text-sky-400"
+                        className="size-3.5 shrink-0 text-sky-400"
                     />
                 )}
 
                 {hasTodos ? (
-                    <span data-testid="todo-pill-text-step" className="font-medium">
+                    <span data-testid="todo-pill-text-step" className="shrink-0 whitespace-nowrap font-medium">
                         {stepText}
                     </span>
                 ) : null}
 
                 {hasTodos && hasFileChanges ? (
-                    <span className="text-[var(--text-muted)] select-none">·</span>
+                    <span className="shrink-0 text-[var(--text-muted)] select-none">·</span>
                 ) : null}
 
                 {hasFileChanges ? (
-                    <span data-testid="todo-pill-text-changes" className="flex items-center gap-1.5">
-                        <span className="text-[var(--text-secondary)]">{filesChangedText}</span>
+                    <span data-testid="todo-pill-text-changes" className="flex min-w-0 items-center gap-1.5 whitespace-nowrap">
+                        <span className="truncate text-[var(--text-secondary)]">{filesChangedText}</span>
                         <DiffBadge
                             additions={fileChanges.totalAdditions}
                             deletions={fileChanges.totalDeletions}

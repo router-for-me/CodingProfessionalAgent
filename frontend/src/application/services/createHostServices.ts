@@ -342,11 +342,14 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
             const bridge = getHostBridge()
             if (typeof bridge?.SessionSetMeta === 'function') {
                 const current = useSessionStore.getState().sessions.find((s) => s.id === sessionId)
+                const acknowledge = captureSessionMetadataAcknowledgement(sessionId)
                 if (current) {
                     const merged = { ...current, ...patch }
                     const unread = merged.unread === 'error' ? 'error' : merged.unread === true
-                    const acknowledge = captureSessionMetadataAcknowledgement(sessionId)
                     await bridge.SessionSetMeta({ ...merged, unread }).then(acknowledge).catch(() => {})
+                } else {
+                    const unread = patch.unread === 'error' ? 'error' : patch.unread === true
+                    await bridge.SessionSetMeta({ id: sessionId, ...patch, unread }).then(acknowledge).catch(() => {})
                 }
             }
         },

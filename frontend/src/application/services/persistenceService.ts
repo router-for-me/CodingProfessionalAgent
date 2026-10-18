@@ -190,9 +190,11 @@ const sessionEntriesRevisions = new Map<string, string>()
 const sessionBaselineLengths = new Map<string, number>()
 const historyEditGenerations = new Map<string, number>()
 const metadataEditGenerations = new Map<string, number>()
+const titleEditGenerations = new Map<string, number>()
 const agentEditGenerations = new Map<string, number>()
 const acknowledgedHistoryGenerations = new Map<string, number>()
 const acknowledgedMetadataGenerations = new Map<string, number>()
+const acknowledgedTitleGenerations = new Map<string, number>()
 const acknowledgedAgentGenerations = new Map<string, number>()
 const pendingEntryRemovals = new Map<string, Map<string, number>>()
 let entryRemovalSequence = 0
@@ -205,6 +207,8 @@ const wakeBarriers = new Map<string, Promise<void>>()
 const failedWakeSessions = new Set<string>()
 const sessionWriteEpochs = new Map<string, number>()
 const persistingSessionIds = new Set<string>()
+const preRunFlushAllowed = new Map<string, { historyGen: number; metaGen: number; titleGen: number }>()
+const deferredRemoteSessionMetadata = new Map<string, { session: Session; titleGen: number }>()
 const historyConflicts = new Map<string, { payload: SessionFilePayload; toastId: string }>()
 const historyRecoveries = new Map<string, Promise<void>>()
 
@@ -220,12 +224,63 @@ export function hasPendingSessionMetadata(sessionId: string): boolean {
   return hasPendingEdit(metadataEditGenerations, acknowledgedMetadataGenerations, sessionId)
 }
 
+function hasPendingSessionTitle(sessionId: string): boolean {
+  return hasPendingEdit(titleEditGenerations, acknowledgedTitleGenerations, sessionId)
+}
+
 export function captureSessionMetadataAcknowledgement(sessionId: string): () => void {
   const generation = metadataEditGenerations.get(sessionId) ?? 0
+  const titleGeneration = titleEditGenerations.get(sessionId) ?? 0
   return () => {
     if (deletedRemoteSessionIds.has(sessionId)) return
     acknowledgedMetadataGenerations.set(sessionId,
       Math.max(acknowledgedMetadataGenerations.get(sessionId) ?? 0, generation))
+    acknowledgedTitleGenerations.set(sessionId,
+      Math.max(acknowledgedTitleGenerations.get(sessionId) ?? 0, titleGeneration))
+  }
+}
+
+export function allowPreRunSessionFlush(sessionId: string): void {
+  if (!sessionId || deletedRemoteSessionIds.has(sessionId)) return
+  preRunFlushAllowed.set(sessionId, {
+    historyGen: historyEditGenerations.get(sessionId) ?? 0,
+    metaGen: metadataEditGenerations.get(sessionId) ?? 0,
+    titleGen: titleEditGenerations.get(sessionId) ?? 0,
+  })
+}
+
+export function recordDeferredRemoteSessionMetadata(session: Session): void {
+  if (!session || !session.id || deletedRemoteSessionIds.has(session.id)) return
+  if (!hasPendingSessionTitle(session.id) && typeof session.title === 'string' && session.title) {
+    deferredRemoteSessionMetadata.delete(session.id)
+    withSuppressedPersistence(() => {
+      useSessionStore.getState().renameSession(session.id, session.title)
+    })
+    return
+  }
+  const allowed = preRunFlushAllowed.get(session.id)
+  const currentTitleGen = titleEditGenerations.get(session.id) ?? 0
+  if (allowed && currentTitleGen <= allowed.titleGen) {
+    deferredRemoteSessionMetadata.set(session.id, {
+      session,
+      titleGen: currentTitleGen,
+    })
+  }
+}
+
+function applyDeferredRemoteSessionMetadataIfReady(sessionId: string): void {
+  if (!sessionId) return
+  const deferred = deferredRemoteSessionMetadata.get(sessionId)
+  if (!deferred) return
+  if ((titleEditGenerations.get(sessionId) ?? 0) !== deferred.titleGen) {
+    deferredRemoteSessionMetadata.delete(sessionId)
+    return
+  }
+  if (!hasPendingSessionTitle(sessionId) && typeof deferred.session.title === 'string' && deferred.session.title) {
+    deferredRemoteSessionMetadata.delete(sessionId)
+    withSuppressedPersistence(() => {
+      useSessionStore.getState().renameSession(sessionId, deferred.session.title)
+    })
   }
 }
 
@@ -271,8 +326,10 @@ export function markRemoteSessionDeleted(sessionId: string): void {
   sessionBaselineLengths.delete(sessionId)
   wakeBarriers.delete(sessionId)
   failedWakeSessions.delete(sessionId)
-  for (const map of [historyEditGenerations, metadataEditGenerations, agentEditGenerations,
-    acknowledgedHistoryGenerations, acknowledgedMetadataGenerations, acknowledgedAgentGenerations]) map.delete(sessionId)
+  preRunFlushAllowed.delete(sessionId)
+  deferredRemoteSessionMetadata.delete(sessionId)
+  for (const map of [historyEditGenerations, metadataEditGenerations, titleEditGenerations, agentEditGenerations,
+    acknowledgedHistoryGenerations, acknowledgedMetadataGenerations, acknowledgedTitleGenerations, acknowledgedAgentGenerations]) map.delete(sessionId)
 }
 
 export function invalidateSessionDiskCache(sessionId: string): void {
@@ -1921,6 +1978,7 @@ async function writeSessionData(
   expectedEntriesRevision = sessionEntriesRevisions.get(sessionId),
 ): Promise<void> {
   const metadataGeneration = metadataEditGenerations.get(sessionId) ?? 0
+  const titleGeneration = titleEditGenerations.get(sessionId) ?? 0
   const agentGeneration = agentEditGenerations.get(sessionId) ?? 0
   const sanitized =
     sanitizeConversationEntries({ [sessionId]: entries })[sessionId] ?? []
@@ -2032,16 +2090,32 @@ async function writeSessionData(
       throw error
     }
     if (deletedRemoteSessionIds.has(sessionId)) return
+    const allowedPreRun = preRunFlushAllowed.get(sessionId)
+    const completedPreRunFlush =
+      allowedPreRun !== undefined &&
+      historyGeneration >= allowedPreRun.historyGen &&
+      metadataGeneration >= allowedPreRun.metaGen
+    if (completedPreRunFlush) {
+      preRunFlushAllowed.delete(sessionId)
+    }
     sessionEntriesRevisions.set(sessionId, revision)
     sessionBaselineLengths.set(sessionId, sanitized.length)
     acknowledgedHistoryGenerations.set(sessionId, historyGeneration)
     acknowledgedMetadataGenerations.set(sessionId,
       Math.max(acknowledgedMetadataGenerations.get(sessionId) ?? 0, metadataGeneration))
+    acknowledgedTitleGenerations.set(sessionId,
+      Math.max(acknowledgedTitleGenerations.get(sessionId) ?? 0, titleGeneration))
     acknowledgedAgentGenerations.set(sessionId, agentGeneration)
     sessionReadEpochs.set(sessionId, (sessionReadEpochs.get(sessionId) ?? 0) + 1)
     const removed = pendingEntryRemovals.get(sessionId)
     for (const [id, sequence] of removals) {
       if (removed?.get(id) === sequence) removed.delete(id)
+    }
+    if (completedPreRunFlush) {
+      applyDeferredRemoteSessionMetadataIfReady(sessionId)
+    } else if (allowedPreRun === undefined) {
+      applyDeferredRemoteSessionMetadataIfReady(sessionId)
+      deferredRemoteSessionMetadata.delete(sessionId)
     }
     return
   }
@@ -2049,6 +2123,26 @@ async function writeSessionData(
   if (typeof localStorage !== 'undefined') {
     try {
       localStorage.setItem(`cpa-session-${sessionId}`, JSON.stringify(payload))
+      const allowedPreRun = preRunFlushAllowed.get(sessionId)
+      const completedPreRunFlush =
+        allowedPreRun !== undefined &&
+        historyGeneration >= allowedPreRun.historyGen &&
+        metadataGeneration >= allowedPreRun.metaGen
+      if (completedPreRunFlush) {
+        preRunFlushAllowed.delete(sessionId)
+      }
+      acknowledgedHistoryGenerations.set(sessionId, historyGeneration)
+      acknowledgedMetadataGenerations.set(sessionId,
+        Math.max(acknowledgedMetadataGenerations.get(sessionId) ?? 0, metadataGeneration))
+      acknowledgedTitleGenerations.set(sessionId,
+        Math.max(acknowledgedTitleGenerations.get(sessionId) ?? 0, titleGeneration))
+      acknowledgedAgentGenerations.set(sessionId, agentGeneration)
+      if (completedPreRunFlush) {
+        applyDeferredRemoteSessionMetadataIfReady(sessionId)
+      } else if (allowedPreRun === undefined) {
+        applyDeferredRemoteSessionMetadataIfReady(sessionId)
+        deferredRemoteSessionMetadata.delete(sessionId)
+      }
     } catch {
       // Ignore
     }
@@ -2747,7 +2841,18 @@ export async function savePersistedState(
 
   const isRemoteActive = (id: string) => {
     const run = useSessionRunStore.getState().activeRuns[id]
-    return Boolean(run && run.status !== 'idle' && isBrowserEnvironment())
+    if (!run || run.status === 'idle' || !isBrowserEnvironment()) {
+      return false
+    }
+    const allowed = preRunFlushAllowed.get(id)
+    if (
+      allowed !== undefined &&
+      (historyEditGenerations.get(id) ?? 0) <= allowed.historyGen &&
+      (metadataEditGenerations.get(id) ?? 0) <= allowed.metaGen
+    ) {
+      return false
+    }
+    return true
   }
 
   const errors: unknown[] = []
@@ -2757,6 +2862,7 @@ export async function savePersistedState(
   const serializedOptions = serializedSessionOptions.get(state)
   for (const sessionId of Object.keys(state.messagesBySession)) {
     if (options?.sessionIds && !options.sessionIds.has(sessionId)) continue
+    if (isRemoteActive(sessionId)) continue
     sessionSnapshots.set(sessionId, {
       entries: sanitizeConversationEntries({ [sessionId]: state.messagesBySession[sessionId] })[sessionId] ?? [],
       options: serializedOptions?.get(sessionId) ?? {
@@ -2777,7 +2883,6 @@ export async function savePersistedState(
       // 1. Save only changed in-memory session files when a scope is provided.
       await Promise.all(
         Array.from(activeMemorySessionIds)
-          .filter((sessionId) => !isRemoteActive(sessionId))
           .map((sessionId) =>
             saveSessionData(
               sessionId,
@@ -2998,7 +3103,12 @@ async function runPersistWrite(): Promise<void> {
       sessionIds: sessionIdsAtStart,
     })
     for (const sessionId of sessionIdsAtStart) {
-      if (isBrowserEnvironment() && isSessionRunning(sessionId) && !deletedRemoteSessionIds.has(sessionId)) {
+      if (
+        isBrowserEnvironment() &&
+        isSessionRunning(sessionId) &&
+        !deletedRemoteSessionIds.has(sessionId) &&
+        (hasPendingSessionMetadata(sessionId) || hasPendingHistoryEdit(sessionId))
+      ) {
         dirtySessionIds.add(sessionId)
       }
     }
@@ -3348,9 +3458,14 @@ export function bindPersistence(options?: BindPersistenceOptions): void {
       const currentIds = new Set(state.sessions.map((s) => s.id))
       if (!suppressed) {
         for (const session of state.sessions) {
-          if (previousSessionsById.get(session.id) !== session) {
+          const prevSession = previousSessionsById.get(session.id)
+          if (prevSession !== session) {
             dirtySessionIds.add(session.id)
             advanceEdit(metadataEditGenerations, session.id)
+            if (!prevSession || prevSession.title !== session.title) {
+              advanceEdit(titleEditGenerations, session.id)
+              deferredRemoteSessionMetadata.delete(session.id)
+            }
           }
         }
         for (const id of previousSessionIds) {
@@ -3573,9 +3688,11 @@ export function __resetPersistenceForTests(): void {
   sessionBaselineLengths.clear()
   historyEditGenerations.clear()
   metadataEditGenerations.clear()
+  titleEditGenerations.clear()
   agentEditGenerations.clear()
   acknowledgedHistoryGenerations.clear()
   acknowledgedMetadataGenerations.clear()
+  acknowledgedTitleGenerations.clear()
   acknowledgedAgentGenerations.clear()
   pendingEntryRemovals.clear()
   entryRemovalSequence = 0
@@ -3586,6 +3703,8 @@ export function __resetPersistenceForTests(): void {
   failedWakeSessions.clear()
   sessionWriteEpochs.clear()
   persistingSessionIds.clear()
+  preRunFlushAllowed.clear()
+  deferredRemoteSessionMetadata.clear()
   historyConflicts.clear()
   historyRecoveries.clear()
   deletedRemoteSessionIds.clear()

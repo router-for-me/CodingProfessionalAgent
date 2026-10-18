@@ -1507,7 +1507,7 @@ const BaseComposer = memo(function BaseComposer({
                 className,
             )}
             style={{
-                paddingRight: 'var(--pinned-summary-shift, 0px)',
+                paddingRight: 'calc(1.5rem + var(--pinned-summary-shift, 0px))',
             }}
         >
             <div

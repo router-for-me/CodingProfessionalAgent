@@ -469,6 +469,7 @@ export function registerCapabilityTransport(options: RegisterCapabilityTransport
                 'profiling.*',
                 'webserver.*',
                 'gateway.discover',
+                'ui.*',
             ]),
         ).filter((c) => isValidCapabilityPattern(c))
 

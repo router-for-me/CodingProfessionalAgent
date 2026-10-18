@@ -1,5 +1,9 @@
 import { adaptPluginToolToAgentTool, definePluginEntry } from '@cpa/plugin-sdk'
-import type { PluginContext, ToolFactoryContribution } from '@cpa/plugin-api'
+import {
+    SessionServiceToken,
+    type PluginContext,
+    type ToolFactoryContribution,
+} from '@cpa/plugin-api'
 import {
     createSetSessionTitleTool,
     SET_SESSION_TITLE_TOOL_NAME,
@@ -22,6 +26,17 @@ export {
     createSessionSearchTool,
     createSessionCreateTool,
     resolveSessionScheduleId,
+}
+
+function resolveSessionsService(ctx: any, context: PluginContext) {
+    if (ctx?.services?.sessions) {
+        return ctx.services.sessions
+    }
+    try {
+        return context.getService?.(SessionServiceToken)
+    } catch {
+        return undefined
+    }
 }
 
 export const sessionManagerAgentEntry = definePluginEntry({
@@ -47,12 +62,16 @@ export const sessionManagerAgentEntry = definePluginEntry({
                 riskLevel: 'session',
                 requiresApproval: false,
                 approvalCategory: 'session-metadata',
-                create: (ctx: any) =>
-                    createSetSessionTitleTool({
+                create: (ctx: any) => {
+                    const sessionsService = resolveSessionsService(ctx, context)
+                    return createSetSessionTitleTool({
                         onRename: ctx?.onRename,
-                        services: ctx?.services,
+                        services: sessionsService
+                            ? { ...(ctx?.services ?? {}), sessions: sessionsService }
+                            : ctx?.services,
                         capabilityClient: context.capabilityClient,
-                    }),
+                    })
+                },
             },
         })
 

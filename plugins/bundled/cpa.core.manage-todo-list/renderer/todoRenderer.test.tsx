@@ -480,4 +480,32 @@ describe('cpa.core.manage-todo-list renderer entry and TodoProgressBar', () => {
         expect(screen.getByTestId('popover-file-item-src/entry.ts')).toBeInTheDocument()
         expect(screen.getByText('entry.ts')).toBeInTheDocument()
     })
+
+    it('keeps todo progress pill and step/file-change labels single-line with nowrap and shrink-0 classes on narrow mobile screens', () => {
+        useTodoListStore.getState().setTodos('sess-mobile-pill', [
+            { id: 1, title: 'Step 1', description: '', status: 'completed' },
+            { id: 2, title: 'Step 2', description: '', status: 'in-progress' },
+        ])
+
+        const fileChanges: SessionFileChanges = {
+            files: {
+                'src/a.ts': { path: 'src/a.ts', additions: 1606, deletions: 126 },
+            },
+            totalFilesChanged: 3,
+            totalAdditions: 1606,
+            totalDeletions: 126,
+        }
+
+        render(<TodoProgressBar sessionId="sess-mobile-pill" fileChanges={fileChanges} isRunning={true} />)
+
+        const pill = screen.getByTestId('todo-progress-pill')
+        const stepSpan = screen.getByTestId('todo-pill-text-step')
+        const changesSpan = screen.getByTestId('todo-pill-text-changes')
+
+        expect(pill.className).toContain('whitespace-nowrap')
+        expect(stepSpan.className).toContain('whitespace-nowrap')
+        expect(stepSpan.className).toContain('shrink-0')
+        expect(changesSpan.className).toContain('whitespace-nowrap')
+        expect(changesSpan.className).toContain('min-w-0')
+    })
 })

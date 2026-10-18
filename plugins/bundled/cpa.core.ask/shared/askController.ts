@@ -1,4 +1,108 @@
+import type { PluginCapabilityClient } from '@cpa/plugin-api'
 import type { AskDecision } from './types.js'
+
+let askCapabilityClient: PluginCapabilityClient | undefined
+const contextCapabilityClients = new Map<object, PluginCapabilityClient | undefined>()
+const remotelyClearedRequestIds = new Set<string>()
+
+export function setAskCapabilityClient(client: PluginCapabilityClient | undefined): void {
+    askCapabilityClient = client
+    if (!client && contextCapabilityClients.size === 0) {
+        remotelyClearedRequestIds.clear()
+    }
+}
+
+export function registerAskContextClient(
+    context: object | undefined,
+    client: PluginCapabilityClient | undefined,
+): void {
+    if (context && typeof context === 'object') {
+        contextCapabilityClients.delete(context)
+        contextCapabilityClients.set(context, client)
+    }
+    askCapabilityClient = client
+}
+
+export function unregisterAskContextClient(context?: object): void {
+    if (!context || typeof context !== 'object') {
+        contextCapabilityClients.clear()
+        setAskCapabilityClient(undefined)
+        return
+    }
+    contextCapabilityClients.delete(context)
+    const remaining = Array.from(contextCapabilityClients.values())
+    let restored: PluginCapabilityClient | undefined
+    for (let i = remaining.length - 1; i >= 0; i -= 1) {
+        if (remaining[i] !== undefined) {
+            restored = remaining[i]
+            break
+        }
+    }
+    setAskCapabilityClient(restored)
+}
+
+export function getAskCapabilityClient(): PluginCapabilityClient | undefined {
+    return askCapabilityClient
+}
+
+export function markAskRequestRemotelyCleared(requestId?: string): void {
+    if (!requestId) return
+    remotelyClearedRequestIds.add(requestId)
+    if (remotelyClearedRequestIds.size > 256) {
+        const oldest = remotelyClearedRequestIds.values().next().value
+        if (oldest) remotelyClearedRequestIds.delete(oldest)
+    }
+}
+
+export function isAskRequestRemotelyCleared(requestId: string): boolean {
+    return remotelyClearedRequestIds.has(requestId)
+}
+
+export async function invokeAskRpc<T = unknown>(
+    method: string,
+    args: unknown[] = [],
+    clientOverride?: PluginCapabilityClient,
+): Promise<T | undefined> {
+    const client = clientOverride ?? askCapabilityClient
+    if (!client || typeof client.invoke !== 'function') {
+        return undefined
+    }
+    try {
+        return await client.invoke<T>(method, args)
+    } catch {
+        return undefined
+    }
+}
+
+export async function invokeAskRpcStrict<T = unknown>(
+    method: string,
+    args: unknown[] = [],
+    clientOverride?: PluginCapabilityClient,
+): Promise<{ ok: true; value: T } | { ok: false; transportError: boolean }> {
+    const client = clientOverride ?? askCapabilityClient
+    if (!client || typeof client.invoke !== 'function') {
+        return { ok: false, transportError: false }
+    }
+    try {
+        const value = await client.invoke<T>(method, args)
+        return { ok: true, value }
+    } catch {
+        return { ok: false, transportError: true }
+    }
+}
+
+export function parseAskEventPayload<T = Record<string, unknown>>(raw: unknown): T | null {
+    if (!raw || typeof raw !== 'object') return null
+    const record = raw as Record<string, unknown>
+    if (typeof record.data === 'string') {
+        try {
+            return JSON.parse(record.data) as T
+        } catch {
+            return null
+        }
+    }
+    return raw as T
+}
 
 type Waiter = {
     sessionId: string
@@ -67,6 +171,15 @@ export class AskController {
         const waiter = this.waiters.get(sessionId)?.get(toolCallId)
         if (!waiter) return false
         waiter.resolve(decision)
+        return true
+    }
+
+    hasWaiter(sessionId: string, toolCallId?: string): boolean {
+        const sessionMap = this.waiters.get(sessionId)
+        if (!sessionMap || sessionMap.size === 0) return false
+        if (toolCallId) {
+            return sessionMap.has(toolCallId)
+        }
         return true
     }
 

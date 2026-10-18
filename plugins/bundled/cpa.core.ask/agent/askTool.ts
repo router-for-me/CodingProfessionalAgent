@@ -1,5 +1,14 @@
-import type { AgentTool, ToolExecutionContext, ToolResult } from '@cpa/plugin-api'
-import { defaultAskController, useAskStore } from '../shared/askStore.js'
+import type {
+    AgentTool,
+    PluginCapabilityClient,
+    ToolExecutionContext,
+    ToolResult,
+} from '@cpa/plugin-api'
+import {
+    defaultAskController,
+    invokeAskRpc,
+    useAskStore,
+} from '../shared/askStore.js'
 import type { AskOption, AskRequest } from '../shared/types.js'
 
 export const ASK_TOOL_NAME = 'ask'
@@ -114,7 +123,11 @@ function resolveSessionId(context: unknown): string {
     return 'default'
 }
 
-export function createAskTool(): AgentTool {
+export interface CreateAskToolOptions {
+    capabilityClient?: PluginCapabilityClient
+}
+
+export function createAskTool(toolOptions?: CreateAskToolOptions): AgentTool {
     return {
         name: ASK_TOOL_NAME,
         label: ASK_TOOL_NAME,
@@ -183,6 +196,11 @@ export function createAskTool(): AgentTool {
 
             // Register active request in store so UI renders overlay
             useAskStore.getState().setRequest(sessionId, request)
+            const effectiveCapClient =
+                toolOptions?.capabilityClient ??
+                ((toolContext as unknown as { capabilityClient?: PluginCapabilityClient })
+                    ?.capabilityClient)
+            void invokeAskRpc('ask:setRequest', [sessionId, request], effectiveCapClient)
 
             const signal = toolContext?.signal
 
@@ -250,6 +268,7 @@ export function createAskTool(): AgentTool {
                 }
             } finally {
                 useAskStore.getState().clearRequest(sessionId, request.id)
+                void invokeAskRpc('ask:clearRequest', [sessionId, request.id], effectiveCapClient)
             }
         },
     }

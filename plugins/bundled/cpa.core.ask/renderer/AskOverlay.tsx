@@ -10,6 +10,8 @@ import {
 import {
     useAskStore,
     defaultAskController,
+    invokeAskRpcStrict,
+    isAskRequestRemotelyCleared,
 } from '../shared/askStore.js'
 import type { AskOption, AskRequest } from '../shared/types.js'
 
@@ -69,7 +71,37 @@ export function AskOverlay({ sessionId: propSessionId, className }: AskOverlayPr
 
     const cancelCountdown = useCallback(() => {
         if (!request || !effectiveSessionId) return
-        useAskStore.getState().cancelCountdown(effectiveSessionId, request.toolCallId)
+        if (request.countdownDeadline === undefined) return
+        const activeRequest = request
+        const previousDeadline = activeRequest.countdownDeadline
+        const handledLocally = defaultAskController.cancelCountdown(
+            effectiveSessionId,
+            activeRequest.toolCallId,
+        )
+        useAskStore.getState().cancelCountdown(effectiveSessionId, activeRequest.toolCallId)
+        void invokeAskRpcStrict('ask:cancelCountdown', [
+            effectiveSessionId,
+            activeRequest.toolCallId,
+        ]).then((res) => {
+            if (
+                !handledLocally &&
+                !res.ok &&
+                res.transportError &&
+                !isAskRequestRemotelyCleared(activeRequest.id)
+            ) {
+                const current = useAskStore.getState().getRequest(effectiveSessionId)
+                if (
+                    current &&
+                    current.id === activeRequest.id &&
+                    current.countdownDeadline === undefined
+                ) {
+                    useAskStore.getState().setRequest(effectiveSessionId, {
+                        ...current,
+                        countdownDeadline: previousDeadline,
+                    })
+                }
+            }
+        })
     }, [request, effectiveSessionId])
 
     const activateCustom = () => {
@@ -114,12 +146,34 @@ export function AskOverlay({ sessionId: propSessionId, className }: AskOverlayPr
     const handleSelectOption = useCallback(
         (option: AskOption, index: number) => {
             if (!request || !effectiveSessionId) return
-            defaultAskController.submitAnswer(effectiveSessionId, request.toolCallId, {
-                type: 'selected',
+            const activeRequest = request
+            const decision = {
+                type: 'selected' as const,
                 option,
                 index,
+            }
+            const handledLocally = defaultAskController.submitAnswer(
+                effectiveSessionId,
+                activeRequest.toolCallId,
+                decision,
+            )
+            useAskStore.getState().clearRequest(effectiveSessionId, activeRequest.id)
+            void invokeAskRpcStrict('ask:submitAnswer', [
+                effectiveSessionId,
+                activeRequest.toolCallId,
+                decision,
+            ]).then((res) => {
+                if (
+                    !handledLocally &&
+                    !res.ok &&
+                    res.transportError &&
+                    !isAskRequestRemotelyCleared(activeRequest.id)
+                ) {
+                    if (!useAskStore.getState().getRequest(effectiveSessionId)) {
+                        useAskStore.getState().setRequest(effectiveSessionId, activeRequest)
+                    }
+                }
             })
-            useAskStore.getState().setRequest(effectiveSessionId, null)
         },
         [request, effectiveSessionId]
     )
@@ -130,11 +184,33 @@ export function AskOverlay({ sessionId: propSessionId, className }: AskOverlayPr
             if (!request || !effectiveSessionId) return
             const trimmed = customText.trim()
             if (!trimmed) return
-            defaultAskController.submitAnswer(effectiveSessionId, request.toolCallId, {
-                type: 'custom',
+            const activeRequest = request
+            const decision = {
+                type: 'custom' as const,
                 text: trimmed,
+            }
+            const handledLocally = defaultAskController.submitAnswer(
+                effectiveSessionId,
+                activeRequest.toolCallId,
+                decision,
+            )
+            useAskStore.getState().clearRequest(effectiveSessionId, activeRequest.id)
+            void invokeAskRpcStrict('ask:submitAnswer', [
+                effectiveSessionId,
+                activeRequest.toolCallId,
+                decision,
+            ]).then((res) => {
+                if (
+                    !handledLocally &&
+                    !res.ok &&
+                    res.transportError &&
+                    !isAskRequestRemotelyCleared(activeRequest.id)
+                ) {
+                    if (!useAskStore.getState().getRequest(effectiveSessionId)) {
+                        useAskStore.getState().setRequest(effectiveSessionId, activeRequest)
+                    }
+                }
             })
-            useAskStore.getState().setRequest(effectiveSessionId, null)
         },
         [request, effectiveSessionId, customText]
     )
@@ -143,18 +219,59 @@ export function AskOverlay({ sessionId: propSessionId, className }: AskOverlayPr
         (e: React.MouseEvent) => {
             e.stopPropagation()
             if (!request || !effectiveSessionId) return
-            defaultAskController.submitAnswer(effectiveSessionId, request.toolCallId, {
-                type: 'skipped',
+            const activeRequest = request
+            const decision = {
+                type: 'skipped' as const,
+            }
+            const handledLocally = defaultAskController.submitAnswer(
+                effectiveSessionId,
+                activeRequest.toolCallId,
+                decision,
+            )
+            useAskStore.getState().clearRequest(effectiveSessionId, activeRequest.id)
+            void invokeAskRpcStrict('ask:submitAnswer', [
+                effectiveSessionId,
+                activeRequest.toolCallId,
+                decision,
+            ]).then((res) => {
+                if (
+                    !handledLocally &&
+                    !res.ok &&
+                    res.transportError &&
+                    !isAskRequestRemotelyCleared(activeRequest.id)
+                ) {
+                    if (!useAskStore.getState().getRequest(effectiveSessionId)) {
+                        useAskStore.getState().setRequest(effectiveSessionId, activeRequest)
+                    }
+                }
             })
-            useAskStore.getState().setRequest(effectiveSessionId, null)
         },
         [request, effectiveSessionId]
     )
 
     const handleCancel = useCallback(() => {
         if (!request || !effectiveSessionId) return
-        defaultAskController.cancel(effectiveSessionId, request.toolCallId)
-        useAskStore.getState().setRequest(effectiveSessionId, null)
+        const activeRequest = request
+        const handledLocally = defaultAskController.cancel(
+            effectiveSessionId,
+            activeRequest.toolCallId,
+        )
+        useAskStore.getState().clearRequest(effectiveSessionId, activeRequest.id)
+        void invokeAskRpcStrict('ask:cancel', [
+            effectiveSessionId,
+            activeRequest.toolCallId,
+        ]).then((res) => {
+            if (
+                !handledLocally &&
+                !res.ok &&
+                res.transportError &&
+                !isAskRequestRemotelyCleared(activeRequest.id)
+            ) {
+                if (!useAskStore.getState().getRequest(effectiveSessionId)) {
+                    useAskStore.getState().setRequest(effectiveSessionId, activeRequest)
+                }
+            }
+        })
     }, [request, effectiveSessionId])
 
     // Keyboard shortcuts: 1-9 to select options when not typing in input
@@ -211,7 +328,7 @@ export function AskOverlay({ sessionId: propSessionId, className }: AskOverlayPr
             data-testid="ask-overlay-container"
             onKeyDownCapture={cancelCountdown}
             className={cn(
-                'w-[min(768px,calc(100vw-3rem))] max-w-3xl select-none',
+                'w-[min(768px,var(--floating-anchor-width,calc(100vw-3rem)))] max-w-3xl max-h-[calc(100dvh-6rem)] overflow-y-auto select-none',
                 'rounded-[var(--radius-composer,20px)] border border-[var(--border-composer,#333333)] bg-[#1e1e1e] p-4 sm:p-5',
                 'shadow-[0_12px_40px_rgba(0,0,0,0.45)] backdrop-blur-md',
                 'transition-all duration-200 animate-in fade-in zoom-in-95',

@@ -399,6 +399,12 @@ export class RendererPluginRuntimeHost {
     private cachedSummaries: PluginSummary[] | null = null
     private readonly loaders: Record<string, BundledEntryLoader>
     private readonly staticDefinitions: Record<string, PluginEntryDefinition>
+    private readonly activeSubscriptions = new Set<{
+        pluginId: string
+        generation: number
+        rebind: (newHandle: CapabilityHandle) => void
+        dispose: () => void
+    }>()
     private peerHost?: PeerPluginRuntimeHost
     private peerUnsubscribe?: () => void
 
@@ -466,28 +472,94 @@ export class RendererPluginRuntimeHost {
                         }
                     }
 
+                    // Bind the resolved handle to this exact generation so clearHandles(generation) revokes it without fallback
+                    let byGen = this.pluginHandles.get(manifest.id)
+                    if (!byGen) {
+                        byGen = new Map()
+                        this.pluginHandles.set(manifest.id, byGen)
+                    }
+                    if (!byGen.has(generation)) {
+                        byGen.set(generation, handle)
+                    }
+
+                    const getStrictGenerationHandle = (): CapabilityHandle | undefined =>
+                        this.pluginHandles.get(manifest.id)?.get(generation)
+
                     return new RendererCapabilityClient({
                         handle,
                         manifest,
                         transport: (h, method, args) => {
+                            const latestHandle = getStrictGenerationHandle()
+                            if (!latestHandle) {
+                                return Promise.reject(
+                                    new PluginCapabilityError(
+                                        `Capability handle revoked for plugin "${manifest.id}" in runtime "${entryKind}"`,
+                                        { pluginId: manifest.id },
+                                    ),
+                                )
+                            }
                             if (this.customTransport) {
-                                return this.customTransport(h, method, args)
+                                return this.customTransport(latestHandle ?? h, method, args)
                             }
                             const hostTrans = getHostTransport()
                             if (hostTrans?.invoke) {
-                                return hostTrans.invoke(h, method, args)
+                                return hostTrans.invoke(latestHandle ?? h, method, args)
                             }
                             return Promise.resolve(undefined)
                         },
                         subscribe: (h, eventName, listener) => {
-                            if (this.customSubscribe) {
-                                return this.customSubscribe(h, eventName, listener)
+                            const latestHandle = getStrictGenerationHandle()
+                            if (!latestHandle) {
+                                throw new PluginCapabilityError(
+                                    `Capability handle revoked for plugin "${manifest.id}" in runtime "${entryKind}"`,
+                                    { pluginId: manifest.id },
+                                )
                             }
-                            const hostTrans = getHostTransport()
-                            if (hostTrans?.subscribe) {
-                                return hostTrans.subscribe(h, eventName, listener)
+                            const wrappedListener = (payload: unknown) => {
+                                if (!getStrictGenerationHandle()) {
+                                    return
+                                }
+                                listener(payload)
                             }
-                            return () => {}
+                            const bindWithHandle = (targetHandle: CapabilityHandle): (() => void) => {
+                                if (this.customSubscribe) {
+                                    return this.customSubscribe(targetHandle, eventName, wrappedListener)
+                                }
+                                const hostTrans = getHostTransport()
+                                if (hostTrans?.subscribe) {
+                                    return hostTrans.subscribe(targetHandle, eventName, wrappedListener)
+                                }
+                                return () => {}
+                            }
+                            let currentUnsub = bindWithHandle(latestHandle ?? h)
+                            let disposed = false
+                            const record = {
+                                pluginId: manifest.id,
+                                generation,
+                                rebind: (newHandle: CapabilityHandle) => {
+                                    if (disposed) return
+                                    try {
+                                        currentUnsub()
+                                    } catch {
+                                        // Ignore previous unsubscribe error
+                                    }
+                                    currentUnsub = bindWithHandle(newHandle)
+                                },
+                                dispose: () => {
+                                    if (disposed) return
+                                    disposed = true
+                                    this.activeSubscriptions.delete(record)
+                                    try {
+                                        currentUnsub()
+                                    } catch {
+                                        // Ignore unsubscribe error
+                                    }
+                                },
+                            }
+                            this.activeSubscriptions.add(record)
+                            return () => {
+                                record.dispose()
+                            }
                         },
                     })
                 },
@@ -524,6 +596,10 @@ export class RendererPluginRuntimeHost {
         if (options.peerHost) {
             this.setPeerHost(options.peerHost)
         }
+
+        this.eventBus.on('floating:refresh', () => {
+            this.registry.refreshFloatings()
+        })
     }
 
     setPeerHost(peer?: PeerPluginRuntimeHost): void {
@@ -579,8 +655,16 @@ export class RendererPluginRuntimeHost {
             byGen = new Map()
             this.pluginHandles.set(pluginId, byGen)
         }
+        const prevHandle = byGen.get(gen)
         byGen.set(gen, h)
         byGen.set(0, h)
+        if (prevHandle && prevHandle !== h) {
+            for (const sub of Array.from(this.activeSubscriptions)) {
+                if (sub.pluginId === pluginId && sub.generation === gen) {
+                    sub.rebind(h)
+                }
+            }
+        }
     }
 
     getPluginHandle(
@@ -609,8 +693,30 @@ export class RendererPluginRuntimeHost {
             for (const byGen of this.pluginHandles.values()) {
                 byGen.delete(generation)
             }
+            for (const sub of Array.from(this.activeSubscriptions)) {
+                if (sub.generation === generation) {
+                    sub.dispose()
+                }
+            }
         } else {
             this.pluginHandles.clear()
+            for (const sub of Array.from(this.activeSubscriptions)) {
+                sub.dispose()
+            }
+        }
+    }
+
+    /**
+     * Re-binds active capability event subscriptions for a generation (e.g. after Main 2PC commit).
+     */
+    rebindSubscriptions(generation?: number): void {
+        for (const sub of Array.from(this.activeSubscriptions)) {
+            if (generation === undefined || sub.generation === generation) {
+                const handle = this.pluginHandles.get(sub.pluginId)?.get(sub.generation)
+                if (handle) {
+                    sub.rebind(handle)
+                }
+            }
         }
     }
 

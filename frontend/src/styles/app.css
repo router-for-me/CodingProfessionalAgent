@@ -173,6 +173,12 @@ html[data-mobile-browser="true"]:has(aside[data-mobile="true"][data-state="open"
   pointer-events: none !important;
 }
 
+/* Keep floating todo progress pill on a single horizontal line within anchor bounds on mobile screens */
+html[data-mobile-browser="true"] [data-testid="todo-progress-pill"] {
+  white-space: nowrap !important;
+  max-width: min(var(--floating-anchor-width, calc(100vw - 3rem)), calc(100vw - 3rem)) !important;
+}
+
 html[data-mobile-browser="true"] aside[data-mobile="true"] button,
 html[data-mobile-browser="true"] aside[data-mobile="true"] [role="button"] {
   touch-action: manipulation;

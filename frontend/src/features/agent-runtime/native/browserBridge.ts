@@ -28,6 +28,7 @@ export class BrowserBridgeClient implements HostTransportApi {
     private ws: WebSocket | null = null
     private pendingCalls = new Map<string, PendingCall>()
     private eventCallbacks = new Set<NativeEventCallback>()
+    private capabilitySubscriptions = new Map<string, (payload: unknown) => void>()
     private onReconnectCallbacks = new Set<() => void>()
     private hasConnectedBefore = false
     private helloReceived = false
@@ -149,6 +150,18 @@ export class BrowserBridgeClient implements HostTransportApi {
                                 console.error('Error in native event callback:', err)
                             }
                         }
+                    } else if (
+                        data.type === 'capability_event' &&
+                        typeof data.subscriptionId === 'string'
+                    ) {
+                        const subListener = this.capabilitySubscriptions.get(data.subscriptionId)
+                        if (subListener) {
+                            try {
+                                subListener(data.payload)
+                            } catch (err) {
+                                console.error('Error in capability event callback:', err)
+                            }
+                        }
                     }
                 } catch (err) {
                     console.error('Failed to parse WebSocket message from server:', err)
@@ -203,6 +216,7 @@ export class BrowserBridgeClient implements HostTransportApi {
         }
         this.pendingCalls.clear()
         this.eventCallbacks.clear()
+        this.capabilitySubscriptions.clear()
         this.onReconnectCallbacks.clear()
         if (this.ws) {
             const socket = this.ws
@@ -424,16 +438,49 @@ export class BrowserBridgeClient implements HostTransportApi {
     }
 
     subscribe(
-        _handle: string,
+        handle: string,
         eventName: string,
         listener: (payload: unknown) => void,
     ): () => void {
-        // Web clients already receive native events via the shared WS broadcast.
-        // Filter locally by event name; authorization was enforced when the handle was granted.
+        if (!handle || !this.isCapabilityHandle(handle) || !eventName) {
+            return () => {}
+        }
+
         if (eventName === 'native-event') {
             return this.subscribeNativeEvents((event) => listener(event))
         }
-        return () => {}
+
+        const subscriptionId = `sub_${++this.callIdSeq}_${Date.now()}`
+        let disposed = false
+        this.capabilitySubscriptions.set(subscriptionId, (payload) => {
+            if (!disposed) {
+                listener(payload)
+            }
+        })
+
+        const registerServerSubscription = () => {
+            if (disposed) return
+            void this.requestRpc('capability:subscribe', [
+                { handle, eventName, subscriptionId },
+            ]).catch(() => {
+                // Server rejected or connection unavailable; will re-subscribe on reconnect/rebind
+            })
+        }
+
+        registerServerSubscription()
+        const unsubReconnect = this.onReconnect(() => {
+            if (!disposed) {
+                registerServerSubscription()
+            }
+        })
+
+        return () => {
+            if (disposed) return
+            disposed = true
+            this.capabilitySubscriptions.delete(subscriptionId)
+            unsubReconnect()
+            void this.requestRpc('capability:unsubscribe', [{ subscriptionId }]).catch(() => {})
+        }
     }
 
     onReconnect(callback: () => void): () => void {
@@ -456,6 +503,7 @@ export class BrowserBridgeClient implements HostTransportApi {
         }
         this.pendingCalls.clear()
         this.eventCallbacks.clear()
+        this.capabilitySubscriptions.clear()
         this.onReconnectCallbacks.clear()
         if (this.ws) {
             const socket = this.ws

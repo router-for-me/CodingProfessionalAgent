@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { PluginEventBus } from '@cpa/plugin-kernel'
 import { AgentPluginRuntimeHost } from '../../../../frontend/src/plugins/platform/AgentPluginRuntimeHost'
 import { askAgentEntry, createAskTool, parseAskOptions } from './index.js'
+import { askMainEntry } from '../main/index.js'
 import {
     defaultAskController,
     useAskStore,
@@ -333,5 +334,136 @@ describe('cpa.core.ask agent entry', () => {
         const [r1, r2] = await Promise.all([p1, p2])
         expect((r1.content[0] as any).text).toBe('User response: Ans 1')
         expect((r2.content[0] as any).text).toBe('User response: Ans 2')
+    })
+
+    it('synchronizes ask requests to main RPCs and resolves when remote web client submits answer via ask:action', async () => {
+        const mainRpcs = new Map<string, (ctx: any, args: any[]) => Promise<any>>()
+        const actionListeners = new Set<(payload: any) => void>()
+        const stateListeners = new Set<(payload: any) => void>()
+
+        const mainContext: any = {
+            manifest,
+            generation: 1,
+            capabilities: new Set(['ui.overlay']),
+            events: {
+                emit: vi.fn((kind: string, event: any) => {
+                    if (kind === 'ask:action') {
+                        actionListeners.forEach((cb) => cb(event))
+                    } else if (kind === 'ask:state-changed') {
+                        stateListeners.forEach((cb) => cb(event))
+                    }
+                }),
+            },
+            register: vi.fn((reg: any) => {
+                if (reg.kind === 'rpc') {
+                    mainRpcs.set(reg.id, reg.value.invoke)
+                }
+                return () => {}
+            }),
+        }
+
+        await askMainEntry.activate(mainContext)
+
+        const mockCapClient: any = {
+            has: () => true,
+            invoke: vi.fn(async (method: string, args: any[] = []) => {
+                const rpc = mainRpcs.get(method)
+                if (!rpc) throw new Error(`Missing RPC ${method}`)
+                return rpc({}, args)
+            }),
+            subscribe: vi.fn((eventName: string, listener: (payload: any) => void) => {
+                if (eventName === 'ask:action') {
+                    actionListeners.add(listener)
+                    return () => actionListeners.delete(listener)
+                }
+                if (eventName === 'ask:state-changed') {
+                    stateListeners.add(listener)
+                    return () => stateListeners.delete(listener)
+                }
+                return () => {}
+            }),
+        }
+
+        let factory: any
+        await askAgentEntry.activate({
+            manifest,
+            generation: 1,
+            capabilities: new Set(['ui.overlay']),
+            capabilityClient: mockCapClient,
+            events: eventBus,
+            register: vi.fn((reg: any) => {
+                if (reg.kind === 'tool-factory') {
+                    factory = reg.value
+                }
+                return () => {}
+            }),
+            getService: vi.fn(),
+        } as any)
+
+        const tool = factory.create({})
+        const pending = tool.execute(
+            'web-call-1',
+            {
+                question: 'Proceed with PR review?',
+                options: [
+                    { title: 'Approve', description: 'Looks good', recommended: true },
+                    { title: 'Request changes' },
+                ],
+            },
+            { sessionId: 'web-sess-1', toolCallId: 'web-call-1' } as any,
+        )
+
+        const activeRequests = await mockCapClient.invoke('ask:getRequests', [])
+        expect(activeRequests['web-sess-1']).toBeDefined()
+        expect(activeRequests['web-sess-1'].question).toBe('Proceed with PR review?')
+
+        await mockCapClient.invoke('ask:cancelCountdown', ['web-sess-1', 'web-call-1'])
+        expect(useAskStore.getState().getRequest('web-sess-1')?.countdownDeadline).toBeUndefined()
+
+        await mockCapClient.invoke('ask:submitAnswer', [
+            'web-sess-1',
+            'web-call-1',
+            {
+                type: 'selected',
+                option: { title: 'Approve', description: 'Looks good', recommended: true },
+                index: 0,
+            },
+        ])
+
+        const result = await pending
+        expect((result.content[0] as any).text).toBe('User selected: Approve (Looks good)')
+        expect(await mockCapClient.invoke('ask:getRequests', [])).toEqual({})
+
+        // Start a new request and verify a late/stale submitAnswer or cancel for the old toolCallId does not clear it
+        const secondPending = tool.execute(
+            'web-call-2',
+            { question: 'Second question?', options: ['Yes', 'No'] },
+            { sessionId: 'web-sess-1', toolCallId: 'web-call-2' } as any,
+        )
+        expect(await mockCapClient.invoke('ask:submitAnswer', ['web-sess-1', 'web-call-1', { type: 'skipped' }])).toBe(false)
+        expect(await mockCapClient.invoke('ask:cancel', ['web-sess-1', 'web-call-1'])).toBe(false)
+        expect(useAskStore.getState().getRequest('web-sess-1')?.toolCallId).toBe('web-call-2')
+
+        await mockCapClient.invoke('ask:submitAnswer', ['web-sess-1', 'web-call-2', { type: 'skipped' }])
+        expect(((await secondPending).content[0] as any).text).toBe('User skipped this question.')
+
+        // Verify main entry generation swap (activate gen2 before deactivating gen1) preserves active requests
+        const thirdPending = tool.execute(
+            'web-call-3',
+            { question: 'Survives main gen swap?', options: ['OK'] },
+            { sessionId: 'web-sess-1', toolCallId: 'web-call-3' } as any,
+        )
+        const mainContextGen2: any = {
+            ...mainContext,
+            generation: 2,
+        }
+        await askMainEntry.activate(mainContextGen2)
+        await askMainEntry.deactivate?.(mainContext)
+        expect((await mockCapClient.invoke('ask:getRequests', []))['web-sess-1']?.toolCallId).toBe('web-call-3')
+        expect(await mockCapClient.invoke('ask:submitAnswer', ['web-sess-1', 'web-call-3', { type: 'skipped' }])).toBe(true)
+        await thirdPending
+
+        await askAgentEntry.deactivate?.()
+        await askMainEntry.deactivate?.()
     })
 })

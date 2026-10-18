@@ -5,6 +5,7 @@ import {
     hydrateEmptySessionFromDisk,
     fastForwardSessionOnWake,
     hasPendingSessionMetadata,
+    recordDeferredRemoteSessionMetadata,
     deleteSessionLocalCache,
     hasUnsavedSessionHistory,
     initPersistence,
@@ -13,7 +14,7 @@ import {
     withSuppressedPersistence,
 } from './persistenceService'
 import { getHostBridge, subscribeHostNativeEvents, onHostReconnect } from './hostTransport'
-import { isBrowserEnvironment } from '@/lib/platform'
+import { isBrowserEnvironment, isMobileBrowser } from '@/lib/platform'
 import { setProtectedSessionPredicate, useMessageStore } from '@/stores/messageStore'
 import { useProjectStore } from '@/stores/projectStore'
 import { useSessionStore } from '@/stores/sessionStore'
@@ -303,6 +304,7 @@ export async function bootstrapApplication(): Promise<void> {
         }
     }
 
+    pluginPlatformCoordinator.setMainParticipant(mainParticipant)
     await pluginPlatformCoordinator.activate(graph, { mainParticipant })
     setProtectedSessionPredicate((sessionId) => {
         const run = useSessionRunStore.getState().activeRuns[sessionId]
@@ -334,14 +336,18 @@ export async function bootstrapApplication(): Promise<void> {
         } else if (event.kind === 'session:meta-updated' && event.data) {
             try {
                 const sessionItem = JSON.parse(event.data) as Session
-                if (sessionItem && sessionItem.id && !hasPendingSessionMetadata(sessionItem.id)) {
-                    withSuppressedPersistence(() => {
-                        useSessionStore.getState().upsertRemoteSession(sessionItem)
-                        const current = useSessionStore.getState().currentSessionId
-                        if (current === sessionItem.id && sessionItem.rightSidebar !== undefined) {
-                            useUiStore.getState().restoreForSession(sessionItem.rightSidebar)
-                        }
-                    })
+                if (sessionItem && sessionItem.id) {
+                    if (!hasPendingSessionMetadata(sessionItem.id)) {
+                        withSuppressedPersistence(() => {
+                            useSessionStore.getState().upsertRemoteSession(sessionItem)
+                            const current = useSessionStore.getState().currentSessionId
+                            if (current === sessionItem.id && sessionItem.rightSidebar !== undefined && !isMobileBrowser()) {
+                                useUiStore.getState().restoreForSession(sessionItem.rightSidebar)
+                            }
+                        })
+                    } else {
+                        recordDeferredRemoteSessionMetadata(sessionItem)
+                    }
                 }
             } catch {
                 // Ignore JSON parse error
@@ -437,6 +443,12 @@ export async function bootstrapApplication(): Promise<void> {
 
     bootstrapDisposers.push(onHostReconnect(() => {
         if (isBrowserEnvironment()) {
+            void pluginPlatformCoordinator
+                .refreshCapabilityHandles()
+                .then(() => {
+                    void pluginPlatformCoordinator.rendererHost.eventBus.emit('host:reconnected')
+                })
+                .catch(() => {})
             const current = useSessionStore.getState().currentSessionId
             for (const sessionId of Object.keys(useMessageStore.getState().entriesBySession)) {
                 if (sessionId !== current) invalidateSessionDiskCache(sessionId)

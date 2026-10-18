@@ -34,7 +34,11 @@ import {
     __resetToolOverlayStoreForTests,
     useToolOverlayStore,
 } from '@/stores/toolOverlayStore'
-import { __resetPersistenceForTests, bindPersistence } from '@/application/services/persistenceService'
+import {
+    __resetPersistenceForTests,
+    bindPersistence,
+    flushPendingPersistence,
+} from '@/application/services/persistenceService'
 import { setHostBridge } from '@/application/services/hostTransport'
 
 const model: ModelCatalogEntry = {
@@ -5965,6 +5969,231 @@ describe('useAgentStreamSync', () => {
 
         await new Promise((resolve) => setTimeout(resolve, 50))
         expect(executedCount).toBe(0)
+
+        unmount()
+    })
+
+    it('updates session title in browser when remote session:meta-updated event arrives after delegation', async () => {
+        Object.defineProperty(navigator, 'userAgent', {
+            value: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+            configurable: true,
+        })
+
+        let resolveSessionSet!: (rev: string) => void
+        const sessionSetMock = vi
+            .fn()
+            .mockImplementationOnce(
+                () =>
+                    new Promise<string>((resolve) => {
+                        resolveSessionSet = resolve
+                    }),
+            )
+            .mockResolvedValue('rev-2')
+
+        setHostBridge({
+            StorageGet: vi.fn().mockResolvedValue(null),
+            StorageSet: vi.fn().mockResolvedValue(undefined),
+            SessionBroadcastRunStatus: broadcastRunStatusMock,
+            SessionBroadcastStreamEvent: broadcastStreamEventMock,
+            SessionAbortRun: abortRunMock,
+            SessionDelegateRun: delegateRunMock,
+            SessionSet: sessionSetMock,
+            SessionClaimPendingDelegateRuns: vi.fn().mockResolvedValue([]),
+            SessionAckDelegateRun: vi.fn().mockResolvedValue(undefined),
+            onNativeEvent: vi.fn((cb: (event: any) => void) => {
+                nativeEventListeners.push(cb)
+                return () => {
+                    const idx = nativeEventListeners.indexOf(cb)
+                    if (idx >= 0) nativeEventListeners.splice(idx, 1)
+                }
+            }),
+        } as any)
+        bindPersistence({ debounceMs: 5 })
+
+        const testService = new FakeSyncService()
+        const { result, unmount } = renderHook(() => useAgentStream(), {
+            wrapper: createWrapper(testService),
+        })
+
+        let sessionId: string | null = null
+        await act(async () => {
+            sessionId = await result.current.send('$github-pr-review 6738')
+        })
+
+        expect(sessionId).toBeTruthy()
+        expect(
+            useSessionStore.getState().sessions.find((s) => s.id === sessionId)?.title,
+        ).toBe('$github-pr-review 6738')
+
+        // Emit session:meta-updated while initial pre-run SessionSet is still in flight
+        const emitNative = nativeEventListeners[0]!
+        act(() => {
+            emitNative({
+                kind: 'session:meta-updated',
+                data: JSON.stringify({
+                    id: sessionId,
+                    title: 'Review PR #6738',
+                    pinned: false,
+                    createdAt: Date.now() - 1000,
+                    updatedAt: Date.now(),
+                }),
+            })
+        })
+
+        await waitFor(() => {
+            expect(sessionSetMock).toHaveBeenCalled()
+        })
+        await act(async () => {
+            resolveSessionSet('rev-1')
+            await Promise.resolve()
+        })
+
+        await waitFor(() => {
+            expect(
+                useSessionStore.getState().sessions.find((s) => s.id === sessionId)?.title,
+            ).toBe('Review PR #6738')
+        })
+
+        // Simulate user pinning the session mid-run, followed by another remote LLM title update
+        act(() => {
+            useSessionStore.getState().togglePin(sessionId!)
+        })
+        act(() => {
+            emitNative({
+                kind: 'session:meta-updated',
+                data: JSON.stringify({
+                    id: sessionId,
+                    title: 'Refined PR #6738 Title',
+                    pinned: false,
+                    createdAt: Date.now() - 1000,
+                    updatedAt: Date.now(),
+                }),
+            })
+        })
+
+        // Both the local pin AND the remote title update must be preserved, even after run finishes and persists
+        let updatedSession = useSessionStore.getState().sessions.find((s) => s.id === sessionId)
+        expect(updatedSession?.pinned).toBe(true)
+        expect(updatedSession?.title).toBe('Refined PR #6738 Title')
+
+        sessionSetMock.mockResolvedValue('rev-2')
+        act(() => {
+            useSessionRunStore.getState().clearRun(sessionId!)
+        })
+        await act(async () => {
+            await flushPendingPersistence()
+        })
+
+        updatedSession = useSessionStore.getState().sessions.find((s) => s.id === sessionId)
+        expect(updatedSession?.pinned).toBe(true)
+        expect(updatedSession?.title).toBe('Refined PR #6738 Title')
+
+        unmount()
+    })
+
+    it('discards deferred remote title if user manually renames session before initial pre-run save completes', async () => {
+        Object.defineProperty(navigator, 'userAgent', {
+            value: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+            configurable: true,
+        })
+        Object.defineProperty(window, 'innerWidth', {
+            value: 390,
+            configurable: true,
+            writable: true,
+        })
+
+        let nativeListener: ((event: { kind: string; data: string }) => void) | null = null
+        let resolveInitialSessionSet!: (rev: string) => void
+        const sessionSetMock = vi
+            .fn()
+            .mockImplementationOnce(
+                () =>
+                    new Promise<string>((resolve) => {
+                        resolveInitialSessionSet = resolve
+                    }),
+            )
+            .mockResolvedValue('rev-2')
+
+        setHostBridge({
+            SessionRequestDelegateRun: vi.fn(async () => undefined),
+            KVStoreGet: vi.fn(async () => ''),
+            KVStoreSet: vi.fn(async () => undefined),
+            KVStoreGetBatch: vi.fn(async () => '{}'),
+            KVStoreSetBatch: vi.fn(async () => undefined),
+            SessionListMeta: vi.fn(async () => '[]'),
+            SessionGet: vi.fn(async () => ''),
+            SessionSet: sessionSetMock,
+            SessionSetMeta: vi.fn(async () => undefined),
+            SessionDelete: vi.fn(async () => undefined),
+            onNativeEvent: vi.fn((cb) => {
+                nativeListener = cb
+                return () => {
+                    nativeListener = null
+                }
+            }),
+        } as any)
+
+        const service: AgentService = {
+            prepare: vi.fn(async () => makePrepared()),
+            streamChat: vi.fn(),
+            abort: vi.fn(),
+            approve: vi.fn(),
+            reject: vi.fn(),
+            compact: vi.fn(),
+            dispose: vi.fn(),
+        }
+
+        const { result, unmount } = renderHook(() => useAgentStream(), {
+            wrapper: ({ children }: { children: ReactNode }) =>
+                createElement(AgentServiceProvider, { service, children }),
+        })
+
+        bindPersistence({ debounceMs: 5 })
+
+        await act(async () => {
+            await result.current.send('Please review PR #6738')
+        })
+
+        const sessionId = useSessionStore.getState().currentSessionId
+        expect(sessionId).toBeTruthy()
+
+        await waitFor(() => {
+            expect(sessionSetMock).toHaveBeenCalledTimes(1)
+        })
+
+        // 1. Remote title arrives while initial pre-run save is still in flight -> deferred
+        act(() => {
+            nativeListener?.({
+                kind: 'session:meta-updated',
+                data: JSON.stringify({
+                    id: sessionId,
+                    title: 'Old Remote Title',
+                    pinned: false,
+                    createdAt: Date.now() - 1000,
+                    updatedAt: Date.now(),
+                }),
+            })
+        })
+
+        // 2. User manually renames the session before initial pre-run save finishes
+        act(() => {
+            useSessionStore.getState().renameSession(sessionId!, 'User Manual Title')
+        })
+
+        // 3. Initial pre-run save resolves, and then the run finishes & subsequent manual save flushes
+        await act(async () => {
+            resolveInitialSessionSet('rev-1')
+            await Promise.resolve()
+        })
+        act(() => {
+            useSessionRunStore.getState().clearRun(sessionId!)
+        })
+        await act(async () => {
+            await flushPendingPersistence()
+        })
+
+        const finalSession = useSessionStore.getState().sessions.find((s) => s.id === sessionId)
+        expect(finalSession?.title).toBe('User Manual Title')
 
         unmount()
     })

@@ -1,9 +1,24 @@
 import { create } from 'zustand'
 import type { AskDecision, AskRequest, AskState } from './types.js'
 
-import { defaultAskController } from './askController.js'
+import {
+    defaultAskController,
+    unregisterAskContextClient,
+} from './askController.js'
 
-export { AskController, defaultAskController } from './askController.js'
+export {
+    AskController,
+    defaultAskController,
+    getAskCapabilityClient,
+    invokeAskRpc,
+    invokeAskRpcStrict,
+    isAskRequestRemotelyCleared,
+    markAskRequestRemotelyCleared,
+    parseAskEventPayload,
+    registerAskContextClient,
+    setAskCapabilityClient,
+    unregisterAskContextClient,
+} from './askController.js'
 
 export const useAskStore = create<AskState>((set, get) => ({
     requestsBySession: {},
@@ -42,7 +57,13 @@ export const useAskStore = create<AskState>((set, get) => ({
 
     submitAnswer: (sessionId: string, toolCallId: string, decision: AskDecision) => {
         defaultAskController.submitAnswer(sessionId, toolCallId, decision)
-        get().setRequest(sessionId, null)
+        set((state) => {
+            const current = state.requestsBySession[sessionId]
+            if (!current || (toolCallId && current.toolCallId !== toolCallId)) return state
+            const next = { ...state.requestsBySession }
+            delete next[sessionId]
+            return { requestsBySession: next }
+        })
     },
 
     cancelCountdown: (sessionId: string, toolCallId: string) => {
@@ -61,7 +82,13 @@ export const useAskStore = create<AskState>((set, get) => ({
 
     cancel: (sessionId: string, toolCallId?: string) => {
         defaultAskController.cancel(sessionId, toolCallId)
-        get().setRequest(sessionId, null)
+        set((state) => {
+            const current = state.requestsBySession[sessionId]
+            if (!current || (toolCallId && current.toolCallId !== toolCallId)) return state
+            const next = { ...state.requestsBySession }
+            delete next[sessionId]
+            return { requestsBySession: next }
+        })
     },
 
     clearSession: (sessionId: string) => {
@@ -76,5 +103,6 @@ export const useAskStore = create<AskState>((set, get) => ({
 }))
 
 export function __resetAskStoreForTests(): void {
+    unregisterAskContextClient()
     useAskStore.getState().clearAll()
 }

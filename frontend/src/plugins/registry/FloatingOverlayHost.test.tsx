@@ -1240,5 +1240,37 @@ describe('FloatingOverlayHost & computeFloatingCoords', () => {
 
             container.remove()
         })
+
+        it('sets max-content width on floating wrapper and re-evaluates visible when refreshFloatings is called', () => {
+            const anchor = document.createElement('div')
+            anchor.id = 'refresh-anchor'
+            document.body.appendChild(anchor)
+            vi.spyOn(anchor, 'getBoundingClientRect').mockReturnValue(sampleRect)
+
+            let isVisible = false
+            registry.registerFloating({
+                id: 'reactive-float',
+                pluginId: 'p1',
+                anchor: '#refresh-anchor',
+                visible: () => isVisible,
+                component: () => <div data-testid="reactive-float-content">Reactive Float</div>,
+            })
+
+            render(<FloatingOverlayHost registry={registry} />)
+            expect(screen.queryByTestId('reactive-float-content')).not.toBeInTheDocument()
+
+            act(() => {
+                isVisible = true
+                registry.refreshFloatings()
+            })
+
+            const content = screen.getByTestId('reactive-float-content')
+            expect(content).toBeInTheDocument()
+            const wrapper = content.closest('[data-floating-id="reactive-float"]') as HTMLElement
+            expect(wrapper.style.width).toBe('max-content')
+            expect(wrapper.style.getPropertyValue('--floating-anchor-width')).toBe('100px')
+
+            anchor.remove()
+        })
     })
 })

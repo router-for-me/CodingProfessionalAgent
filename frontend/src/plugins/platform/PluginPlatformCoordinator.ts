@@ -167,47 +167,7 @@ export class PluginPlatformCoordinator {
 
         // Redeem grant tickets issued by Main in prepared state before activating plugin entries
         if (mainState?.grantTickets) {
-            const redeemTicket = async (
-                ticket: string,
-                runtime?: 'renderer' | 'agent',
-            ): Promise<CapabilityHandle | null> => {
-                try {
-                    if (this.grantTicketTransport) {
-                        const res = await this.grantTicketTransport(ticket, runtime)
-                        if (res && typeof res === 'object' && 'ok' in res) {
-                            if (res.ok === true && 'value' in res) return res.value as CapabilityHandle
-                            return null
-                        }
-                        if (typeof res === 'string') return res as CapabilityHandle
-                    } else {
-                        const hostTrans = getHostTransport()
-                        if (hostTrans?.grantTicket) {
-                            const res = await hostTrans.grantTicket(ticket, runtime)
-                            if (res && typeof res === 'object' && 'ok' in res && (res as any).ok === true && 'value' in res) {
-                                return (res as any).value as CapabilityHandle
-                            }
-                        }
-                    }
-                } catch (err) {
-                    console.warn(`[PluginPlatformCoordinator] Failed to redeem grant ticket "${ticket}":`, err)
-                }
-                return null
-            }
-
-            for (const [pluginId, tickets] of Object.entries(mainState.grantTickets)) {
-                if (tickets?.renderer) {
-                    const handle = await redeemTicket(tickets.renderer, 'renderer')
-                    if (handle) {
-                        this.rendererHost.setPluginHandle(pluginId, handle, targetGeneration)
-                    }
-                }
-                if (tickets?.agent) {
-                    const handle = await redeemTicket(tickets.agent, 'agent')
-                    if (handle) {
-                        this.agentHost.setPluginHandle(pluginId, handle, targetGeneration)
-                    }
-                }
-            }
+            await this.redeemGrantTickets(mainState.grantTickets, targetGeneration)
         }
 
         const isMainPending = Boolean(
@@ -265,6 +225,18 @@ export class PluginPlatformCoordinator {
                 await localPrepared.commit()
                 this.isCommitted = true
                 this.activeRevision = finalRevision
+                if (isMainPending) {
+                    this.rendererHost.rebindSubscriptions(targetGeneration)
+                    this.agentHost.rebindSubscriptions(targetGeneration)
+                    void this.rendererHost.eventBus.emit('platform:generation-committed', {
+                        generation: targetGeneration,
+                        revision: finalRevision,
+                    })
+                    void this.agentHost.eventBus.emit('platform:generation-committed', {
+                        generation: targetGeneration,
+                        revision: finalRevision,
+                    })
+                }
                 this.rendererHost.notify()
                 this.agentHost.notify()
             },
@@ -286,6 +258,65 @@ export class PluginPlatformCoordinator {
                 }
             },
         }
+    }
+
+    private async redeemGrantTickets(
+        grantTickets: Record<string, { renderer?: string; agent?: string }>,
+        targetGeneration: number,
+    ): Promise<void> {
+        const redeemTicket = async (
+            ticket: string,
+            runtime?: 'renderer' | 'agent',
+        ): Promise<CapabilityHandle | null> => {
+            try {
+                if (this.grantTicketTransport) {
+                    const res = await this.grantTicketTransport(ticket, runtime)
+                    if (res && typeof res === 'object' && 'ok' in res) {
+                        if (res.ok === true && 'value' in res) return res.value as CapabilityHandle
+                        return null
+                    }
+                    if (typeof res === 'string') return res as CapabilityHandle
+                } else {
+                    const hostTrans = getHostTransport()
+                    if (hostTrans?.grantTicket) {
+                        const res = await hostTrans.grantTicket(ticket, runtime)
+                        if (res && typeof res === 'object' && 'ok' in res && (res as any).ok === true && 'value' in res) {
+                            return (res as any).value as CapabilityHandle
+                        }
+                    }
+                }
+            } catch (err) {
+                console.warn(`[PluginPlatformCoordinator] Failed to redeem grant ticket "${ticket}":`, err)
+            }
+            return null
+        }
+
+        for (const [pluginId, tickets] of Object.entries(grantTickets)) {
+            if (tickets?.renderer) {
+                const handle = await redeemTicket(tickets.renderer, 'renderer')
+                if (handle) {
+                    this.rendererHost.setPluginHandle(pluginId, handle, targetGeneration)
+                }
+            }
+            if (tickets?.agent) {
+                const handle = await redeemTicket(tickets.agent, 'agent')
+                if (handle) {
+                    this.agentHost.setPluginHandle(pluginId, handle, targetGeneration)
+                }
+            }
+        }
+    }
+
+    /**
+     * Re-claims and redeems capability handles from Main participant after a transport reconnect.
+     */
+    async refreshCapabilityHandles(mainParticipant?: MainGenerationParticipant): Promise<void> {
+        const participant = mainParticipant ?? this.mainParticipant
+        if (!participant) return
+        const mainState = await participant.getPreparedState()
+        if (!mainState?.grantTickets) return
+        const targetGen = mainState.generation ?? this.getGeneration()
+        await this.redeemGrantTickets(mainState.grantTickets, targetGen)
     }
 
     /**
