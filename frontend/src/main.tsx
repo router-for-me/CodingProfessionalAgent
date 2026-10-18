@@ -12,6 +12,7 @@ import { initWindowAnimationState } from './lib/windowAnimationState'
 import { initInjectedErrorGuard } from './lib/injectedErrorGuard'
 import { waitForWebAuthentication } from './features/web-auth/WebAuthGate'
 import { syncMobileBrowserDOM } from './lib/platform'
+import 'katex/dist/katex.min.css'
 import './styles/app.css'
 import type { Root } from 'react-dom/client'
 

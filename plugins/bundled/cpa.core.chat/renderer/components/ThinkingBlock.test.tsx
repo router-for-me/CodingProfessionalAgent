@@ -96,4 +96,17 @@ echo 123
     expect(preElements).toHaveLength(1)
     expect(preElements[0]?.textContent).toContain('echo 123')
   })
+
+  it('renders LaTeX expressions such as $\\rightarrow$ inside thinking blocks', () => {
+    const { container } = render(
+      <ThinkingBlock
+        thinking={'Step 1 $\\rightarrow$ Step 2'}
+        streaming={false}
+        defaultOpen
+      />,
+    )
+
+    expect(container.querySelector('.katex')).not.toBeNull()
+    expect(container.textContent).toContain('→')
+  })
 })

@@ -916,5 +916,53 @@ export FOO=bar
     expect(codeText).toContain('```bash')
     expect(codeText).toContain('```')
   })
+
+  it('renders inline and block LaTeX expressions with KaTeX while preserving currency, URLs, and code blocks', () => {
+    const rawLatex = [
+      'Transition A $\\rightarrow$ B with $E = mc^2$ and cost $100 or $200.',
+      '',
+      '[Download $\\rightarrow$](https://example.com/$file$/report)',
+      '',
+      '$$x +',
+      'y$$',
+      '',
+      'After $z$ and code `$\\rightarrow$` stays literal.',
+      '',
+      'Multi-line `line1',
+      '$$',
+      'line2` and $w$ end.',
+      '',
+      '> Quote `bq1',
+      '> $$',
+      '> bq2` and $q$.',
+      '',
+      '- List `li1',
+      '  $$',
+      '  li2` and $m$.',
+    ].join('\n')
+
+    const { container } = render(
+      <HostServicesProvider services={{} as any}>
+        <AssistantText text={rawLatex} />
+      </HostServicesProvider>,
+    )
+
+    const katexSpans = container.querySelectorAll('.katex')
+    expect(katexSpans.length).toBeGreaterThanOrEqual(8)
+    expect(container.querySelector('.katex-display')).not.toBeNull()
+    expect(container.querySelector('.katex-error')).toBeNull()
+    expect(container.textContent).toContain('→')
+    expect(container.textContent).toContain('$100 or $200')
+    expect(container.textContent).toContain('After')
+    const link = container.querySelector('a')
+    expect(link?.getAttribute('href')).toBe('https://example.com/$file$/report')
+    const inlineCodes = Array.from(container.querySelectorAll('code')).map(
+      (el) => el.textContent,
+    )
+    expect(inlineCodes).toContain('$\\rightarrow$')
+    expect(inlineCodes).toContain('line1 $$ line2')
+    expect(inlineCodes).toContain('bq1 $$ bq2')
+    expect(inlineCodes).toContain('li1 $$ li2')
+  })
 })
 

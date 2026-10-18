@@ -5,12 +5,15 @@ import {
   ReactMarkdown,
   type Components,
   cn,
+  rehypeKatex,
   remarkGfm,
+  remarkMath,
   useTranslation,
 } from '@cpa/plugin-ui'
 import {
   balanceMarkdownCodeFences,
   isMarkdownPreEmpty,
+  normalizeMarkdownMath,
 } from '../utils/markdownUtils.js'
 
 export interface ThinkingBlockProps {
@@ -92,6 +95,15 @@ const markdownComponents: Components = {
   ),
 }
 
+const thinkingRemarkPlugins: any[] = [
+  remarkGfm,
+  [remarkMath, { singleDollarTextMath: false }],
+]
+
+const thinkingRehypePlugins: any[] = [
+  [rehypeKatex, { throwOnError: false, strict: 'ignore' }],
+]
+
 /**
  * Collapsible assistant thinking block.
  * Streaming defaults to expanded; done defaults to collapsed.
@@ -127,7 +139,7 @@ export const ThinkingBlock = memo(function ThinkingBlock(props: ThinkingBlockPro
   }
 
   const formattedThinking = useMemo(
-    () => balanceMarkdownCodeFences(thinking ?? ''),
+    () => normalizeMarkdownMath(balanceMarkdownCodeFences(thinking ?? '')),
     [thinking],
   )
 
@@ -173,7 +185,8 @@ export const ThinkingBlock = memo(function ThinkingBlock(props: ThinkingBlockPro
           className="border-t border-[var(--border-subtle)] px-3 py-2.5 text-xs"
         >
           <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
+            remarkPlugins={thinkingRemarkPlugins}
+            rehypePlugins={thinkingRehypePlugins}
             components={markdownComponents}
           >
             {formattedThinking}

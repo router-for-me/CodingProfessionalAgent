@@ -28,6 +28,8 @@ export {
 export * from 'lucide-react'
 export { default as ReactMarkdown, type Components } from 'react-markdown'
 export { default as remarkGfm } from 'remark-gfm'
+export { default as remarkMath } from 'remark-math'
+export { default as rehypeKatex } from 'rehype-katex'
 export { default as hljs } from 'highlight.js'
 export { useTranslation, Trans, I18nextProvider } from 'react-i18next'
 

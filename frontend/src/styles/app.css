@@ -636,3 +636,24 @@ select {
   background-attachment: fixed;
   background-repeat: no-repeat;
 }
+
+/* KaTeX Math Rendering Integration */
+.markdown-body .katex,
+[data-testid="thinking-content"] .katex {
+  font-size: 1.05em;
+  color: inherit;
+}
+
+.markdown-body .katex-display,
+[data-testid="thinking-content"] .katex-display {
+  margin: 0.75em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
+}
+
+.markdown-body .katex-error,
+[data-testid="thinking-content"] .katex-error {
+  color: inherit !important;
+}
+

@@ -35,7 +35,9 @@ import {
     type Components,
     type SkillSuggestion,
     cn,
+    rehypeKatex,
     remarkGfm,
+    remarkMath,
     useHostServices,
     useSkillUsageCounts,
     useSettings,
@@ -61,6 +63,7 @@ import {
 import {
     balanceMarkdownCodeFences,
     isMarkdownPreEmpty,
+    normalizeMarkdownMath,
 } from '../utils/markdownUtils.js'
 import { ThinkingBlock } from './ThinkingBlock.js'
 import { ToolActivityStack } from './ToolActivityStack.js'
@@ -972,6 +975,15 @@ export const MessageItem = memo(function MessageItem(props: MessageItemProps) {
     )
 })
 
+const markdownRemarkPlugins: any[] = [
+    remarkGfm,
+    [remarkMath, { singleDollarTextMath: false }],
+]
+
+const markdownRehypePlugins: any[] = [
+    [rehypeKatex, { throwOnError: false, strict: 'ignore' }],
+]
+
 export function AssistantText(props: {
     text?: string
     part?: any
@@ -984,7 +996,10 @@ export function AssistantText(props: {
 
     const { cleanText, citations: inlineCitations } = extractMemoryCitations(rawText)
     const activeCitations = props.citations ?? inlineCitations
-    const formattedMarkdown = useMemo(() => balanceMarkdownCodeFences(cleanText), [cleanText])
+    const formattedMarkdown = useMemo(
+        () => normalizeMarkdownMath(balanceMarkdownCodeFences(cleanText)),
+        [cleanText],
+    )
 
     return (
         <div className="flex flex-col">
@@ -995,7 +1010,8 @@ export function AssistantText(props: {
                 )}
             >
                 <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
+                    remarkPlugins={markdownRemarkPlugins}
+                    rehypePlugins={markdownRehypePlugins}
                     components={markdownComponents}
                 >
                     {formattedMarkdown}
