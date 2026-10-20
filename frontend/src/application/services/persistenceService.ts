@@ -207,10 +207,15 @@ const wakeBarriers = new Map<string, Promise<void>>()
 const failedWakeSessions = new Set<string>()
 const sessionWriteEpochs = new Map<string, number>()
 const persistingSessionIds = new Set<string>()
+const inFlightSessionSets = new Map<string, number>()
 const preRunFlushAllowed = new Map<string, { historyGen: number; metaGen: number; titleGen: number }>()
 const deferredRemoteSessionMetadata = new Map<string, { session: Session; titleGen: number }>()
 const historyConflicts = new Map<string, { payload: SessionFilePayload; toastId: string }>()
 const historyRecoveries = new Map<string, Promise<void>>()
+
+export function isSessionPersistInFlight(sessionId: string): boolean {
+  return (inFlightSessionSets.get(sessionId) ?? 0) > 0
+}
 
 function advanceEdit(map: Map<string, number>, sessionId: string): void {
   map.set(sessionId, (map.get(sessionId) ?? 0) + 1)
@@ -321,6 +326,7 @@ export function markRemoteSessionDeleted(sessionId: string): void {
   const conflict = historyConflicts.get(sessionId)
   if (conflict) useUiStore.getState().dismissToast(conflict.toastId)
   historyConflicts.delete(sessionId)
+  inFlightSessionSets.delete(sessionId)
   pendingEntryRemovals.delete(sessionId)
   sessionEntriesRevisions.delete(sessionId)
   sessionBaselineLengths.delete(sessionId)
@@ -1969,6 +1975,314 @@ export function fastForwardSessionOnWake(
   return read
 }
 
+function resolveMergedEntry(
+  remote: ConversationEntry,
+  local: ConversationEntry,
+  preferLocalEdits: boolean,
+): ConversationEntry {
+  return preferLocalEdits ? local : remote
+}
+
+function mergeSessionEntriesOrderPreserving(
+  remoteEntries: readonly ConversationEntry[],
+  localEntries: readonly ConversationEntry[],
+  preferLocalEdits: boolean,
+): ConversationEntry[] {
+  if (remoteEntries.length === 0) return [...localEntries]
+  if (localEntries.length === 0) return [...remoteEntries]
+  const remoteById = new Map(remoteEntries.map((entry) => [entry.id, entry]))
+  const localById = new Map(localEntries.map((entry) => [entry.id, entry]))
+  const sharedIds = new Set(localEntries.filter((entry) => remoteById.has(entry.id)).map((entry) => entry.id))
+  const result: ConversationEntry[] = []
+  const seen = new Set<string>()
+  let remoteCursor = 0
+
+  if (sharedIds.size === 0) {
+    const firstLocalTs = localEntries[0]?.createdAt ?? Number.POSITIVE_INFINITY
+    while (remoteCursor < remoteEntries.length && (remoteEntries[remoteCursor]?.createdAt ?? 0) <= firstLocalTs) {
+      const rem = remoteEntries[remoteCursor++]!
+      if (!seen.has(rem.id)) {
+        result.push(rem)
+        seen.add(rem.id)
+      }
+    }
+    for (const loc of localEntries) {
+      if (!seen.has(loc.id)) {
+        result.push(loc)
+        seen.add(loc.id)
+      }
+    }
+    while (remoteCursor < remoteEntries.length) {
+      const rem = remoteEntries[remoteCursor++]!
+      if (!seen.has(rem.id)) {
+        result.push(rem)
+        seen.add(rem.id)
+      }
+    }
+    return result
+  }
+
+  const drainRemoteUpTo = (targetId: string) => {
+    while (remoteCursor < remoteEntries.length) {
+      const rem = remoteEntries[remoteCursor++]!
+      if (seen.has(rem.id)) {
+        if (rem.id === targetId) break
+        continue
+      }
+      const loc = localById.get(rem.id)
+      result.push(loc ? resolveMergedEntry(rem, loc, preferLocalEdits) : rem)
+      seen.add(rem.id)
+      if (rem.id === targetId) break
+    }
+  }
+
+  for (const loc of localEntries) {
+    if (seen.has(loc.id)) continue
+    if (sharedIds.has(loc.id)) {
+      drainRemoteUpTo(loc.id)
+    } else {
+      const locTs = loc.createdAt ?? Number.POSITIVE_INFINITY
+      while (
+        remoteCursor < remoteEntries.length &&
+        !sharedIds.has(remoteEntries[remoteCursor]!.id) &&
+        (remoteEntries[remoteCursor]?.createdAt ?? 0) <= locTs
+      ) {
+        const rem = remoteEntries[remoteCursor++]!
+        if (!seen.has(rem.id)) {
+          result.push(rem)
+          seen.add(rem.id)
+        }
+      }
+      result.push(loc)
+      seen.add(loc.id)
+    }
+  }
+
+  while (remoteCursor < remoteEntries.length) {
+    const rem = remoteEntries[remoteCursor++]!
+    if (!seen.has(rem.id)) {
+      const loc = localById.get(rem.id)
+      result.push(loc ? resolveMergedEntry(rem, loc, preferLocalEdits) : rem)
+      seen.add(rem.id)
+    }
+  }
+
+  return result
+}
+
+function mergeSubAgentsForRebase(
+  remoteAgents: readonly SubAgentRecord[] | undefined,
+  localAgents: readonly SubAgentRecord[],
+  preferLocalAgents: boolean,
+): SubAgentRecord[] {
+  if (!preferLocalAgents) return sanitizeSubAgents(remoteAgents ?? [])
+  const merged = new Map<string, SubAgentRecord>()
+  for (const agent of sanitizeSubAgents(remoteAgents ?? [])) {
+    merged.set(agent.id, agent)
+  }
+  for (const agent of sanitizeSubAgents(localAgents)) {
+    const existing = merged.get(agent.id)
+    if (!existing || (agent.updatedAt ?? 0) >= (existing.updatedAt ?? 0)) {
+      merged.set(agent.id, agent)
+    }
+  }
+  return Array.from(merged.values())
+}
+
+async function resolveSessionWriteConflict(
+  sessionId: string,
+  payload: SessionFilePayload,
+  explicitSubAgents: SubAgentRecord[] | undefined,
+  originalError: unknown,
+): Promise<void> {
+  const live = useMessageStore.getState().entriesBySession[sessionId]
+  const baseline = sessionBaselineLengths.get(sessionId)
+  const removal = pendingEntryRemovals.get(sessionId)
+  const expectedRevision = payload.expectedEntriesRevision
+  if (
+    deletedRemoteSessionIds.has(sessionId) ||
+    (expectedRevision && sessionEntriesRevisions.get(sessionId) !== expectedRevision) ||
+    (live && !canonicalEqual(
+      sanitizeConversationEntries({ [sessionId]: live })[sessionId],
+      sanitizeConversationEntries({ [sessionId]: payload.entries })[sessionId],
+    ))
+  ) {
+    throw new Error('SESSION_HISTORY_PENDING: Remote history unavailable or changed during read')
+  }
+
+  if (
+    expectedRevision !== undefined &&
+    baseline !== undefined &&
+    live &&
+    live.length < baseline &&
+    !payload.removedEntryIds?.length &&
+    !removal?.size
+  ) {
+    throw originalError
+  }
+
+  const readEpoch = sessionReadEpochs.get(sessionId) ?? 0
+  const writeEpoch = sessionWriteEpochs.get(sessionId) ?? 0
+  const editGeneration = historyEditGenerations.get(sessionId) ?? 0
+  const metadataGeneration = metadataEditGenerations.get(sessionId) ?? 0
+  const agentGeneration = agentEditGenerations.get(sessionId) ?? 0
+  const removalSequence = entryRemovalSequence
+
+  const snapshot = await readSessionSnapshot(sessionId).catch(() => null)
+  if (!snapshot) {
+    throw new Error('SESSION_HISTORY_PENDING: Remote history unavailable or changed during read')
+  }
+
+  if (
+    deletedRemoteSessionIds.has(sessionId) ||
+    (sessionReadEpochs.get(sessionId) ?? 0) !== readEpoch ||
+    (sessionWriteEpochs.get(sessionId) ?? 0) !== writeEpoch ||
+    (historyEditGenerations.get(sessionId) ?? 0) !== editGeneration ||
+    (metadataEditGenerations.get(sessionId) ?? 0) !== metadataGeneration ||
+    (agentEditGenerations.get(sessionId) ?? 0) !== agentGeneration ||
+    entryRemovalSequence !== removalSequence ||
+    sessionEntriesRevisions.get(sessionId) !== expectedRevision ||
+    useMessageStore.getState().entriesBySession[sessionId] !== live
+  ) {
+    throw new Error('SESSION_HISTORY_PENDING: Remote history unavailable or changed during read')
+  }
+
+  const canFastForward =
+    !isSessionRunning(sessionId) &&
+    expectedRevision !== undefined &&
+    baseline !== undefined &&
+    live !== undefined &&
+    !payload.removedEntryIds?.length &&
+    !removal?.size &&
+    live.length >= baseline &&
+    !hasPendingEdit(agentEditGenerations, acknowledgedAgentGenerations, sessionId) &&
+    snapshot.entriesRevision !== expectedRevision &&
+    isCanonicalHistoryPrefix(live, snapshot.entries)
+
+  if (canFastForward) {
+    withSuppressedPersistence(() => {
+      useMessageStore.getState().replaceSessionEntries(sessionId, snapshot.entries)
+      useSubAgentStore.getState().setAgentsForParent(sessionId, snapshot.subAgents ?? [])
+    })
+    sessionEntriesRevisions.set(sessionId, snapshot.entriesRevision)
+    sessionBaselineLengths.set(sessionId, snapshot.entries.length)
+    acknowledgedHistoryGenerations.set(sessionId, editGeneration)
+    acknowledgedAgentGenerations.set(sessionId, agentGeneration)
+    if (!hasPendingSessionMetadata(sessionId) && !hasPendingHistoryEdit(sessionId)) {
+      dirtySessionIds.delete(sessionId)
+    }
+    sessionReadEpochs.set(sessionId, readEpoch + 1)
+    loadedSessionIds.add(sessionId)
+    staleSessionIds.delete(sessionId)
+    if (hasPendingSessionMetadata(sessionId)) {
+      return writeSessionData(
+        sessionId,
+        useMessageStore.getState().getEntries(sessionId),
+        undefined,
+        true,
+        historyEditGenerations.get(sessionId) ?? 0,
+        snapshot.entriesRevision,
+      )
+    }
+    return
+  }
+
+  if (isSessionRunning(sessionId) && baseline !== undefined && snapshot.entries.length < baseline) {
+    throw new Error('SESSION_HISTORY_PENDING: Remote history unavailable or changed during read')
+  }
+
+  const localEntries = live
+    ? (sanitizeConversationEntries({ [sessionId]: live })[sessionId] ?? [])
+    : payload.entries
+  const localRetainedIds = new Set(localEntries.map((entry) => entry.id))
+  const explicitlyRemovedIds = new Set<string>(payload.removedEntryIds ?? [])
+  if (removal) {
+    for (const id of removal.keys()) {
+      if (!localRetainedIds.has(id)) explicitlyRemovedIds.add(id)
+    }
+  }
+
+  const keptRemote = snapshot.entries.filter((entry) => !explicitlyRemovedIds.has(entry.id))
+  const preferLocalEdits = hasPendingHistoryEdit(sessionId) || isSessionRunning(sessionId)
+  const mergedEntries = mergeSessionEntriesOrderPreserving(
+    keptRemote,
+    localEntries,
+    preferLocalEdits,
+  )
+  const mergedRemovals = snapshot.entries
+    .filter((entry) => explicitlyRemovedIds.has(entry.id))
+    .map((entry) => entry.id)
+
+  const preferLocalAgents =
+    explicitSubAgents !== undefined ||
+    hasPendingEdit(agentEditGenerations, acknowledgedAgentGenerations, sessionId)
+  const localAgents =
+    explicitSubAgents ??
+    agentsForParent(useSubAgentStore.getState().agents, sessionId)
+  const mergedSubAgents = mergeSubAgentsForRebase(
+    snapshot.subAgents,
+    localAgents,
+    preferLocalAgents,
+  )
+
+  const payloadRemovals = payload.removedEntryIds ?? []
+  const sameRemovals =
+    mergedRemovals.length === payloadRemovals.length &&
+    mergedRemovals.every((id, idx) => payloadRemovals[idx] === id)
+  const isIdenticalAttempt =
+    snapshot.entriesRevision === expectedRevision &&
+    canonicalEqual(mergedEntries, payload.entries) &&
+    sameRemovals
+  if (isIdenticalAttempt) {
+    throw originalError
+  }
+
+  if (
+    mergedRemovals.length === 0 &&
+    !hasPendingSessionMetadata(sessionId) &&
+    !preferLocalAgents &&
+    canonicalEqual(mergedEntries, snapshot.entries)
+  ) {
+    withSuppressedPersistence(() => {
+      useMessageStore.getState().replaceSessionEntries(sessionId, snapshot.entries)
+      useSubAgentStore.getState().setAgentsForParent(sessionId, snapshot.subAgents ?? [])
+    })
+    sessionEntriesRevisions.set(sessionId, snapshot.entriesRevision)
+    sessionBaselineLengths.set(sessionId, snapshot.entries.length)
+    acknowledgedHistoryGenerations.set(sessionId, editGeneration)
+    acknowledgedAgentGenerations.set(sessionId, agentGeneration)
+    if (!hasPendingSessionMetadata(sessionId) && !hasPendingHistoryEdit(sessionId)) {
+      dirtySessionIds.delete(sessionId)
+    }
+    sessionReadEpochs.set(sessionId, readEpoch + 1)
+    loadedSessionIds.add(sessionId)
+    staleSessionIds.delete(sessionId)
+    return
+  }
+
+  await writeSessionData(
+    sessionId,
+    mergedEntries,
+    mergedSubAgents,
+    true,
+    editGeneration,
+    snapshot.entriesRevision,
+    mergedRemovals,
+  )
+
+  if (
+    !deletedRemoteSessionIds.has(sessionId) &&
+    useMessageStore.getState().entriesBySession[sessionId] === live
+  ) {
+    withSuppressedPersistence(() => {
+      useMessageStore.getState().replaceSessionEntries(sessionId, mergedEntries)
+      useSubAgentStore.getState().setAgentsForParent(sessionId, mergedSubAgents)
+    })
+  }
+  loadedSessionIds.add(sessionId)
+  staleSessionIds.delete(sessionId)
+}
+
 async function writeSessionData(
   sessionId: string,
   entries: ConversationEntry[],
@@ -1976,6 +2290,7 @@ async function writeSessionData(
   retry = false,
   historyGeneration = historyEditGenerations.get(sessionId) ?? 0,
   expectedEntriesRevision = sessionEntriesRevisions.get(sessionId),
+  explicitRemovals?: readonly string[],
 ): Promise<void> {
   const metadataGeneration = metadataEditGenerations.get(sessionId) ?? 0
   const titleGeneration = titleEditGenerations.get(sessionId) ?? 0
@@ -2020,6 +2335,9 @@ async function writeSessionData(
   const retainedIds = new Set(sanitized.map((entry) => entry.id))
   const removals = new Map(Array.from(pendingEntryRemovals.get(sessionId) ?? [])
     .filter(([id]) => !retainedIds.has(id)))
+  const removedEntryIds = explicitRemovals
+    ? Array.from(new Set([...explicitRemovals, ...removals.keys()]))
+    : Array.from(removals.keys())
   // Historical subagents without recorded speed must not inherit current preferences.
   const speed = subAgentRecord ? subAgentRecord.speed : session?.speed ?? settings?.speed
   const payload: SessionFilePayload = {
@@ -2027,7 +2345,7 @@ async function writeSessionData(
     version: CURRENT_VERSION,
     entries: sanitized,
     expectedEntriesRevision,
-    removedEntryIds: Array.from(removals.keys()),
+    removedEntryIds,
     ...(session?.title ? { title: session.title } : {}),
     ...(session?.pinned !== undefined ? { pinned: session.pinned } : {}),
     unread: session?.unread ?? false,
@@ -2054,40 +2372,21 @@ async function writeSessionData(
 
   const bridge = getHostBridge()
   if (bridge?.SessionSet) {
-    // Freeze conflicting writes until the user preserves a copy and explicitly recovers.
-    const conflict = historyConflicts.get(sessionId)
-    if (conflict) {
-      conflict.payload = payload
-      throw new Error('SESSION_HISTORY_CONFLICT: Preserve a local copy and reload to recover')
-    }
     let revision: string
+    inFlightSessionSets.set(sessionId, (inFlightSessionSets.get(sessionId) ?? 0) + 1)
     try {
       revision = await bridge.SessionSet(sessionId, payload)
     } catch (error) {
       if (String(error).includes('SESSION_DELETED')) markRemoteSessionDeleted(sessionId)
       if (String(error).includes('SESSION_HISTORY_CONFLICT') && !deletedRemoteSessionIds.has(sessionId)) {
         if (retry) throw new Error('SESSION_HISTORY_PENDING: Remote history changed again')
-        const result = await tryFastForwardSessionHistory(sessionId, payload.entries,
-          payload.expectedEntriesRevision, payload.removedEntryIds)
-        if (result === 'applied') {
-          if (hasPendingSessionMetadata(sessionId)) {
-            return writeSessionData(sessionId, useMessageStore.getState().getEntries(sessionId), undefined, true,
-              historyEditGenerations.get(sessionId) ?? 0)
-          }
-          return
-        }
-        if (result === 'deferred') throw new Error('SESSION_HISTORY_PENDING: Remote history unavailable or changed during read')
-        const toastId = useUiStore.getState().pushToast(
-          `History conflict in "${payload.title || sessionId}". Stop this session, then preserve a local copy and reload.`,
-          { label: 'Preserve & reload', run: () => {
-            void recoverSessionHistory(sessionId).catch((recoveryError) => {
-              useUiStore.getState().pushToast(String(recoveryError))
-            })
-          } },
-        )
-        historyConflicts.set(sessionId, { payload, toastId })
+        return await resolveSessionWriteConflict(sessionId, payload, subAgents, error)
       }
       throw error
+    } finally {
+      const nextCount = (inFlightSessionSets.get(sessionId) ?? 1) - 1
+      if (nextCount > 0) inFlightSessionSets.set(sessionId, nextCount)
+      else inFlightSessionSets.delete(sessionId)
     }
     if (deletedRemoteSessionIds.has(sessionId)) return
     const allowedPreRun = preRunFlushAllowed.get(sessionId)
@@ -2385,10 +2684,8 @@ function hydrateSessionFromDisk(
       initiallyUnsaved || hasUnsavedSessionHistory(sessionId)
     const removed = pendingEntryRemovals.get(sessionId)
     const diskEntries = loaded.entries.filter((entry) => !removed?.has(entry.id))
-    const liveIds = new Set(live.map((entry) => entry.id))
     const entries = mergeLive && live.length > 0
-      ? [...diskEntries.filter((entry) => !liveIds.has(entry.id)), ...live]
-        .sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))
+      ? mergeSessionEntriesOrderPreserving(diskEntries, live, true)
       : diskEntries
 
     // Suppress only our synchronous hydration, not live events arriving during I/O.
@@ -2400,11 +2697,13 @@ function hydrateSessionFromDisk(
         useSubAgentStore.getState().setAgentsForParent(sessionId, loaded.subAgents ?? [])
       }
     })
-    if (!mergeLive && loaded.entriesRevision) {
+    if ((!mergeLive || !sessionEntriesRevisions.has(sessionId)) && loaded.entriesRevision) {
       sessionEntriesRevisions.set(sessionId, loaded.entriesRevision)
       sessionBaselineLengths.set(sessionId, loaded.entries.length)
-      acknowledgedHistoryGenerations.set(sessionId, historyEditGenerations.get(sessionId) ?? 0)
-      acknowledgedAgentGenerations.set(sessionId, agentEditGenerations.get(sessionId) ?? 0)
+      if (!mergeLive) {
+        acknowledgedHistoryGenerations.set(sessionId, historyEditGenerations.get(sessionId) ?? 0)
+        acknowledgedAgentGenerations.set(sessionId, agentEditGenerations.get(sessionId) ?? 0)
+      }
     }
     loadedSessionIds.add(sessionId)
     staleSessionIds.delete(sessionId)
@@ -3703,6 +4002,7 @@ export function __resetPersistenceForTests(): void {
   failedWakeSessions.clear()
   sessionWriteEpochs.clear()
   persistingSessionIds.clear()
+  inFlightSessionSets.clear()
   preRunFlushAllowed.clear()
   deferredRemoteSessionMetadata.clear()
   historyConflicts.clear()

@@ -10,6 +10,7 @@ import {
     hasUnsavedSessionHistory,
     initPersistence,
     invalidateSessionDiskCache,
+    isSessionPersistInFlight,
     reloadSessionFromDisk,
     withSuppressedPersistence,
 } from './persistenceService'
@@ -308,8 +309,29 @@ export async function bootstrapApplication(): Promise<void> {
     await pluginPlatformCoordinator.activate(graph, { mainParticipant })
     setProtectedSessionPredicate((sessionId) => {
         const run = useSessionRunStore.getState().activeRuns[sessionId]
-        return useSessionStore.getState().currentSessionId === sessionId ||
-            Boolean(run && run.status !== 'idle') || hasUnsavedSessionHistory(sessionId)
+        const currentSessionId = useSessionStore.getState().currentSessionId
+        const subAgents = useSubAgentStore.getState().agents
+        const activeSubAgent = subAgents.some(
+            (agent) =>
+                (agent.sessionId === sessionId ||
+                    agent.id === sessionId ||
+                    agent.parentSessionId === sessionId) &&
+                (agent.status === 'running' || agent.status === 'queued'),
+        )
+        const subAgentOfCurrent =
+            Boolean(currentSessionId) &&
+            subAgents.some(
+                (agent) =>
+                    (agent.sessionId === sessionId || agent.id === sessionId) &&
+                    agent.parentSessionId === currentSessionId,
+            )
+        return (
+            currentSessionId === sessionId ||
+            Boolean(run && run.status !== 'idle') ||
+            activeSubAgent ||
+            subAgentOfCurrent ||
+            hasUnsavedSessionHistory(sessionId)
+        )
     })
     await initPersistence()
 
@@ -369,6 +391,9 @@ export async function bootstrapApplication(): Promise<void> {
                 void hostServices.skillUsage.fetchUsageCounts().catch(() => {})
                 const { sessionId } = JSON.parse(event.data) as { sessionId: string }
                 if (sessionId) {
+                    if (isSessionPersistInFlight(sessionId)) {
+                        return
+                    }
                     invalidateSessionDiskCache(sessionId)
                     const current = useSessionStore.getState().currentSessionId
                     const isRunning =

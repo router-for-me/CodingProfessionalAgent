@@ -1111,12 +1111,26 @@ export class SubAgentHost {
         }
         const resolvedId = record.id
 
+        const runtime = this.runtimes.get(resolvedId)
+        if (!runtime?.running) {
+            const config = this.getConfig(record.parentSessionId)
+            if (config?.getEntries && (!runtime || runtime.entries.length === 0)) {
+                try {
+                    const loaded = await config.getEntries(record.sessionId)
+                    if (Array.isArray(loaded) && loaded.length > 0 && runtime) {
+                        runtime.entries = [...loaded]
+                    }
+                } catch {
+                    // ignore
+                }
+            }
+        }
+
         // Always create user entry and emit to UI immediately so the follow-up message
         // appears in the sub-agent conversation view just like the initial prompt.
         const userEntry = this.makeUserEntry(record.sessionId, trimmed)
         this.emitUserEntry(userEntry)
 
-        const runtime = this.runtimes.get(resolvedId)
         if (runtime?.running) {
             runtime.inbox.push(userEntry)
             return textResult(`Message sent to ${record.name}`)

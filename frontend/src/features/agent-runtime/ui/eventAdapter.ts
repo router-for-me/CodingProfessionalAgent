@@ -52,6 +52,7 @@ export interface ConversationStoreActions {
   replaceSessionEntries: (
     sessionId: string,
     entries: readonly ConversationEntry[],
+    options?: { historyMutation: 'truncate' },
   ) => void
 }
 
@@ -865,7 +866,11 @@ export function createAgentEventAdapter(
           const kept = isPendingActivation
             ? existing.map((e, idx) => (idx === existingIndex ? updatedEntry : e))
             : [...existing.slice(0, existingIndex), updatedEntry]
-          actions.replaceSessionEntries(sessionId, kept)
+          actions.replaceSessionEntries(
+            sessionId,
+            kept,
+            isPendingActivation ? undefined : { historyMutation: 'truncate' },
+          )
           const meta = registry.runMetaBySession.get(sessionId)
           if (meta) {
             meta.baseIds = new Set(kept.map((e) => e.id))
@@ -1104,7 +1109,7 @@ export function createAgentEventAdapter(
           )
         if (existing) return NO_CHANGE
         const entry = deepClone(event.entry) as CompactionEntry
-        actions.appendEntry(entry)
+        actions.replaceEntry(entry)
         markOwned(sessionId, entry.id)
         return { changed: true, urgency: 'immediate' }
       }

@@ -1193,9 +1193,7 @@ function extractUserEntryImages(entry: UserEntry): ComposerImage[] {
 }
 
 function removeEntryFromStore(sessionId: string, entryId: string): void {
-    const list = useMessageStore.getState().getEntries(sessionId)
-    const next = list.filter((e) => e.id !== entryId)
-    useMessageStore.getState().replaceSessionEntries(sessionId, next)
+    useMessageStore.getState().removeEntry(sessionId, entryId)
     schedulePersist(true)
 }
 
@@ -2800,16 +2798,11 @@ export function useAgentStream(
                         }
                     }
 
-                    const firstQueuedId = queuedIds[0]
-                    const firstIndex = existingEntries.findIndex(
-                        (entry) => entry.id === firstQueuedId,
-                    )
-                    const rawPrior =
-                        firstIndex !== -1
-                            ? existingEntries.slice(0, firstIndex)
-                            : existingEntries
-                    priorEntries = rawPrior.filter(
-                        (e) => !(e.kind === 'user' && e.pendingStatus === 'queue'),
+                    const queuedIdSet = new Set(queuedIds)
+                    priorEntries = existingEntries.filter(
+                        (e) =>
+                            !queuedIdSet.has(e.id) &&
+                            !(e.kind === 'user' && e.pendingStatus === 'queue'),
                     )
 
                     userEntry =

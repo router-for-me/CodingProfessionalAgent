@@ -36,7 +36,6 @@ import {
   loadSessionEntries,
   markRemoteSessionDeleted,
   reloadSessionFromDisk,
-  recoverSessionHistory,
   hasUnsavedSessionHistory,
   sanitizeConversationEntries,
   sanitizeSubAgents,
@@ -700,7 +699,7 @@ describe('persist pure helpers', () => {
     expect(SessionSet).toHaveBeenCalledWith(sessionId, expect.objectContaining({ removedEntryIds: [] }))
   })
 
-  it('preserves a durable local conflict copy before restoring remote history and resuming saves', async () => {
+  it('automatically rebases a conflicting local edit onto the latest remote revision without pushing a conflict toast', async () => {
     const sessionId = 'recover-conflict'
     const original = assistant('entry', sessionId, 'done', 'original')
     const remote = assistant('entry', sessionId, 'done', 'remote edit')
@@ -708,36 +707,27 @@ describe('persist pure helpers', () => {
     let disk = { entries: [original], entriesRevision: 'r1' }
     const KVStoreSet = vi.fn().mockResolvedValue(undefined)
     const SessionSet = vi.fn().mockRejectedValueOnce(new Error('SESSION_HISTORY_CONFLICT'))
-      .mockResolvedValueOnce('copy-r1').mockResolvedValueOnce('r3')
+      .mockResolvedValueOnce('r3').mockResolvedValueOnce('r4')
     setHostBridge({ SessionGet: vi.fn(async () => disk), SessionSet,
       KVStoreGet: vi.fn(async () => null), KVStoreSet } as any)
     await ensureSessionLoaded(sessionId)
+    bindPersistence({ debounceMs: 100000 })
     useMessageStore.getState().replaceEntry(local)
     disk = { entries: [remote], entriesRevision: 'r2' }
-    await expect(savePersistedState(serializeAppState())).rejects.toThrow('SESSION_HISTORY_CONFLICT')
+    await expect(savePersistedState(serializeAppState())).resolves.toBeUndefined()
     expect(KVStoreSet).toHaveBeenCalledWith('app-state', expect.anything())
-    expect(useUiStore.getState().toasts.some((toast) => toast.action)).toBe(true)
-    await expect(saveSessionData(sessionId, [local])).rejects.toThrow('SESSION_HISTORY_CONFLICT')
-    expect(SessionSet).toHaveBeenCalledTimes(1)
-    useSessionRunStore.getState().setRun(sessionId, {
-      sessionId, runId: 'run', clientId: 'desktop', status: 'running', updatedAt: 1,
-    })
-    await expect(recoverSessionHistory(sessionId)).rejects.toThrow('Stop the session')
-    expect(SessionSet).toHaveBeenCalledTimes(1)
-    useSessionRunStore.getState().clearRun(sessionId)
-    await recoverSessionHistory(sessionId)
-    const copy = useSessionStore.getState().sessions.find((session) => session.id !== sessionId)!
-    expect(copy.title).toContain('History conflict copy')
-    expect(SessionSet).toHaveBeenNthCalledWith(2, copy.id, expect.objectContaining({
-      entries: [expect.objectContaining({ sessionId: copy.id, content: (local as AssistantEntry).content })],
-      expectedEntriesRevision: undefined,
+    expect(useUiStore.getState().toasts).toEqual([])
+    expect(useSessionStore.getState().sessions.some((s) => s.title?.includes('History conflict copy'))).toBe(false)
+    expect(SessionSet).toHaveBeenNthCalledWith(2, sessionId, expect.objectContaining({
+      entries: [expect.objectContaining({ sessionId, content: (local as AssistantEntry).content })],
+      expectedEntriesRevision: 'r2',
     }))
-    expect(useMessageStore.getState().getEntries(sessionId)).toEqual([remote])
-    await saveSessionData(sessionId, [remote])
-    expect(SessionSet).toHaveBeenNthCalledWith(3, sessionId, expect.objectContaining({ expectedEntriesRevision: 'r2' }))
+    expect(useMessageStore.getState().getEntries(sessionId)).toEqual([local])
+    await saveSessionData(sessionId, [local])
+    expect(SessionSet).toHaveBeenNthCalledWith(3, sessionId, expect.objectContaining({ expectedEntriesRevision: 'r3' }))
   })
 
-  it('retains in-flight local edits during reload and preserves them on conflict recovery', async () => {
+  it('retains in-flight local edits during reload and automatically rebases them on conflict', async () => {
     const sessionId = 'inflight-reload-conflict'
     const original = assistant('entry', sessionId, 'done', 'original')
     const local = assistant('entry', sessionId, 'done', 'local edit')
@@ -746,27 +736,26 @@ describe('persist pure helpers', () => {
     let rejectWrite!: (error: Error) => void
     const SessionSet = vi.fn()
       .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectWrite = reject }))
-      .mockResolvedValue('copy-r1')
+      .mockResolvedValue('r3')
     setHostBridge({ SessionGet: vi.fn(async () => disk), SessionSet } as any)
     await ensureSessionLoaded(sessionId)
+    bindPersistence({ debounceMs: 100000 })
     useMessageStore.getState().replaceEntry(local)
-    const save = expect(saveSessionData(sessionId, [local])).rejects.toThrow('SESSION_HISTORY_CONFLICT')
+    const save = saveSessionData(sessionId, [local])
     await flushWrites()
     disk = { entries: [remote], entriesRevision: 'r2' }
     await reloadSessionFromDisk(sessionId)
     expect(useMessageStore.getState().getEntries(sessionId)).toEqual([local])
     rejectWrite(new Error('SESSION_HISTORY_CONFLICT'))
-    await save
-    await reloadSessionFromDisk(sessionId)
-    expect(useMessageStore.getState().getEntries(sessionId)).toEqual([local])
-    await recoverSessionHistory(sessionId)
-    expect(SessionSet).toHaveBeenNthCalledWith(2, expect.any(String), expect.objectContaining({
+    await expect(save).resolves.toBeUndefined()
+    expect(SessionSet).toHaveBeenNthCalledWith(2, sessionId, expect.objectContaining({
       entries: [expect.objectContaining({ content: (local as AssistantEntry).content })],
+      expectedEntriesRevision: 'r2',
     }))
-    expect(useMessageStore.getState().getEntries(sessionId)).toEqual([remote])
+    expect(useMessageStore.getState().getEntries(sessionId)).toEqual([local])
   })
 
-  it.each([true, false])('adopts the remote subagent set during conflict recovery (nonempty=%s)', async (nonempty) => {
+  it.each([true, false])('adopts the remote subagent set during automatic conflict reconciliation (nonempty=%s)', async (nonempty) => {
     const sessionId = 'recover-subagents'
     const entry = assistant('entry', sessionId, 'done', 'entry')
     const oldAgent = { id: 'old-agent', sessionId: 'old-agent', parentSessionId: sessionId,
@@ -778,8 +767,7 @@ describe('persist pure helpers', () => {
     setHostBridge({ SessionGet: vi.fn(async () => ({ entries: [entry], entriesRevision: 'r2', subAgents: remoteAgents })), SessionSet } as any)
     useMessageStore.getState().replaceSessionEntries(sessionId, [entry])
     useSubAgentStore.getState().setAgentsForParent(sessionId, [oldAgent])
-    await expect(saveSessionData(sessionId, [entry])).rejects.toThrow('SESSION_HISTORY_CONFLICT')
-    await recoverSessionHistory(sessionId)
+    await expect(saveSessionData(sessionId, [entry])).resolves.toBeUndefined()
     expect(useSubAgentStore.getState().agents.filter((agent) => agent.parentSessionId === sessionId)).toEqual(remoteAgents)
     await saveSessionData(sessionId, [entry])
     const saved = SessionSet.mock.calls[SessionSet.mock.calls.length - 1][1]
@@ -787,55 +775,64 @@ describe('persist pure helpers', () => {
     expect(saved.expectedEntriesRevision).toBe('r2')
   })
 
-  it('drains queued conflict snapshots before choosing the local recovery copy', async () => {
-    const sessionId = 'queued-conflict-copy'
-    const old = assistant('entry', sessionId, 'done', 'old local')
-    const latest = assistant('entry', sessionId, 'done', 'latest local')
-    const SessionSet = vi.fn().mockRejectedValueOnce(new Error('SESSION_HISTORY_CONFLICT'))
-      .mockResolvedValueOnce('copy-r1')
-    setHostBridge({ SessionSet, SessionGet: vi.fn(async () => ({ entries: [], entriesRevision: 'remote-r2' })) } as any)
-    await expect(saveSessionData(sessionId, [old])).rejects.toThrow('SESSION_HISTORY_CONFLICT')
-    const queued = expect(saveSessionData(sessionId, [latest])).rejects.toThrow('SESSION_HISTORY_CONFLICT')
-    await recoverSessionHistory(sessionId)
-    await queued
-    expect(SessionSet).toHaveBeenNthCalledWith(2, expect.any(String), expect.objectContaining({
-      entries: [expect.objectContaining({ content: (latest as AssistantEntry).content })],
+  it('automatically merges remote prefix history when saving an evicted subagent session without baseline', async () => {
+    const sessionId = '03790007-1eef-48e1-ba27-65539c59c59c'
+    const prefix0 = { ...assistant('e0', sessionId, 'done', 'turn 1'), createdAt: 10 }
+    const prefix1 = { ...assistant('e1', sessionId, 'done', 'turn 2'), createdAt: 20 }
+    const tail2 = { ...assistant('e2', sessionId, 'done', 'turn 3 after eviction'), createdAt: 30 }
+    const SessionSet = vi.fn()
+      .mockRejectedValueOnce(new Error('SESSION_HISTORY_CONFLICT: A complete history baseline is required'))
+      .mockResolvedValueOnce('r2')
+    setHostBridge({
+      SessionSet,
+      SessionGet: vi.fn(async () => ({ entries: [prefix0, prefix1], entriesRevision: 'r1' })),
+    } as any)
+    useMessageStore.getState().replaceSessionEntries(sessionId, [tail2])
+    await expect(saveSessionData(sessionId, [tail2])).resolves.toBeUndefined()
+    expect(SessionSet).toHaveBeenNthCalledWith(2, sessionId, expect.objectContaining({
+      entries: [prefix0, prefix1, tail2],
+      expectedEntriesRevision: 'r1',
     }))
+    expect(useMessageStore.getState().getEntries(sessionId)).toEqual([prefix0, prefix1, tail2])
+    expect(useUiStore.getState().toasts).toEqual([])
   })
 
-  it('keeps local edits and removal intent if preserving a conflict copy fails', async () => {
-    const sessionId = 'failed-copy'
+  it('propagates storage error and preserves local removal intent if automatic rebase write fails', async () => {
+    const sessionId = 'failed-rebase'
     const entry = assistant('entry', sessionId, 'done', 'original')
+    const remote = assistant('remote', sessionId, 'done', 'remote')
+    const SessionGet = vi.fn()
+      .mockResolvedValueOnce({ entries: [entry], entriesRevision: 'r1' })
+      .mockResolvedValueOnce({ entries: [entry, remote], entriesRevision: 'r2' })
     const SessionSet = vi.fn().mockRejectedValueOnce(new Error('SESSION_HISTORY_CONFLICT'))
       .mockRejectedValueOnce(new Error('disk full'))
-    setHostBridge({ SessionGet: vi.fn(async () => ({ entries: [entry], entriesRevision: 'r1' })), SessionSet } as any)
+    setHostBridge({ SessionGet, SessionSet } as any)
     await ensureSessionLoaded(sessionId)
     useMessageStore.getState().replaceSessionEntries(sessionId, [], { historyMutation: 'truncate' })
-    await expect(saveSessionData(sessionId, [])).rejects.toThrow('SESSION_HISTORY_CONFLICT')
-    await expect(recoverSessionHistory(sessionId)).rejects.toThrow('disk full')
+    await expect(saveSessionData(sessionId, [])).rejects.toThrow('disk full')
     expect(useMessageStore.getState().getEntries(sessionId)).toEqual([])
     expect(hasUnsavedSessionHistory(sessionId)).toBe(true)
     expect(useSessionStore.getState().sessions).toEqual([])
   })
 
-  it('does not overwrite edits made while a conflict copy is being persisted', async () => {
-    const sessionId = 'recovery-race'
+  it('does not overwrite newer local edits made while an automatic rebase write is in flight', async () => {
+    const sessionId = 'rebase-race'
+    const remote = assistant('entry', sessionId, 'done', 'remote')
     const entry = assistant('entry', sessionId, 'done', 'local')
-    let finishCopy!: (revision: string) => void
+    let finishRebase!: (revision: string) => void
     const SessionSet = vi.fn().mockRejectedValueOnce(new Error('SESSION_HISTORY_CONFLICT'))
-      .mockImplementationOnce(() => new Promise((resolve) => { finishCopy = resolve }))
-    setHostBridge({ SessionGet: vi.fn(async () => ({ entries: [entry], entriesRevision: 'r1' })), SessionSet } as any)
-    await ensureSessionLoaded(sessionId)
-    await expect(saveSessionData(sessionId, [entry])).rejects.toThrow('SESSION_HISTORY_CONFLICT')
-    const recovery = recoverSessionHistory(sessionId)
-    await flushWrites()
+      .mockImplementationOnce(() => new Promise((resolve) => { finishRebase = resolve }))
+    setHostBridge({ SessionGet: vi.fn(async () => ({ entries: [remote], entriesRevision: 'r1' })), SessionSet } as any)
+    bindPersistence({ debounceMs: 100000 })
+    useMessageStore.getState().replaceEntry(entry)
+    const save = saveSessionData(sessionId, [entry])
+    await vi.waitFor(() => expect(SessionSet).toHaveBeenCalledTimes(2))
     const changed = assistant('entry', sessionId, 'done', 'new local edit')
     useMessageStore.getState().replaceEntry(changed)
-    finishCopy('copy-revision')
-    await expect(recovery).rejects.toThrow('Session changed during recovery')
+    finishRebase('r2')
+    await expect(save).resolves.toBeUndefined()
     expect(useMessageStore.getState().getEntries(sessionId)).toEqual([changed])
     expect(hasUnsavedSessionHistory(sessionId)).toBe(true)
-    expect(useSessionStore.getState().sessions).toHaveLength(1)
   })
 
   it('invalidates queued writes and waits for the in-flight write before deleting', async () => {

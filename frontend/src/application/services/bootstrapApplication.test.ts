@@ -212,6 +212,66 @@ describe('bootstrapApplication', () => {
         }
     })
 
+    it('keeps active subagent sessions out of LRU eviction while tool execution is in flight', async () => {
+        setHostBridge({
+            StorageGet: vi.fn().mockResolvedValue(null),
+            StorageSet: vi.fn().mockResolvedValue(undefined),
+            PluginsScan: vi.fn().mockResolvedValue([]),
+        } as any)
+        await bootstrapApplication()
+        const { useSubAgentStore } = await import('@/stores/subAgentStore')
+        const previousMessages = useMessageStore.getState()
+        const previousAgents = useSubAgentStore.getState().agents
+        const previousCurrent = useSessionStore.getState().currentSessionId
+        try {
+            const subagentSessionId = '03790007-1eef-48e1-ba27-65539c59c59c'
+            useMessageStore.setState({ entriesBySession: {}, maxCachedSessions: 2 })
+            useSessionStore.setState({ currentSessionId: 'foreground' })
+            useSubAgentStore.getState().replaceAll([
+                {
+                    id: subagentSessionId,
+                    sessionId: subagentSessionId,
+                    parentSessionId: 'parent-session',
+                    name: 'reviewer-falcon',
+                    modelId: 'gpt-6-astra',
+                    status: 'running',
+                    createdAt: 1,
+                    updatedAt: 1,
+                    color: '#9b7dff',
+                    icon: 'sparkle',
+                },
+            ])
+            withSuppressedPersistence(() => {
+                useMessageStore.getState().appendEntry({
+                    id: 'subagent-assistant',
+                    sessionId: subagentSessionId,
+                    kind: 'assistant',
+                    version: 1,
+                    createdAt: 1,
+                    status: 'done',
+                    stopReason: 'toolUse',
+                    content: [{ type: 'toolCall', id: 'call-1', name: 'exec', arguments: {} }],
+                } as any)
+                for (const sessionId of ['idle', 'new']) {
+                    useMessageStore.getState().appendEntry({
+                        id: sessionId,
+                        sessionId,
+                        kind: 'user',
+                        version: 1,
+                        createdAt: 2,
+                        content: [],
+                    })
+                }
+            })
+            expect(useMessageStore.getState().entriesBySession[subagentSessionId]).toHaveLength(1)
+            expect(useMessageStore.getState().entriesBySession.idle).toBeUndefined()
+        } finally {
+            useMessageStore.setState({ entriesBySession: previousMessages.entriesBySession, maxCachedSessions: previousMessages.maxCachedSessions })
+            useSubAgentStore.getState().replaceAll(previousAgents)
+            useSessionStore.setState({ currentSessionId: previousCurrent })
+        }
+    })
+
     it('silently catches up a visible idle browser session without a reconnect or save echo', async () => {
         const id = 'visible-session'
         const prompt = { id: 'prompt', sessionId: id, kind: 'user', version: 1, createdAt: 1,
