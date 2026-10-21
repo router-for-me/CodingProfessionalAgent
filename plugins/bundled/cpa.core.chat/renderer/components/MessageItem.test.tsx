@@ -890,6 +890,42 @@ export FOO=bar
     expect(preElements[0]?.textContent).toContain('export FOO=bar')
   })
 
+  it('renders a copy button in the top-right corner of markdown code blocks and copies code content', async () => {
+    const writeClipboard = vi.fn().mockResolvedValue(undefined)
+    const pushToast = vi.fn()
+    const rawContent = [
+      'Here is a code snippet:',
+      '```typescript',
+      'const answer = 42;',
+      'console.log(answer);',
+      '```',
+    ].join('\n')
+
+    render(
+      <HostServicesProvider
+        services={{
+          ui: {
+            writeClipboard,
+            pushToast,
+          },
+        } as any}
+      >
+        <AssistantText text={rawContent} />
+      </HostServicesProvider>,
+    )
+
+    const copyBtn = screen.getByTestId('code-block-copy-btn')
+    expect(copyBtn).toBeInTheDocument()
+    expect(copyBtn).toHaveAttribute('aria-label', 'Copy code')
+
+    fireEvent.click(copyBtn)
+
+    await waitFor(() => {
+      expect(writeClipboard).toHaveBeenCalledWith('const answer = 42;\nconsole.log(answer);')
+    })
+    expect(pushToast).not.toHaveBeenCalled()
+  })
+
   it('balances nested markdown code blocks so inner code and closing backticks remain intact', () => {
     const rawNested = [
       '### Draft Notice',

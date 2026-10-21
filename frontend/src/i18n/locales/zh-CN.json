@@ -918,6 +918,7 @@
   "message.error": "错误",
   "message.retry": "重试",
   "message.copy": "复制",
+  "message.copyCode": "复制代码",
   "message.copyResult": "复制会话结果",
   "message.copySuccess": "已复制到剪贴板",
   "message.copyFailed": "复制失败",

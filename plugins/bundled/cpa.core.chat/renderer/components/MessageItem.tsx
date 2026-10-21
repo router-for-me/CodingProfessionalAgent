@@ -6,6 +6,7 @@ import {
     useRef,
     useState,
     type KeyboardEvent,
+    type ReactNode,
 } from 'react'
 import {
     AlertCircle,
@@ -62,6 +63,7 @@ import {
 } from '../utils/toolActivity.js'
 import {
     balanceMarkdownCodeFences,
+    extractMarkdownNodeText,
     isMarkdownPreEmpty,
     normalizeMarkdownMath,
 } from '../utils/markdownUtils.js'
@@ -136,6 +138,85 @@ export interface MessageItemProps {
     className?: string
 }
 
+function MarkdownCodeBlock({
+    children,
+    node,
+}: {
+    children?: ReactNode
+    node?: unknown
+}) {
+    const { t } = useTranslation()
+    const services = useHostServices()
+    const [hasCopied, setHasCopied] = useState(false)
+    const copyResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+    useEffect(() => {
+        return () => {
+            if (copyResetTimerRef.current !== null) {
+                clearTimeout(copyResetTimerRef.current)
+            }
+        }
+    }, [])
+
+    if (isMarkdownPreEmpty(node, children)) {
+        return null
+    }
+
+    const codeText = (
+        extractMarkdownNodeText(node) || extractMarkdownNodeText(children)
+    ).replace(/\r?\n$/, '')
+
+    const handleCopyCode = async () => {
+        if (!codeText) return
+        try {
+            await copyTextToClipboard(codeText, services)
+            setHasCopied(true)
+            if (copyResetTimerRef.current !== null) {
+                clearTimeout(copyResetTimerRef.current)
+            }
+            copyResetTimerRef.current = setTimeout(() => {
+                setHasCopied(false)
+                copyResetTimerRef.current = null
+            }, 2000)
+        } catch {
+            services?.ui?.pushToast(t('message.copyFailed'))
+        }
+    }
+
+    return (
+        <div className="group/code relative my-3 last:mb-0">
+            <pre
+                className={cn(
+                    'overflow-x-auto rounded-lg border border-[var(--border-subtle)]',
+                    'bg-[#0b0b0b] p-3 pr-10 leading-relaxed text-[var(--text-primary)]',
+                )}
+                style={{ fontSize: 'var(--code-font-size, 12px)' }}
+            >
+                {children}
+            </pre>
+            <button
+                type="button"
+                title={t('message.copyCode')}
+                aria-label={t('message.copyCode')}
+                data-testid="code-block-copy-btn"
+                onClick={() => void handleCopyCode()}
+                className={cn(
+                    'absolute top-2 right-2 flex size-7 items-center justify-center rounded-md',
+                    'border border-[var(--border-subtle)] bg-[var(--bg-elevated)]/90 text-[var(--text-muted)] backdrop-blur-xs transition-colors',
+                    'hover:bg-[var(--bg-sidebar-hover)] hover:text-[var(--text-primary)]',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-blue)]/40 cursor-pointer',
+                )}
+            >
+                {hasCopied ? (
+                    <Check className="size-3.5 text-[var(--accent-green)]" />
+                ) : (
+                    <Copy className="size-3.5" />
+                )}
+            </button>
+        </div>
+    )
+}
+
 const markdownComponents: Components = {
     p: ({ children }) => (
         <p className="mb-3 last:mb-0 leading-relaxed text-[var(--text-primary)]">
@@ -200,23 +281,9 @@ const markdownComponents: Components = {
             {children}
         </td>
     ),
-    pre: ({ children, node }) => {
-        if (isMarkdownPreEmpty(node, children)) {
-            return null
-        }
-        return (
-            <pre
-                className={cn(
-                    'my-3 overflow-x-auto rounded-lg border border-[var(--border-subtle)]',
-                    'bg-[#0b0b0b] p-3 leading-relaxed text-[var(--text-primary)]',
-                    'last:mb-0',
-                )}
-                style={{ fontSize: 'var(--code-font-size, 12px)' }}
-            >
-                {children}
-            </pre>
-        )
-    },
+    pre: ({ children, node }) => (
+        <MarkdownCodeBlock node={node}>{children}</MarkdownCodeBlock>
+    ),
     code: ({ className, children }) => {
         const isBlock = Boolean(className)
         if (isBlock) {

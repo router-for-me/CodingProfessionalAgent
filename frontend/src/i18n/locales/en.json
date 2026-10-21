@@ -918,6 +918,7 @@
   "message.error": "Error",
   "message.retry": "Retry",
   "message.copy": "Copy",
+  "message.copyCode": "Copy code",
   "message.copyResult": "Copy result",
   "message.copySuccess": "Copied to clipboard",
   "message.copyFailed": "Could not copy",
