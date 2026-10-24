@@ -5598,6 +5598,84 @@ function createWorktreePrepareInput(
             await service.dispose()
             expect(fakeManager.dispose).toHaveBeenCalledTimes(1)
         })
+
+        it('persists session cachedContext across streamChat into manual compact only when fastContextCompaction is false', async () => {
+            const fakeClient = new FakeCPAClient()
+            fakeClient.queue({
+                kind: 'stream',
+                final: (seed) => ({
+                    ...seed,
+                    status: 'done',
+                    stopReason: 'stop',
+                    content: [{ type: 'text', text: 'First turn reply' }],
+                }),
+            })
+            const compactSpy = vi.fn(
+                async (entries: readonly any[], _opts: any) => {
+                    const entry = {
+                        id: 'cmp-manual-1',
+                        sessionId: 'sess-manual-cache',
+                        createdAt: 20,
+                        kind: 'compaction' as const,
+                        summary: 'manual summary',
+                        firstKeptEntryId: entries[0]?.id ?? 'u1',
+                    }
+                    return { entry, entries: [...entries, entry] }
+                },
+            )
+            const { service } = createService({
+                client: fakeClient,
+                compact: compactSpy,
+                createTools: async () => [],
+            })
+
+            const preparedSlow = await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'test-key',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                requestApproval: false,
+                fastContextCompaction: false,
+            })
+
+            const u1 = userEntry('u1', 'hello')
+            await collect(
+                service.streamChat({
+                    prepared: preparedSlow,
+                    sessionId: 'sess-manual-cache',
+                    runId: 'run-1',
+                    entries: [u1],
+                }),
+            )
+
+            // Manual compact with fastContextCompaction: false receives cachedContext from the completed turn.
+            const compactRes = await service.compact({
+                prepared: preparedSlow,
+                sessionId: 'sess-manual-cache',
+                runId: 'run-compact-1',
+                entries: [u1],
+            })
+            expect(compactRes.ok).toBe(true)
+            expect(compactSpy).toHaveBeenCalledTimes(1)
+            expect(compactSpy.mock.calls[0]?.[1]?.trigger).toBe('manual')
+            expect(compactSpy.mock.calls[0]?.[1]?.fastContextCompaction).toBe(false)
+            expect(compactSpy.mock.calls[0]?.[1]?.cachedContext).toMatchObject({
+                modelId: modelBase.id,
+            })
+            expect(compactSpy.mock.calls[0]?.[1]?.cachedContext?.cacheExpiresAt).toBeGreaterThan(0)
+
+            // Subsequent compact after compaction has cleared cachedContext.
+            await service.compact({
+                prepared: preparedSlow,
+                sessionId: 'sess-manual-cache',
+                runId: 'run-compact-2',
+                entries: [u1],
+            })
+            expect(compactSpy.mock.calls[1]?.[1]?.cachedContext).toBeUndefined()
+            await service.dispose()
+        })
     })
 
     describe('production no-Mock scan', () => {

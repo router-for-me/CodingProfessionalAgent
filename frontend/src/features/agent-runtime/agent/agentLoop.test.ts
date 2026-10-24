@@ -3901,3 +3901,505 @@ it('accepts a matching required policy only after explicit preparation acknowled
     expect(client.calls).toHaveLength(1)
     expect(client.calls[0]!.tools ?? []).toHaveLength(0)
 })
+
+it('forwards warm cachedContext to post-tool auto-compaction and clears it after compaction', async () => {
+    const client = new FakeCPAClient()
+    const readTool = makeTool('read', async () => ({
+        content: [{ type: 'text', text: 'x'.repeat(2000) }],
+    }))
+    const tinyModel: ModelCatalogEntry = {
+        ...model,
+        contextWindow: 100,
+    }
+    client.queue(
+        {
+            kind: 'stream',
+            final: (seed) =>
+                doneAssistant(seed, {
+                    stopReason: 'toolUse',
+                    content: [
+                        {
+                            type: 'toolCall',
+                            id: 'call_read_1',
+                            name: 'read',
+                            arguments: { path: 'a.ts' },
+                        },
+                    ],
+                }),
+        },
+        {
+            kind: 'stream',
+            final: (seed) =>
+                doneAssistant(seed, {
+                    stopReason: 'stop',
+                    content: [{ type: 'text', text: 'finished' }],
+                }),
+        },
+    )
+
+    const compact = vi.fn(
+        async (
+            entries: readonly ConversationEntry[],
+            _options: CompactConversationOptions,
+        ): Promise<CompactConversationResult> => {
+            const entry = {
+                id: 'cmp-cached',
+                sessionId: 'sess-cache',
+                createdAt: 10,
+                kind: 'compaction' as const,
+                summary: 'cached summary',
+                firstKeptEntryId: entries[0]?.id ?? 'u1',
+            }
+            return { entry, entries: [...entries, entry] }
+        },
+    )
+
+    const onTurnCached = vi.fn()
+    const loop = new AgentLoop({ client, compact, onTurnCached })
+    await collect(
+        loop.run({
+            runId: 'run-cached-cmp',
+            sessionId: 'sess-cache',
+            entries: [userEntry('u1', 'short')],
+            model: tinyModel,
+            systemPrompt: 'Cached system prompt',
+            developerPrompt: 'Cached dev prompt',
+            tools: [readTool],
+            requestApproval: false,
+            fastContextCompaction: false,
+            compactionSettings: { enabled: true, reserveTokens: 20, keepRecentTokens: 20 },
+        }),
+    )
+
+    // Turn 1 cached -> post-tool compaction invalidates with null -> Turn 2 cached.
+    expect(onTurnCached).toHaveBeenCalledTimes(3)
+    expect(onTurnCached.mock.calls[1]?.[0]).toBeNull()
+    expect(compact).toHaveBeenCalledTimes(1)
+    const compactOpts = compact.mock.calls[0]?.[1]
+    expect(compactOpts?.trigger).toBe('auto')
+    expect(compactOpts?.fastContextCompaction).toBe(false)
+    expect(compactOpts?.cachedContext).toMatchObject({
+        systemPrompt: 'Cached system prompt',
+        developerPrompt: 'Cached dev prompt',
+        modelId: tinyModel.id,
+    })
+    expect(compactOpts?.cachedContext?.tools?.map((t) => t.name)).toEqual(['read'])
+
+    // When fastContextCompaction is enabled (true), cachedContext is omitted so legacy isolated compaction runs.
+    compact.mockClear()
+    client.queue(
+        {
+            kind: 'stream',
+            final: (seed) =>
+                doneAssistant(seed, {
+                    stopReason: 'toolUse',
+                    content: [
+                        {
+                            type: 'toolCall',
+                            id: 'call_read_2',
+                            name: 'read',
+                            arguments: { path: 'b.ts' },
+                        },
+                    ],
+                }),
+        },
+        {
+            kind: 'stream',
+            final: (seed) =>
+                doneAssistant(seed, {
+                    stopReason: 'stop',
+                    content: [{ type: 'text', text: 'finished fast' }],
+                }),
+        },
+    )
+    await collect(
+        loop.run({
+            runId: 'run-fast-cmp',
+            sessionId: 'sess-cache',
+            entries: [userEntry('u1', 'short')],
+            model: tinyModel,
+            systemPrompt: 'Cached system prompt',
+            developerPrompt: 'Cached dev prompt',
+            tools: [readTool],
+            requestApproval: false,
+            fastContextCompaction: true,
+            compactionSettings: { enabled: true, reserveTokens: 20, keepRecentTokens: 20 },
+        }),
+    )
+    expect(compact).toHaveBeenCalledTimes(1)
+    expect(compact.mock.calls[0]?.[1]?.fastContextCompaction).toBe(true)
+    expect(compact.mock.calls[0]?.[1]?.cachedContext).toBeUndefined()
+})
+
+it('pins baseReasoningEffort before first request dispatch even if first turn overflows and compacts away early entries', async () => {
+    const client = new FakeCPAClient()
+    const overflowErr = Object.assign(new Error('context_length_exceeded'), {
+        status: 400,
+        code: 'context_length_exceeded',
+    })
+    client.queue(
+        { kind: 'throw', error: overflowErr },
+        {
+            kind: 'stream',
+            final: (seed) =>
+                doneAssistant(seed, {
+                    stopReason: 'stop',
+                    content: [{ type: 'text', text: 'recovered after overflow' }],
+                }),
+        },
+    )
+
+    const u1Low: UserEntry = {
+        ...userEntry('u1', 'first low turn'),
+        reasoningEffort: 'low',
+    }
+    const a1Low: AssistantEntry = {
+        id: 'a1',
+        sessionId: 'sess-1',
+        createdAt: 2,
+        kind: 'assistant',
+        model: model.id,
+        status: 'done',
+        stopReason: 'stop',
+        reasoningEffort: 'low',
+        content: [{ type: 'text', text: 'first answer' }],
+    }
+    const u2High: UserEntry = {
+        ...userEntry('u2', 'second high turn'),
+        reasoningEffort: 'high',
+    }
+
+    const compact = vi.fn(
+        async (entries: readonly ConversationEntry[]): Promise<CompactConversationResult> => {
+            // Compaction discards u1Low + a1Low and keeps only u2High ('high').
+            const entry = {
+                id: 'cmp-overflow',
+                sessionId: 'sess-1',
+                createdAt: 10,
+                kind: 'compaction' as const,
+                summary: 'overflow summary',
+                firstKeptEntryId: 'u2',
+            }
+            return { entry, entries: [...entries, entry] }
+        },
+    )
+
+    const onTurnCached = vi.fn()
+    const loop = new AgentLoop({ client, compact, onTurnCached })
+    await collect(
+        loop.run({
+            runId: 'run-overflow-base',
+            sessionId: 'sess-1',
+            entries: [u1Low, a1Low, u2High],
+            model,
+            systemPrompt: 'sys',
+            tools: [],
+            reasoningEffort: 'high',
+            fastContextCompaction: false,
+        }),
+    )
+
+    expect(compact).toHaveBeenCalledTimes(1)
+    // Call 0: null when overflow compaction commits; Call 1: recovered turn cached context.
+    expect(onTurnCached).toHaveBeenCalledTimes(2)
+    expect(onTurnCached.mock.calls[0]?.[0]).toBeNull()
+    // Must record 'low' (pinned on first dispatch before overflow removed u1Low), not 'high'!
+    expect(onTurnCached.mock.calls[1]?.[0]?.baseReasoningEffort).toBe('low')
+})
+
+it('late UserPromptSubmit hook settlement from a returned old run does not clobber newer run activeRunCacheState', async () => {
+    const client = new FakeCPAClient()
+    client.queue({
+        kind: 'stream',
+        final: (seed) =>
+            doneAssistant(seed, {
+                stopReason: 'stop',
+                content: [{ type: 'text', text: 'run B reply' }],
+            }),
+    })
+
+    let markHookAEntered: (() => void) | undefined
+    const hookAEnteredPromise = new Promise<void>((resolve) => {
+        markHookAEntered = resolve
+    })
+    let resolveSlowHookA: (() => void) | undefined
+    const slowHookAPromise = new Promise<void>((resolve) => {
+        resolveSlowHookA = resolve
+    })
+    let resolveSlowHookB: (() => void) | undefined
+    const slowHookBPromise = new Promise<void>((resolve) => {
+        resolveSlowHookB = resolve
+    })
+    let hookCallCount = 0
+    const hooks = [
+        {
+            id: 'slow-prompt-hook',
+            event: 'UserPromptSubmit' as const,
+            order: 0,
+            failureMode: 'open' as const,
+            execute: async () => {
+                hookCallCount++
+                if (hookCallCount === 1) {
+                    markHookAEntered?.()
+                    await slowHookAPromise
+                } else if (hookCallCount === 2) {
+                    await slowHookBPromise
+                }
+                return { continue: true }
+            },
+        },
+    ]
+
+    const tinyModel: ModelCatalogEntry = {
+        ...model,
+        contextWindow: 100,
+    }
+    const bigHistory = [userEntry('u0', 'x'.repeat(2_000))]
+    const initialCached = {
+        systemPrompt: 'sys',
+        modelId: tinyModel.id,
+        requestEntries: bigHistory,
+        lastCachedAt: 100,
+        cacheExpiresAt: 500,
+    }
+
+    const compact = vi.fn(
+        async (
+            entries: readonly ConversationEntry[],
+            _options: CompactConversationOptions,
+        ): Promise<CompactConversationResult> => {
+            const entry = {
+                id: 'cmp-b',
+                sessionId: 'sess-1',
+                createdAt: 10,
+                kind: 'compaction' as const,
+                summary: 'b summary',
+                firstKeptEntryId: entries[0]?.id ?? 'u0',
+            }
+            return { entry, entries: [...entries, entry] }
+        },
+    )
+
+    const loop = new AgentLoop({ client, hooks, compact })
+    const iterA = loop.run({
+        runId: 'run-A',
+        sessionId: 'sess-1',
+        entries: bigHistory,
+        userEntry: userEntry('uA', 'hello A'),
+        model: tinyModel,
+        systemPrompt: 'sys',
+        tools: [],
+        fastContextCompaction: false,
+        initialCachedContext: initialCached,
+        compactionSettings: { enabled: true, reserveTokens: 20, keepRecentTokens: 20 },
+    })
+
+    // Wait until Run A is genuinely suspended inside UserPromptSubmit hook, then cancel via return().
+    await hookAEnteredPromise
+    await iterA.return!()
+
+    // Start Run B immediately with its own initialCachedContext (suspended in Hook B).
+    const iterB = loop.run({
+        runId: 'run-B',
+        sessionId: 'sess-1',
+        entries: bigHistory,
+        userEntry: userEntry('uB', 'hello B'),
+        model: tinyModel,
+        systemPrompt: 'sys',
+        tools: [],
+        fastContextCompaction: false,
+        initialCachedContext: initialCached,
+        compactionSettings: { enabled: true, reserveTokens: 20, keepRecentTokens: 20 },
+    })
+
+    // Let Run A's delayed UserPromptSubmit hook and finally block settle completely while Run B is still suspended.
+    resolveSlowHookA?.()
+    await new Promise((r) => setTimeout(r, 15))
+
+    // Refresh Run B's cached context via loop.refreshCachedContext, then let Run B proceed into preTurnCompact!
+    loop.refreshCachedContext(initialCached, 200, 9_999)
+    resolveSlowHookB?.()
+    await collect(iterB)
+
+    // Verify Run B's preTurnCompact received the refreshed cacheExpiresAt (9_999), proving Run A did not clobber activeRunCacheState.
+    expect(compact).toHaveBeenCalledTimes(1)
+    expect(compact.mock.calls[0]?.[1]?.cachedContext?.lastCachedAt).toBe(200)
+    expect(compact.mock.calls[0]?.[1]?.cachedContext?.cacheExpiresAt).toBe(9_999)
+})
+
+it('invalidates cachedContext synchronously at compaction commit before PostCompact hook and never fires late after return()', async () => {
+    const client = new FakeCPAClient()
+    client.queue({
+        kind: 'stream',
+        final: (seed) =>
+            doneAssistant(seed, {
+                stopReason: 'stop',
+                content: [{ type: 'text', text: 'run B reply' }],
+            }),
+    })
+
+    let markPostCompactEntered: (() => void) | undefined
+    const postCompactEnteredPromise = new Promise<void>((resolve) => {
+        markPostCompactEntered = resolve
+    })
+    let resolveSlowPostCompact: (() => void) | undefined
+    const slowPostCompactPromise = new Promise<void>((resolve) => {
+        resolveSlowPostCompact = resolve
+    })
+
+    let invalidatedBeforePostCompactHook = false
+    let runCacheStateClearedBeforePostCompactHook = false
+    const onTurnCached = vi.fn()
+
+    let loop!: AgentLoop
+    const readActiveRunCacheState = () =>
+        (
+            loop as unknown as {
+                activeRunCacheState: {
+                    readonly token: number
+                    cachedContext: unknown
+                    baseReasoningEffort: string | undefined
+                } | null
+            }
+        ).activeRunCacheState
+
+    const hooks = [
+        {
+            id: 'slow-post-compact-hook',
+            event: 'PostCompact' as const,
+            order: 0,
+            failureMode: 'open' as const,
+            execute: async () => {
+                // At the moment PostCompact hook starts, onTurnCached(null) MUST already have fired
+                // and runCacheState.cachedContext MUST already be cleared to null!
+                invalidatedBeforePostCompactHook =
+                    onTurnCached.mock.calls.length === 1 &&
+                    onTurnCached.mock.calls[0]?.[0] === null
+                const state = readActiveRunCacheState()
+                runCacheStateClearedBeforePostCompactHook =
+                    state !== null && state.cachedContext === null
+                markPostCompactEntered?.()
+                await slowPostCompactPromise
+                return { continue: true }
+            },
+        },
+    ]
+
+    const tinyModel: ModelCatalogEntry = {
+        ...model,
+        contextWindow: 100,
+    }
+    const bigHistory = [
+        userEntry('u0', 'x'.repeat(2_000)),
+        {
+            id: 'a0',
+            sessionId: 'sess-1',
+            createdAt: 2,
+            kind: 'assistant' as const,
+            model: tinyModel.id,
+            status: 'done' as const,
+            stopReason: 'toolUse' as const,
+            content: [
+                {
+                    type: 'toolCall' as const,
+                    id: 'call_pending_1',
+                    name: 'read',
+                    arguments: { path: 'a.ts' },
+                },
+            ],
+        },
+    ]
+    const initialCachedA = {
+        systemPrompt: 'sys',
+        modelId: tinyModel.id,
+        requestEntries: bigHistory,
+        lastCachedAt: 100,
+        cacheExpiresAt: 500,
+    }
+    const compact = vi.fn(
+        async (
+            entries: readonly ConversationEntry[],
+            _opts: CompactConversationOptions,
+        ): Promise<CompactConversationResult> => {
+            const entry = {
+                id: 'cmp-1',
+                sessionId: 'sess-1',
+                createdAt: 10,
+                kind: 'compaction' as const,
+                summary: 'summary',
+                firstKeptEntryId: entries[0]?.id ?? 'u0',
+            }
+            return { entry, entries: [...entries, entry] }
+        },
+    )
+
+    const readTool = makeTool('read', async () => ({
+        content: [{ type: 'text', text: 'y'.repeat(2_000) }],
+    }))
+
+    loop = new AgentLoop({ client, hooks, compact, onTurnCached })
+    const iterA = loop.run({
+        runId: 'run-A',
+        sessionId: 'sess-1',
+        entries: bigHistory,
+        model: tinyModel,
+        systemPrompt: 'sys',
+        tools: [readTool],
+        requestApproval: false,
+        fastContextCompaction: false,
+        initialCachedContext: initialCachedA,
+        compactionSettings: { enabled: true, reserveTokens: 20, keepRecentTokens: 20 },
+    })
+
+    // Consume events up to compaction-end: at the moment compaction-end is observed,
+    // both onTurnCached(null) AND runCacheState.cachedContext === null must ALREADY hold
+    // (before compaction-end was yielded and before PostCompact hook runs).
+    let sawCompactionEnd = false
+    while (true) {
+        const step = await iterA.next()
+        if (step.done) break
+        if (step.value.type === 'compaction-end') {
+            sawCompactionEnd = true
+            expect(onTurnCached).toHaveBeenCalledTimes(1)
+            expect(onTurnCached.mock.calls[0]?.[0]).toBeNull()
+            expect(readActiveRunCacheState()).not.toBeNull()
+            expect(readActiveRunCacheState()?.cachedContext).toBeNull()
+            break
+        }
+    }
+    expect(sawCompactionEnd).toBe(true)
+
+    // Advance generator so PostCompact hook starts and suspends.
+    const postCompactStepPromise = iterA.next()
+    await postCompactEnteredPromise
+    expect(invalidatedBeforePostCompactHook).toBe(true)
+    expect(runCacheStateClearedBeforePostCompactHook).toBe(true)
+    expect(readActiveRunCacheState()?.cachedContext).toBeNull()
+    void postCompactStepPromise
+
+    // Cancel Run A via return() while PostCompact hook is still pending, then start and finish Run B.
+    await iterA.return!()
+    onTurnCached.mockClear()
+
+    await collect(
+        loop.run({
+            runId: 'run-B',
+            sessionId: 'sess-1',
+            entries: [userEntry('u1', 'short')],
+            model: tinyModel,
+            systemPrompt: 'sys',
+            tools: [],
+            fastContextCompaction: false,
+            compactionSettings: { enabled: false },
+        }),
+    )
+
+    // Run B established its own cachedContext (1 call with non-null context).
+    expect(onTurnCached).toHaveBeenCalledTimes(1)
+    expect(onTurnCached.mock.calls[0]?.[0]).not.toBeNull()
+
+    // Now let Run A's delayed PostCompact hook finish — it must NOT fire any extra onTurnCached(null)!
+    resolveSlowPostCompact?.()
+    await new Promise((r) => setTimeout(r, 15))
+    expect(onTurnCached).toHaveBeenCalledTimes(1)
+})

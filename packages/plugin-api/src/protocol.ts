@@ -249,6 +249,8 @@ export interface ProtocolStreamInput {
     nativeTools?: readonly { type: 'web_search' }[]
     toolChoice?: 'auto' | 'required' | 'none'
     reasoningEffort?: string
+    /** Optional pinned base reasoning effort to preserve prompt cache prefix. */
+    baseReasoningEffort?: string
     speed?: string
     seed: AssistantEntry
 }

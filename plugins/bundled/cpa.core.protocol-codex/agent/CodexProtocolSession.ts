@@ -119,24 +119,51 @@ export class CodexProtocolSession implements ProtocolSession {
               }
             : undefined
 
-        if (options?.connectionMode !== 'isolated') {
-            if (this.baseReasoningEffort === undefined) {
-                for (const entry of input.entries) {
-                    if ((entry.kind === 'user' || entry.kind === 'assistant') && entry.reasoningEffort) {
-                        this.baseReasoningEffort = entry.reasoningEffort
-                        break
+        const isSessionSharedCache =
+            options?.connectionMode !== 'isolated' ||
+            options?.promptCacheKey === this.id
+
+        const isIsolated = options?.connectionMode === 'isolated'
+        let effectiveBaseReasoningEffort: string | undefined
+
+        if (isSessionSharedCache) {
+            if (!isIsolated) {
+                if (this.baseReasoningEffort === undefined) {
+                    if (input.baseReasoningEffort !== undefined) {
+                        this.baseReasoningEffort = input.baseReasoningEffort
+                    } else {
+                        for (const entry of input.entries) {
+                            if ((entry.kind === 'user' || entry.kind === 'assistant') && entry.reasoningEffort) {
+                                this.baseReasoningEffort = entry.reasoningEffort
+                                break
+                            }
+                        }
+                        this.baseReasoningEffort ??= input.reasoningEffort
                     }
                 }
-                this.baseReasoningEffort ??= input.reasoningEffort
+                effectiveBaseReasoningEffort = this.baseReasoningEffort
+            } else {
+                // Isolated stream sharing session promptCacheKey (e.g. cached compaction or cache warmer):
+                // Use the session's already-pinned baseReasoningEffort if present, otherwise input.baseReasoningEffort,
+                // without pinning this.baseReasoningEffort before the first normal post-compaction turn.
+                effectiveBaseReasoningEffort =
+                    this.baseReasoningEffort ?? input.baseReasoningEffort
+                if (effectiveBaseReasoningEffort === undefined) {
+                    for (const entry of input.entries) {
+                        if ((entry.kind === 'user' || entry.kind === 'assistant') && entry.reasoningEffort) {
+                            effectiveBaseReasoningEffort = entry.reasoningEffort
+                            break
+                        }
+                    }
+                }
             }
+        } else {
+            effectiveBaseReasoningEffort = input.baseReasoningEffort
         }
 
         const clientInput = {
             ...input,
-            baseReasoningEffort:
-                options?.connectionMode !== 'isolated'
-                    ? this.baseReasoningEffort
-                    : undefined,
+            baseReasoningEffort: effectiveBaseReasoningEffort,
             speed: input.speed as CodexRequestSpeed | undefined,
         }
 

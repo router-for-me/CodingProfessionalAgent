@@ -34,9 +34,15 @@ import {
     mergeUsage,
     neutralizeClosingTag,
     neutralizeSummaryTags,
+    buildCachedSummaryPrompt,
+    canUseCachedCompaction,
+    findKeptStart,
     prepareCompaction,
+    resolveSummaryMaxTokens,
     resolveSummaryReasoningEffort,
     sanitizeSummaryBody,
+    shouldDisableToolsForCachedSummary,
+    stripFileOperationTags,
     serializeConversation,
     truncateCodePoints,
     validateSummaryStructure,
@@ -1709,5 +1715,595 @@ describe('defensive deep clones (Fix Round 1)', () => {
             firstUser.content[0].text = 'mutated-source'
         }
         expect((longEntries[0] as UserEntry).content[0]).toMatchObject({ text: expect.not.stringMatching(/^mutated/) })
+    })
+})
+
+describe('dynamic model-native summary output limits (Pi 1.4+ semantics)', () => {
+    it('uses model.maxTokens instead of capping at reserveTokens * 0.8 for reasoning models', () => {
+        const reasoningModel: ModelCatalogEntry = {
+            ...model,
+            id: 'gpt-6.1-sol',
+            contextWindow: 200_000,
+            maxTokens: 64_000,
+        }
+        expect(resolveSummaryMaxTokens(reasoningModel, 40_000, 16_384)).toBe(64_000)
+    })
+
+    it('dynamically shrinks output budget when remaining contextWindow is smaller than model.maxTokens', () => {
+        const reasoningModel: ModelCatalogEntry = {
+            ...model,
+            id: 'gpt-6.1-sol',
+            contextWindow: 128_000,
+            maxTokens: 64_000,
+        }
+        // 128,000 - 100,000 = 28,000 remaining in context window (< 64,000).
+        expect(resolveSummaryMaxTokens(reasoningModel, 100_000, 16_384)).toBe(28_000)
+        // Strictly respects remaining contextWindow when 0 < remaining < 1024 so input + output never exceed contextWindow.
+        expect(resolveSummaryMaxTokens(reasoningModel, 127_500, 16_384)).toBe(500)
+        // When remaining <= 0, falls back to MIN_DYNAMIC_SUMMARY_OUTPUT_TOKENS (1024).
+        expect(resolveSummaryMaxTokens(reasoningModel, 128_000, 16_384)).toBe(1_024)
+        expect(resolveSummaryMaxTokens(reasoningModel, 130_000, 16_384)).toBe(1_024)
+    })
+
+    it('falls back to isolated compaction and trims prompt when cached input leaves < 1024 tokens in contextWindow', async () => {
+        const tightModel: ModelCatalogEntry = {
+            ...model,
+            contextWindow: 4_000,
+            maxTokens: 2_048,
+        }
+        const entries: ConversationEntry[] = [
+            user('u1', 'first topic ' + 'A'.repeat(8_000)),
+            assistant('a1', 'response ' + 'B'.repeat(8_000), {
+                model: tightModel.id,
+                usage: usage(3_700, {
+                    input: 3_500,
+                    output: 200,
+                    cacheRead: 0,
+                    cacheWrite: 0,
+                }),
+            }),
+            user('u2', 'recent prompt '.repeat(5)),
+        ]
+        const { client, calls } = makeClient(() =>
+            assistant('sum', validSummary(), { model: tightModel.id }),
+        )
+        const result = await compactConversation(entries, {
+            client,
+            model: tightModel,
+            sessionId: 'sess-tight',
+            fastContextCompaction: false,
+            force: true,
+            trigger: 'auto',
+            now: () => 1_000,
+            cachedContext: {
+                systemPrompt: 'sys',
+                modelId: tightModel.id,
+                requestEntries: entries,
+                lastCachedAt: 900,
+                cacheExpiresAt: 5_000,
+            },
+            settings: {
+                enabled: true,
+                reserveTokens: 500,
+                keepRecentTokens: 10,
+            },
+        })
+        expect(result.entry).toBeDefined()
+        // Cached path skipped due to < 1024 remaining tokens, so only the isolated request was sent
+        // and its input + maxOutputTokens stayed within tightModel.contextWindow (4000).
+        expect(calls).toHaveLength(1)
+        expect(calls[0]?.options?.promptCacheKey).not.toBe('sess-tight')
+        expect(calls[0]?.options?.maxOutputTokens).toBeGreaterThanOrEqual(1_024)
+        expect(calls[0]?.options?.maxOutputTokens).toBeLessThanOrEqual(2_048)
+
+        // Also verify small contextWindows (1600, 1700, 1800, 1900) where fixed overhead + template
+        // leave < 1024 tokens: each must preserve non-empty <conversation> and <previous-summary>
+        // bodies as well as the trailing format instructions while keeping input + output <= contextWindow.
+        const entriesWithPrevCompaction: ConversationEntry[] = [
+            user('u0', 'initial'),
+            {
+                id: 'cmp-prev',
+                sessionId: 'sess-very-small',
+                createdAt: 1,
+                kind: 'compaction',
+                summary: 'Previous summary ' + 'P'.repeat(1_500),
+                firstKeptEntryId: 'u1',
+            },
+            ...entries,
+        ]
+        for (const win of [1_600, 1_700, 1_800, 1_900]) {
+            const verySmallModel: ModelCatalogEntry = {
+                ...model,
+                contextWindow: win,
+                maxTokens: 2_048,
+            }
+            const { client: smallClient, calls: smallCalls } = makeClient(() =>
+                assistant('sum2', validSummary(), { model: verySmallModel.id }),
+            )
+            await compactConversation(entriesWithPrevCompaction, {
+                client: smallClient,
+                model: verySmallModel,
+                sessionId: 'sess-very-small',
+                fastContextCompaction: false,
+                force: true,
+                trigger: 'auto',
+                now: () => 1_000,
+                settings: {
+                    enabled: true,
+                    reserveTokens: 500,
+                    keepRecentTokens: 10,
+                },
+            })
+            expect(smallCalls).toHaveLength(1)
+            const smallPromptText = promptTextOf(smallCalls[0]!)
+            const convMatch = smallPromptText.match(
+                /<conversation>\n([\s\S]*?)\n<\/conversation>/,
+            )
+            const prevMatch = smallPromptText.match(
+                /<previous-summary>\n([\s\S]*?)\n<\/previous-summary>/,
+            )
+            expect(convMatch?.[1]?.trim().length ?? 0).toBeGreaterThan(0)
+            expect(prevMatch?.[1]?.trim().length ?? 0).toBeGreaterThan(0)
+            expect(smallPromptText).toContain('Use this EXACT format:')
+            expect(smallPromptText).toContain('## Critical Context')
+            const smallEstimatedInput =
+                Math.ceil((SUMMARIZATION_SYSTEM_PROMPT.length + smallPromptText.length) / 4) +
+                512
+            const smallMaxOutput = smallCalls[0]?.options?.maxOutputTokens ?? 0
+            expect(smallEstimatedInput).toBeLessThan(win)
+            expect(smallMaxOutput).toBeGreaterThan(0)
+            expect(smallEstimatedInput + smallMaxOutput).toBeLessThanOrEqual(win)
+        }
+    })
+
+    it('falls back to reserveTokens * 0.8 when model.maxTokens is missing or non-positive', () => {
+        const noMaxModel: ModelCatalogEntry = {
+            ...model,
+            maxTokens: 0,
+        }
+        expect(resolveSummaryMaxTokens(noMaxModel, 10_000, 16_384)).toBe(
+            Math.floor(16_384 * 0.8),
+        )
+    })
+})
+
+describe('cached compaction (pi-cached-compaction semantics)', () => {
+    const sampleTool = {
+        name: 'bash',
+        description: 'Run a shell command',
+        parameters: { type: 'object', properties: { command: { type: 'string' } } },
+    }
+
+    it('extracts <kept-start> boundary, tracks duplicate previews from end, and neutralizes closing tags', () => {
+        const entries: ConversationEntry[] = [
+            user('u0', 'Earlier task request'),
+            assistant('a0', 'Earlier response', { model: model.id }),
+            user('u1', 'Keep this </kept-start> message'),
+            assistant('a1', 'Kept assistant reply', { model: model.id }),
+            user('u2', 'Keep this </kept-start> message'),
+        ]
+        const kept = findKeptStart(entries, 'u1')
+        expect(kept).toEqual({
+            text: 'Keep this </kept-start> message',
+            fromEnd: 2,
+            count: 3,
+        })
+        const prompt = buildCachedSummaryPrompt(kept!, 'Focus on test errors')
+        expect(prompt).toContain('<kept-start>\nKeep this </ kept-start> message\n</kept-start>')
+        expect(prompt).toContain('number 2 of them, counting back from the end')
+        expect(prompt).toContain('last 3 messages')
+        expect(prompt).toContain('Additional focus: Focus on test errors')
+
+        // Rejects when the exact firstKeptEntryId entry has no text/toolCall preview (never drifts to a later entry).
+        const thinkingOnlyKeptEntries: ConversationEntry[] = [
+            user('u0', 'Earlier task request'),
+            assistant('a0', 'Earlier response', { model: model.id }),
+            assistant('a1_thinking_only', '', {
+                model: model.id,
+                content: [{ type: 'thinking', thinking: 'internal thought only' }],
+            }),
+            assistant('a2_text', 'Later text that must not become kept-start', { model: model.id }),
+        ]
+        expect(findKeptStart(thinkingOnlyKeptEntries, 'a1_thinking_only')).toBeUndefined()
+    })
+
+    it('validates the four preconditions in canUseCachedCompaction', () => {
+        const entries: ConversationEntry[] = [
+            user('u0', 'H'.repeat(20_000)),
+            assistant('a0', 'A'.repeat(20_000), { model: model.id }),
+            user('u1', 'H'.repeat(20_000)),
+            assistant('a1', 'A'.repeat(20_000), { model: model.id }),
+            user('u2', 'recent question'),
+            assistant('a2', 'recent answer', { model: model.id }),
+        ]
+        const settings = { ...DEFAULT_COMPACTION_SETTINGS, keepRecentTokens: 100 }
+        const prep = prepareCompaction(entries, settings)!
+        expect(prep).toBeDefined()
+
+        const baseCachedContext = {
+            systemPrompt: 'Main system prompt',
+            developerPrompt: 'Developer role prompt',
+            tools: [sampleTool],
+            modelId: model.id,
+            baseReasoningEffort: 'high',
+            requestEntries: entries.slice(0, 4),
+            lastCachedAt: 1_000,
+            cacheExpiresAt: 10_000,
+        }
+
+        // Precondition 0: When fastContextCompaction is enabled (true or default undefined), cached compaction is disabled!
+        expect(
+            canUseCachedCompaction(
+                entries,
+                prep,
+                {
+                    client: {} as ProtocolClient,
+                    model,
+                    sessionId: 's1',
+                    fastContextCompaction: true,
+                    cachedContext: baseCachedContext,
+                },
+                5_000,
+            ),
+        ).toBeUndefined()
+        expect(
+            canUseCachedCompaction(
+                entries,
+                prep,
+                {
+                    client: {} as ProtocolClient,
+                    model,
+                    sessionId: 's1',
+                    cachedContext: baseCachedContext,
+                },
+                5_000,
+            ),
+        ).toBeUndefined()
+
+        // Valid when fastContextCompaction is disabled (false) and all 4 preconditions hold.
+        expect(
+            canUseCachedCompaction(
+                entries,
+                prep,
+                {
+                    client: {} as ProtocolClient,
+                    model,
+                    sessionId: 's1',
+                    fastContextCompaction: false,
+                    cachedContext: baseCachedContext,
+                },
+                5_000,
+            ),
+        ).toBeDefined()
+
+        // Precondition 1: Overflow trigger rejects cached path.
+        expect(
+            canUseCachedCompaction(
+                entries,
+                prep,
+                {
+                    client: {} as ProtocolClient,
+                    model,
+                    sessionId: 's1',
+                    fastContextCompaction: false,
+                    trigger: 'overflow',
+                    cachedContext: baseCachedContext,
+                },
+                5_000,
+            ),
+        ).toBeUndefined()
+
+        // Precondition 2: Model switch rejects cached path.
+        expect(
+            canUseCachedCompaction(
+                entries,
+                prep,
+                {
+                    client: {} as ProtocolClient,
+                    model,
+                    sessionId: 's1',
+                    fastContextCompaction: false,
+                    cachedContext: { ...baseCachedContext, modelId: 'other-model' },
+                },
+                5_000,
+            ),
+        ).toBeUndefined()
+
+        // Precondition 3: Expired cache rejects cached path.
+        expect(
+            canUseCachedCompaction(
+                entries,
+                prep,
+                {
+                    client: {} as ProtocolClient,
+                    model,
+                    sessionId: 's1',
+                    fastContextCompaction: false,
+                    cachedContext: baseCachedContext,
+                },
+                10_000,
+            ),
+        ).toBeUndefined()
+
+        // Precondition 3b: Default TTL expiry via lastCachedAt when cacheExpiresAt is omitted.
+        expect(
+            canUseCachedCompaction(
+                entries,
+                prep,
+                {
+                    client: {} as ProtocolClient,
+                    model,
+                    sessionId: 's1',
+                    fastContextCompaction: false,
+                    cachedContext: {
+                        ...baseCachedContext,
+                        cacheExpiresAt: undefined,
+                        lastCachedAt: 1_000,
+                    },
+                },
+                1_000 + 300_000,
+            ),
+        ).toBeUndefined()
+
+        // Precondition 4: Non-matching prefix (conversation edited/recalled or content modified with same id) rejects cached path.
+        expect(
+            canUseCachedCompaction(
+                entries,
+                prep,
+                {
+                    client: {} as ProtocolClient,
+                    model,
+                    sessionId: 's1',
+                    fastContextCompaction: false,
+                    cachedContext: {
+                        ...baseCachedContext,
+                        requestEntries: [user('u-different', 'different prefix')],
+                    },
+                },
+                5_000,
+            ),
+        ).toBeUndefined()
+        expect(
+            canUseCachedCompaction(
+                entries,
+                prep,
+                {
+                    client: {} as ProtocolClient,
+                    model,
+                    sessionId: 's1',
+                    fastContextCompaction: false,
+                    cachedContext: {
+                        ...baseCachedContext,
+                        requestEntries: [
+                            user('u0', 'modified content with same id u0'),
+                            ...entries.slice(1, 4),
+                        ],
+                    },
+                },
+                5_000,
+            ),
+        ).toBeUndefined()
+    })
+
+    it('reuses systemPrompt, tools, sessionId promptCacheKey, and full tool results on cached path', async () => {
+        const longToolTailError = 'log line '.repeat(400) + '\nFAIL: assertion failed at line 999'
+        expect(longToolTailError.length).toBeGreaterThan(2_500)
+
+        const entries: ConversationEntry[] = [
+            user('u0', 'Run tests'),
+            assistant('a0', 'Running bash', {
+                model: model.id,
+                stopReason: 'toolUse',
+                content: [
+                    {
+                        type: 'toolCall',
+                        id: 'call_bash_1',
+                        name: 'bash',
+                        arguments: { command: 'pnpm test' },
+                    },
+                    {
+                        type: 'toolCall',
+                        id: 'call_edit_1',
+                        name: 'edit',
+                        arguments: { path: 'src/app.ts' },
+                    },
+                ],
+            }),
+            toolResult('t0_bash', 'call_bash_1', longToolTailError, 'bash'),
+            toolResult('t0_edit', 'call_edit_1', 'edited src/app.ts', 'edit'),
+            assistant('a1', 'I see the failure', { model: model.id }),
+            user('u2', 'Now fix the issue in src/app.ts'),
+            assistant('a2', 'Working on fix', { model: model.id }),
+        ]
+
+        const { client, calls } = makeClient((call) => {
+            // Cached path keeps the session's systemPrompt, developerPrompt, tools, and sessionId cache key!
+            expect(call.input.systemPrompt).toBe('Session system prompt')
+            expect(call.input.developerPrompt).toBe('Session dev prompt')
+            expect(call.input.tools).toEqual([sampleTool])
+            expect(call.input.toolChoice).toBe('none')
+            expect(call.options?.connectionMode).toBe('isolated')
+            expect(call.options?.promptCacheKey).toBe('s1')
+
+            // Full tool result (>2000 chars) is preserved in the structured entries without truncation!
+            const bashResultEntry = call.input.entries.find(
+                (e) => e.kind === 'toolResult' && e.id === 't0_bash',
+            ) as ToolResultEntry | undefined
+            expect(bashResultEntry).toBeDefined()
+            expect(
+                bashResultEntry!.content[0]?.type === 'text'
+                    ? bashResultEntry!.content[0].text
+                    : '',
+            ).toContain('FAIL: assertion failed at line 999')
+
+            // Last entry is the synthetic user summary instruction with <kept-start>.
+            const lastEntry = call.input.entries[call.input.entries.length - 1]
+            expect(lastEntry?.kind).toBe('user')
+            const instructionText =
+                lastEntry?.kind === 'user' && lastEntry.content[0]?.type === 'text'
+                    ? lastEntry.content[0].text
+                    : ''
+            expect(instructionText).toContain('<kept-start>')
+            expect(instructionText).toContain('Now fix the issue in src/app.ts')
+
+            // Even if the model echoes an old <read-files> tag, sanitizeSummaryBody strips it before appending authoritative lists.
+            return assistant(
+                'cached-sum',
+                validSummary() + '\n\n<read-files>\nstale.ts\n</read-files>',
+                {
+                    model: model.id,
+                    usage: usage(500, { input: 10, cacheRead: 470, output: 20 }),
+                },
+            )
+        })
+
+        const result = await compactConversation(entries, {
+            client,
+            model,
+            sessionId: 's1',
+            fastContextCompaction: false,
+            settings: { ...DEFAULT_COMPACTION_SETTINGS, keepRecentTokens: 10 },
+            cachedContext: {
+                systemPrompt: 'Session system prompt',
+                developerPrompt: 'Session dev prompt',
+                tools: [sampleTool],
+                modelId: model.id,
+                requestEntries: entries.slice(0, 5),
+                lastCachedAt: 100,
+                cacheExpiresAt: 60_000,
+            },
+            now: () => 1_000,
+        })
+
+        expect(calls).toHaveLength(1)
+        expect(result.entry.usage?.cacheRead).toBe(470)
+        expect(result.entry.modifiedFiles).toEqual(['src/app.ts'])
+        expect(result.entry.summary).not.toContain('stale.ts')
+        expect(result.entry.summary).toContain('<modified-files>\nsrc/app.ts\n</modified-files>')
+        expect(stripFileOperationTags('hello\n\n<read-files>\na.ts\n</read-files>')).toBe('hello')
+    })
+
+    it('omits toolChoice on Claude/Anthropic models to preserve Anthropic tool cache prefix', () => {
+        expect(shouldDisableToolsForCachedSummary('gpt-6.1-sol', [sampleTool])).toBe(true)
+        expect(shouldDisableToolsForCachedSummary('claude-opus-4-6', [sampleTool])).toBe(false)
+        expect(shouldDisableToolsForCachedSummary('gpt-6.1-sol', [])).toBe(false)
+    })
+
+    it('falls back cleanly to isolated compaction when cached summary calls a tool or fails validation', async () => {
+        const entries: ConversationEntry[] = [
+            user('u0', 'H'.repeat(20_000)),
+            assistant('a0', 'A'.repeat(20_000), { model: model.id }),
+            user('u1', 'H'.repeat(20_000)),
+            assistant('a1', 'A'.repeat(20_000), { model: model.id }),
+            user('u2', 'recent question'),
+            assistant('a2', 'recent answer', { model: model.id }),
+        ]
+
+        const { client, calls } = makeClient((call) => {
+            if (call.options?.promptCacheKey === 's1') {
+                // First call is cached path -> simulate model attempting to call a tool.
+                return assistant('bad-cached', '', {
+                    model: model.id,
+                    stopReason: 'toolUse',
+                    content: [
+                        {
+                            type: 'toolCall',
+                            id: 'tc_1',
+                            name: 'bash',
+                            arguments: { command: 'ls' },
+                        },
+                    ],
+                })
+            }
+            // Subsequent call(s) use the isolated fallback path!
+            expect(call.input.systemPrompt).toBe(SUMMARIZATION_SYSTEM_PROMPT)
+            expect(call.input.tools).toEqual([])
+            expect(call.options?.promptCacheKey).not.toBe('s1')
+            const isPrefix = promptTextOf(call).includes('PREFIX of a turn')
+            return assistant(
+                isPrefix ? 'isolated-prefix-ok' : 'isolated-ok',
+                isPrefix ? validTurnPrefix('from-fallback') : validSummary('from-fallback'),
+                {
+                    model: model.id,
+                    usage: usage(42),
+                },
+            )
+        })
+
+        const result = await compactConversation(entries, {
+            client,
+            model,
+            sessionId: 's1',
+            fastContextCompaction: false,
+            settings: { ...DEFAULT_COMPACTION_SETTINGS, keepRecentTokens: 5 },
+            cachedContext: {
+                systemPrompt: 'Session system prompt',
+                tools: [sampleTool],
+                modelId: model.id,
+                requestEntries: entries.slice(0, 4),
+                lastCachedAt: 100,
+                cacheExpiresAt: 60_000,
+            },
+            now: () => 1_000,
+            summaryRetryDelaysMs: [],
+        })
+
+        expect(calls).toHaveLength(2)
+        expect(calls[0]!.options?.promptCacheKey).toBe('s1')
+        expect(calls[1]!.options?.promptCacheKey).not.toBe('s1')
+        expect(result.entry.summary).toContain('from-fallback')
+    })
+
+    it('uses legacy isolated compaction directly when fastContextCompaction is enabled even with valid cachedContext', async () => {
+        const entries: ConversationEntry[] = [
+            user('u0', 'H'.repeat(20_000)),
+            assistant('a0', 'A'.repeat(20_000), { model: model.id }),
+            user('u1', 'recent question'),
+            assistant('a1', 'recent answer', { model: model.id }),
+        ]
+
+        const { client, calls } = makeClient((call) => {
+            expect(call.input.systemPrompt).toBe(SUMMARIZATION_SYSTEM_PROMPT)
+            expect(call.input.tools).toEqual([])
+            expect(call.options?.promptCacheKey).not.toBe('s1')
+            expect(call.input.reasoningEffort).toBe('low')
+            const isPrefix = promptTextOf(call).includes('PREFIX of a turn')
+            return assistant(
+                isPrefix ? 'legacy-prefix' : 'legacy-isolated',
+                isPrefix ? validTurnPrefix('from-legacy-fast') : validSummary('from-legacy-fast'),
+                {
+                    model: model.id,
+                    usage: usage(50),
+                },
+            )
+        })
+
+        const result = await compactConversation(entries, {
+            client,
+            model: {
+                ...model,
+                reasoningLevels: [
+                    { id: 'low', requestValue: 'low' },
+                    { id: 'xhigh', requestValue: 'xhigh' },
+                ],
+            },
+            sessionId: 's1',
+            reasoningEffort: 'xhigh',
+            fastContextCompaction: true,
+            settings: { ...DEFAULT_COMPACTION_SETTINGS, keepRecentTokens: 5 },
+            cachedContext: {
+                systemPrompt: 'Session system prompt',
+                developerPrompt: 'Session dev prompt',
+                tools: [sampleTool],
+                modelId: model.id,
+                requestEntries: entries.slice(0, 2),
+                lastCachedAt: 100,
+                cacheExpiresAt: 60_000,
+            },
+            now: () => 1_000,
+        })
+
+        expect(calls.length).toBeGreaterThanOrEqual(1)
+        expect(result.entry.summary).toContain('from-legacy-fast')
     })
 })

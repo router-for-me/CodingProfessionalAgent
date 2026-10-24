@@ -12,6 +12,9 @@ import {
     buildCompactedContext,
     compactConversation,
     deepCloneValue,
+    DEFAULT_PROMPT_CACHE_TTL_MS,
+    resolveSessionBaseReasoningEffort,
+    type CachedCompactionContext,
     type CompactConversationOptions,
     type CompactConversationResult,
 } from '../context/compaction'
@@ -91,6 +94,10 @@ export interface AgentLoopDependencies {
     modelInvoker?: ToolModelInvokerOwner
     /** Optional callback invoked synchronously when a model stream request is initiated. */
     onRequestSent?: (input: ProtocolStreamInput, isContextCurrent?: () => boolean) => void
+    /** Optional callback invoked when a provider turn establishes a warm prompt cache prefix, or null when compaction invalidates it. */
+    onTurnCached?: (cachedContext: CachedCompactionContext | null) => void
+    /** Optional resolver for prompt cache TTL in milliseconds for a given model ID. */
+    resolveCacheTtlMs?: (modelId: string) => number
     /** Optional callback invoked synchronously whenever conversation context entries are mutated. */
     onContextChanged?: () => void
 }
@@ -115,6 +122,8 @@ export interface AgentRunInput {
     signal?: AbortSignal
     compactionSettings?: Partial<CompactionSettings> | null
     fastContextCompaction?: boolean
+    /** Optional warm prompt-cache snapshot from the previous turn of this session. */
+    initialCachedContext?: CachedCompactionContext | null
     /** Absolute project cwd forwarded into tool execution contexts. */
     cwd?: string
     /** Optional generation snapshot pinning runtime providers for this run. */
@@ -528,8 +537,15 @@ export class AgentLoop {
     private readonly cloneStreamSnapshots: boolean
     private readonly modelInvoker?: ToolModelInvokerOwner
     private readonly onRequestSent?: (input: ProtocolStreamInput, isContextCurrent?: () => boolean) => void
+    private readonly onTurnCached?: (cachedContext: CachedCompactionContext | null) => void
+    private readonly resolveCacheTtlMs?: (modelId: string) => number
     private readonly onContextChanged?: () => void
     private contextRevision = 0
+    private activeRunCacheState: {
+        readonly token: number
+        cachedContext: CachedCompactionContext | null
+        baseReasoningEffort: string | undefined
+    } | null = null
 
     private activeRunId: string | null = null
     private activeToken = 0
@@ -569,12 +585,40 @@ export class AgentLoop {
         this.cloneStreamSnapshots = deps.cloneStreamSnapshots ?? true
         this.modelInvoker = deps.modelInvoker
         this.onRequestSent = deps.onRequestSent
+        this.onTurnCached = deps.onTurnCached
+        this.resolveCacheTtlMs = deps.resolveCacheTtlMs
         this.onContextChanged = deps.onContextChanged
     }
 
     private notifyContextChanged(): void {
         this.contextRevision += 1
         this.onContextChanged?.()
+    }
+
+    /**
+     * Refresh the expiration timestamp of the active run's cached context
+     * when a CacheWarmer heartbeat succeeds during long tool execution or approval wait.
+     */
+    refreshCachedContext(
+        expectedSnapshot: CachedCompactionContext,
+        lastCachedAt: number,
+        cacheExpiresAt: number,
+    ): void {
+        const current = this.activeRunCacheState?.cachedContext
+        if (!this.activeRunCacheState || !current) return
+        if (
+            current.modelId !== expectedSnapshot.modelId ||
+            current.lastCachedAt !== expectedSnapshot.lastCachedAt ||
+            (current.requestEntries?.length ?? 0) !==
+                (expectedSnapshot.requestEntries?.length ?? 0)
+        ) {
+            return
+        }
+        this.activeRunCacheState.cachedContext = {
+            ...current,
+            lastCachedAt,
+            cacheExpiresAt,
+        }
     }
 
     private getEffectiveHooks(): readonly HookContribution[] | undefined {
@@ -848,8 +892,11 @@ export class AgentLoop {
         if (this.activeToken === token && this.activeRunId === runId) {
             this.activeRunId = null
             this.runAbort = null
-        this.runCancellation = null
-        this.backgroundSink = null
+            this.runCancellation = null
+            this.backgroundSink = null
+        }
+        if (this.activeRunCacheState?.token === token) {
+            this.activeRunCacheState = null
         }
         // Drop provider ref only when this token still owns it (return may already
         // have fire-observed). Never clear a newer run's provider slot.
@@ -871,6 +918,23 @@ export class AgentLoop {
     ): AsyncGenerator<AgentRunEvent, void, undefined> {
         const scope = { runId: input.runId, sessionId: input.sessionId }
         const requestApproval = Boolean(input.requestApproval)
+        const fastContextCompaction = input.fastContextCompaction !== false
+        const initialCached =
+            !fastContextCompaction && input.initialCachedContext
+                ? snapshotClone(input.initialCachedContext)
+                : null
+        const runCacheState: {
+            readonly token: number
+            cachedContext: CachedCompactionContext | null
+            baseReasoningEffort: string | undefined
+        } = {
+            token,
+            cachedContext: initialCached,
+            baseReasoningEffort: initialCached?.baseReasoningEffort,
+        }
+        if (token === this.activeToken && !signal.aborted) {
+            this.activeRunCacheState = runCacheState
+        }
 
         // Defensive clone of input entries — never mutate caller arrays/objects.
         const stableEntries: ConversationEntry[] = input.entries.map((e) =>
@@ -936,7 +1000,6 @@ export class AgentLoop {
         const reasoningEffort = input.reasoningEffort
         const speed = input.speed
         const compactionSettings = input.compactionSettings
-        const fastContextCompaction = input.fastContextCompaction !== false
         const cwd = input.cwd
 
         const resolveCurrentReasoningEffort = () =>
@@ -1010,7 +1073,14 @@ export class AgentLoop {
                 settings: compactionSettings,
                 fastContextCompaction,
                 force: false,
+                trigger: 'auto',
+                cachedContext: fastContextCompaction
+                    ? undefined
+                    : runCacheState.cachedContext,
+                runCacheState,
+                resetBaseReasoningOnCommit: true,
                 scope,
+                token,
                 client: this.client,
             })
 
@@ -1058,7 +1128,14 @@ export class AgentLoop {
                     settings: compactionSettings,
                     fastContextCompaction,
                     force: false,
+                    trigger: 'auto',
+                    cachedContext: fastContextCompaction
+                        ? undefined
+                        : runCacheState.cachedContext,
+                    runCacheState,
+                    resetBaseReasoningOnCommit: true,
                     scope,
+                    token,
                     client: this.client,
                 })
             }
@@ -1081,6 +1158,7 @@ export class AgentLoop {
                     reasoningEffort: activeReasoningEffort,
                     speed: activeSpeed,
                     fastContextCompaction,
+                    runCacheState,
                     signal,
                     scope,
                     token,
@@ -1124,6 +1202,9 @@ export class AgentLoop {
 
                 // Success terminal assistant.
                 const assistant = providerResult.entry
+                if (providerResult.cachedContext) {
+                    runCacheState.cachedContext = providerResult.cachedContext
+                }
                 stableEntries.push(snapshotClone(assistant))
                 yield {
                     type: 'assistant-end',
@@ -1228,7 +1309,14 @@ export class AgentLoop {
                     settings: compactionSettings,
                     fastContextCompaction,
                     force: false,
+                    trigger: 'auto',
+                    cachedContext: fastContextCompaction
+                        ? undefined
+                        : runCacheState.cachedContext,
+                    runCacheState,
+                    resetBaseReasoningOnCommit: false,
                     scope,
+                    token,
                     client: this.client,
                 })
             }
@@ -1254,6 +1342,12 @@ export class AgentLoop {
                 }
                 yield* emitAgentEnd()
             }
+        } finally {
+            runCacheState.cachedContext = null
+            runCacheState.baseReasoningEffort = undefined
+            if (this.activeRunCacheState?.token === token) {
+                this.activeRunCacheState = null
+            }
         }
     }
 
@@ -1268,7 +1362,16 @@ export class AgentLoop {
             settings?: Partial<CompactionSettings> | null
             fastContextCompaction: boolean
             force: boolean
+            trigger?: 'auto' | 'manual' | 'overflow'
+            cachedContext?: CachedCompactionContext | null
+            runCacheState?: {
+                readonly token: number
+                cachedContext: CachedCompactionContext | null
+                baseReasoningEffort: string | undefined
+            }
+            resetBaseReasoningOnCommit?: boolean
             scope: { runId: string; sessionId: string }
+            token: number
             client: ProtocolClient
         },
     ): AsyncGenerator<
@@ -1335,6 +1438,8 @@ export class AgentLoop {
                     signal: args.signal,
                     settings: args.settings,
                     force: args.force,
+                    trigger: args.trigger ?? (args.force ? 'overflow' : 'auto'),
+                    cachedContext: args.cachedContext,
                     now: this.now,
                     generateId: this.generateId,
                     sleep: this.sleep,
@@ -1351,6 +1456,17 @@ export class AgentLoop {
             stableEntries.length = 0
             for (const entry of result.entries) {
                 stableEntries.push(snapshotClone(entry))
+            }
+            if (result.entry) {
+                if (args.runCacheState) {
+                    args.runCacheState.cachedContext = null
+                    if (args.resetBaseReasoningOnCommit) {
+                        args.runCacheState.baseReasoningEffort = undefined
+                    }
+                }
+                if (!args.signal.aborted && args.token === this.activeToken) {
+                    this.onTurnCached?.(null)
+                }
             }
             this.notifyContextChanged()
             yield {
@@ -1407,12 +1523,21 @@ export class AgentLoop {
         reasoningEffort?: string
         speed?: string
         fastContextCompaction: boolean
+        runCacheState: {
+            readonly token: number
+            cachedContext: CachedCompactionContext | null
+            baseReasoningEffort: string | undefined
+        }
         signal: AbortSignal
         scope: { runId: string; sessionId: string }
         token: number
     }): AsyncGenerator<
         AgentRunEvent,
-        | { kind: 'success'; entry: AssistantEntry }
+        | {
+              kind: 'success'
+              entry: AssistantEntry
+              cachedContext?: CachedCompactionContext
+          }
         | { kind: 'error'; entry: AssistantEntry }
         | { kind: 'aborted'; entry: AssistantEntry },
         undefined
@@ -1479,6 +1604,9 @@ export class AgentLoop {
                 }),
                 tools: toolDefs,
                 reasoningEffort,
+                ...(args.runCacheState.baseReasoningEffort !== undefined
+                    ? { baseReasoningEffort: args.runCacheState.baseReasoningEffort }
+                    : {}),
                 speed,
                 seed,
             }
@@ -1507,6 +1635,18 @@ export class AgentLoop {
             let streamError: unknown
             let finalEntry: AssistantEntry | undefined
             let generator: AsyncIterator<AssistantStreamEvent> | undefined
+
+            // Pin the run's baseReasoningEffort right as the first normal request is dispatched
+            // to this.client so that even if this attempt overflows, force-compacts, and retries,
+            // args.runCacheState.baseReasoningEffort stays aligned with CodexProtocolSession.baseReasoningEffort.
+            const dispatchedBaseEffort =
+                args.runCacheState.baseReasoningEffort ??
+                effectiveInput.baseReasoningEffort ??
+                resolveSessionBaseReasoningEffort(
+                    effectiveInput.entries,
+                    effectiveInput.reasoningEffort ?? reasoningEffort,
+                )
+            args.runCacheState.baseReasoningEffort = dispatchedBaseEffort
 
             const currentRev = this.contextRevision
             try {
@@ -1686,7 +1826,10 @@ export class AgentLoop {
                         settings: null,
                         fastContextCompaction,
                         force: true,
+                        runCacheState: args.runCacheState,
+                        resetBaseReasoningOnCommit: false,
                         scope,
+                        token,
                         client: this.client,
                     })
                     if (compactOutcome.aborted || signal.aborted || token !== this.activeToken) {
@@ -1770,7 +1913,10 @@ export class AgentLoop {
                         settings: null,
                         fastContextCompaction,
                         force: true,
+                        runCacheState: args.runCacheState,
+                        resetBaseReasoningOnCommit: false,
                         scope,
+                        token,
                         client: this.client,
                     })
                     if (compactOutcome.aborted || signal.aborted || token !== this.activeToken) {
@@ -1829,7 +1975,44 @@ export class AgentLoop {
                 }
             }
 
-            return { kind: 'success', entry: snapshotClone(finalEntry) }
+            const successEntry = snapshotClone(finalEntry)
+            const resolvedBaseEffort =
+                args.runCacheState.baseReasoningEffort ??
+                dispatchedBaseEffort
+            let turnCachedContext: CachedCompactionContext | undefined
+            if (!fastContextCompaction) {
+                const cachedAt = this.now()
+                const ttlMs = this.resolveCacheTtlMs
+                    ? this.resolveCacheTtlMs(model.id)
+                    : DEFAULT_PROMPT_CACHE_TTL_MS
+                turnCachedContext = {
+                    systemPrompt: effectiveInput.systemPrompt,
+                    developerPrompt: effectiveInput.developerPrompt,
+                    tools: effectiveInput.tools
+                        ? snapshotClone(effectiveInput.tools)
+                        : undefined,
+                    nativeTools: effectiveInput.nativeTools
+                        ? snapshotClone(effectiveInput.nativeTools)
+                        : undefined,
+                    modelId: model.id,
+                    baseReasoningEffort: resolvedBaseEffort,
+                    requestEntries: [
+                        ...snapshotClone(effectiveInput.entries),
+                        snapshotClone(successEntry),
+                    ],
+                    lastCachedAt: cachedAt,
+                    cacheExpiresAt: cachedAt + ttlMs,
+                }
+                if (!signal.aborted && token === this.activeToken) {
+                    this.onTurnCached?.(turnCachedContext)
+                }
+            }
+
+            return {
+                kind: 'success',
+                entry: successEntry,
+                cachedContext: turnCachedContext,
+            }
         }
     }
 

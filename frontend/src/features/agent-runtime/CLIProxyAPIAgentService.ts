@@ -24,6 +24,7 @@ import type { AgentRunEvent, AgentTool } from './agent/types'
 import { RunScopedModelInvoker } from './agent/isolatedModelInvoker'
 import {
     compactConversation,
+    type CachedCompactionContext,
     type CompactConversationOptions,
     type CompactConversationResult,
 } from './context/compaction'
@@ -958,8 +959,17 @@ export class CLIProxyAPIAgentService implements AgentService {
             manager?: ProtocolConnectionManager | null
         }
     >()
+    private static readonly MAX_CACHED_COMPACTION_SESSIONS = 32
     private readonly sessionWarmers = new Map<string, CacheWarmer>()
     private readonly drainingWarmers = new Set<Promise<void>>()
+    private readonly sessionCachedContexts = new Map<
+        string,
+        {
+            namespace: string
+            protocolProviderId?: string
+            context: CachedCompactionContext
+        }
+    >()
     /** Last observed redacted config-rotation dispose failure (tests / diagnostics). */
     private lastConfigDisposeError: AgentPreflightError | null = null
     /** Last successfully committed prepared snapshot (tests / diagnostics). */
@@ -1569,12 +1579,15 @@ export class CLIProxyAPIAgentService implements AgentService {
                 throw createAbortError()
             }
 
+            const effectiveProviderId = this.resolveEffectiveProtocolProviderId(
+                prepared.protocolProviderId,
+            )
             const client = this.createClientInstance({
                 bridge: this.bridge,
                 apiKey: prepared.apiKey,
                 baseUrl: prepared.baseUrl,
                 sessionId,
-                protocolProviderId: (prepared as any).protocolProviderId,
+                protocolProviderId: effectiveProviderId,
                 now: this.now,
                 generateRequestId: this.generateId,
                 connectionManager: manager ?? undefined,
@@ -1593,14 +1606,75 @@ export class CLIProxyAPIAgentService implements AgentService {
                 const dynamic = (input as AgentStreamChatInput).getRuntimeSettings?.()
                 return dynamic?.modelSettings ?? prepared.modelSettings
             }
+            const resolveSessionCacheTtlMs = (modelId: string): number => {
+                const modelSettings = getDynamicModelSettings()
+                const isAllEnabled = modelSettings?.enableAll !== false
+                const modelCfg = !isAllEnabled
+                    ? modelSettings?.models?.[modelId]
+                    : undefined
+                const ttlSec = modelCfg?.ttl ?? modelSettings?.defaultTtl ?? 300
+                return ttlSec * 1000
+            }
 
+            if (prepared.fastContextCompaction) {
+                this.sessionCachedContexts.delete(sessionId)
+            }
+
+            let loop: AgentLoop | undefined
             warmer = new CacheWarmer({
-                streamFn: (streamInput, opts) =>
-                    client.stream(streamInput, {
+                streamFn: (streamInput, opts) => {
+                    const targetRecord = this.sessionCachedContexts.get(sessionId)
+                    const targetContext = targetRecord?.context
+                    const rawStream = client.stream(streamInput, {
                         ...opts,
                         connectionMode: 'isolated',
                         promptCacheKey: sessionId,
-                    }),
+                    })
+                    const self = this
+                    return (async function* () {
+                        let succeeded = false
+                        for await (const event of rawStream) {
+                            if (event.type === 'done') {
+                                succeeded = true
+                            }
+                            yield event
+                        }
+                        if (
+                            succeeded &&
+                            !opts?.signal?.aborted &&
+                            !controller.signal.aborted &&
+                            !self.disposed &&
+                            targetContext
+                        ) {
+                            const currentRecord = self.sessionCachedContexts.get(sessionId)
+                            if (
+                                currentRecord &&
+                                currentRecord.context === targetContext &&
+                                currentRecord.namespace === namespace &&
+                                currentRecord.protocolProviderId === effectiveProviderId &&
+                                currentRecord.context.modelId === streamInput.model.id
+                            ) {
+                                const warmedAt = self.now()
+                                const expiresAt =
+                                    warmedAt + resolveSessionCacheTtlMs(streamInput.model.id)
+                                const refreshedContext: CachedCompactionContext = {
+                                    ...currentRecord.context,
+                                    lastCachedAt: warmedAt,
+                                    cacheExpiresAt: expiresAt,
+                                }
+                                self.sessionCachedContexts.set(sessionId, {
+                                    ...currentRecord,
+                                    context: refreshedContext,
+                                })
+                                loop?.refreshCachedContext?.(
+                                    targetContext,
+                                    warmedAt,
+                                    expiresAt,
+                                )
+                            }
+                        }
+                    })()
+                },
                 getMode: () => getDynamicModelSettings()?.cacheWarming?.mode ?? 'off',
                 getMaxWarmingTimeMs: () =>
                     (getDynamicModelSettings()?.cacheWarming?.maxWarmingTime ?? 3600) * 1000,
@@ -1611,7 +1685,7 @@ export class CLIProxyAPIAgentService implements AgentService {
             })
             this.sessionWarmers.set(sessionId, warmer)
 
-            const loop = this.createLoop({
+            loop = this.createLoop({
                 client,
                 approvals: this.approvals,
                 now: this.now,
@@ -1624,6 +1698,7 @@ export class CLIProxyAPIAgentService implements AgentService {
                 streamUpdateIntervalMs: this.streamUpdateIntervalMs,
                 cloneStreamSnapshots: false,
                 modelInvoker,
+                resolveCacheTtlMs: resolveSessionCacheTtlMs,
                 onContextChanged: () => {
                     void warmer?.cancel()
                 },
@@ -1631,23 +1706,47 @@ export class CLIProxyAPIAgentService implements AgentService {
                     if (warmer) {
                         this.sessionWarmers.set(sessionId, warmer)
                     }
-                    const isAllEnabled = prepared.modelSettings?.enableAll !== false
-                    const modelCfg = !isAllEnabled
-                        ? prepared.modelSettings?.models?.[streamInput.model.id]
-                        : undefined
-                    const ttlSec =
-                        modelCfg?.ttl ?? prepared.modelSettings?.defaultTtl ?? 300
+                    const ttlMs = resolveSessionCacheTtlMs(streamInput.model.id)
                     warmer?.start(
                         {
                             sessionId,
                             streamInput,
-                            ttlMs: ttlSec * 1000,
+                            ttlMs,
                         },
                         () =>
                             !controller.signal.aborted &&
                             !this.disposed &&
                             (isContextCurrent ? isContextCurrent() : true),
                     )
+                },
+                onTurnCached: (ctx) => {
+                    if (
+                        controller.signal.aborted ||
+                        this.disposed ||
+                        !this.activeOps.has(token)
+                    ) {
+                        return
+                    }
+                    if (!ctx || prepared.fastContextCompaction) {
+                        this.sessionCachedContexts.delete(sessionId)
+                        return
+                    }
+                    const nowTime = ctx.lastCachedAt ?? this.now()
+                    const expiresAt =
+                        ctx.cacheExpiresAt ??
+                        nowTime + resolveSessionCacheTtlMs(ctx.modelId)
+                    this.pruneSessionCachedContexts(nowTime)
+                    this.sessionCachedContexts.delete(sessionId)
+                    this.sessionCachedContexts.set(sessionId, {
+                        namespace,
+                        protocolProviderId: effectiveProviderId,
+                        context: {
+                            ...ctx,
+                            lastCachedAt: nowTime,
+                            cacheExpiresAt: expiresAt,
+                        },
+                    })
+                    this.pruneSessionCachedContexts(nowTime)
                 },
             })
 
@@ -1739,6 +1838,13 @@ export class CLIProxyAPIAgentService implements AgentService {
                 cwd: prepared.projectCwd,
                 compactionSettings: prepared.compactionSettings,
                 fastContextCompaction: prepared.fastContextCompaction,
+                initialCachedContext: prepared.fastContextCompaction
+                    ? undefined
+                    : this.getValidCachedContext(
+                          sessionId,
+                          namespace,
+                          effectiveProviderId,
+                      ),
                 getRuntimeSettings: (input as AgentStreamChatInput).getRuntimeSettings,
                 consumeSteerEntry: (input as AgentStreamChatInput).consumeSteerEntry,
                 consumeSteerEntries: (input as AgentStreamChatInput).consumeSteerEntries,
@@ -1866,11 +1972,15 @@ export class CLIProxyAPIAgentService implements AgentService {
                 throwIfAborted(controller.signal)
                 this.assertNotDisposed()
 
+                const effectiveProviderId = this.resolveEffectiveProtocolProviderId(
+                    prepared.protocolProviderId,
+                )
                 const client = this.createClientInstance({
                     bridge: this.bridge,
                     apiKey: prepared.apiKey,
                     baseUrl: prepared.baseUrl,
                     sessionId,
+                    protocolProviderId: effectiveProviderId,
                     now: this.now,
                     generateRequestId: this.generateId,
                     connectionManager: manager ?? undefined,
@@ -1931,6 +2041,14 @@ export class CLIProxyAPIAgentService implements AgentService {
                         reasoningEffort: prepared.reasoningEffort,
                         speed: prepared.speed,
                         fastContextCompaction: prepared.fastContextCompaction,
+                        trigger: 'manual',
+                        cachedContext: prepared.fastContextCompaction
+                            ? undefined
+                            : this.getValidCachedContext(
+                                  sessionId,
+                                  namespace,
+                                  effectiveProviderId,
+                              ),
                         signal: controller.signal,
                         customInstructions: input.customInstructions,
                         force: true,
@@ -1938,6 +2056,7 @@ export class CLIProxyAPIAgentService implements AgentService {
                         generateId: this.generateId,
                     },
                 )
+                this.sessionCachedContexts.delete(sessionId)
 
                 if (controller.signal.aborted) {
                     events.push({ type: 'aborted', runId, sessionId })
@@ -2212,6 +2331,56 @@ export class CLIProxyAPIAgentService implements AgentService {
         })
     }
 
+    private resolveEffectiveProtocolProviderId(
+        explicitProviderId?: string,
+    ): string | undefined {
+        if (explicitProviderId) return explicitProviderId
+        const provider =
+            this.extensionRegistry.getProtocolProvider(undefined) ??
+            agentRegistry.getProtocolProvider(undefined)
+        return provider?.id
+    }
+
+    private pruneSessionCachedContexts(nowTime = this.now()): void {
+        for (const [sid, record] of this.sessionCachedContexts.entries()) {
+            const expiresAt = record.context.cacheExpiresAt
+            if (
+                typeof expiresAt === 'number' &&
+                Number.isFinite(expiresAt) &&
+                nowTime >= expiresAt
+            ) {
+                this.sessionCachedContexts.delete(sid)
+            }
+        }
+        while (
+            this.sessionCachedContexts.size >
+            CLIProxyAPIAgentService.MAX_CACHED_COMPACTION_SESSIONS
+        ) {
+            const oldestKey = this.sessionCachedContexts.keys().next().value
+            if (oldestKey === undefined) break
+            this.sessionCachedContexts.delete(oldestKey)
+        }
+    }
+
+    private getValidCachedContext(
+        sessionId: string,
+        expectedNamespace: string,
+        expectedProviderId?: string,
+    ): CachedCompactionContext | undefined {
+        const nowTime = this.now()
+        this.pruneSessionCachedContexts(nowTime)
+        const record = this.sessionCachedContexts.get(sessionId)
+        if (!record) return undefined
+        if (
+            record.namespace !== expectedNamespace ||
+            record.protocolProviderId !== expectedProviderId
+        ) {
+            this.sessionCachedContexts.delete(sessionId)
+            return undefined
+        }
+        return record.context
+    }
+
     private abortChildOps(): void {
         for (const child of this.childOps.values()) {
             if (child.loop) {
@@ -2249,6 +2418,7 @@ export class CLIProxyAPIAgentService implements AgentService {
         }
         this.activeOps.clear()
         this.approvals.abortAll()
+        this.sessionCachedContexts.clear()
         await this.cancelSessionWarmers()
         while (this.drainingWarmers.size > 0) {
             await Promise.allSettled(Array.from(this.drainingWarmers))
@@ -2407,6 +2577,7 @@ export class CLIProxyAPIAgentService implements AgentService {
         if (!this.connectionNamespace || authChanged) {
             // Opaque service-assigned token — never a hash of the API key.
             this.connectionNamespace = this.generateId()
+            this.sessionCachedContexts.clear()
         }
         if (!this.connectionManager || authChanged) {
             this.connectionManager = this.createConnectionManager(this.bridge) ?? null

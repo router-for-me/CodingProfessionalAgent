@@ -6,7 +6,10 @@
 import type { ModelCatalogEntry } from '@/features/models/types'
 import type { AssistantStreamEvent } from '../agent/types'
 
-import type { ProtocolClient } from '@cpa/plugin-api'
+import type {
+    ProtocolClient,
+    ProtocolToolDefinition,
+} from '@cpa/plugin-api'
 import type {
     AssistantEntry,
     CompactionEntry,
@@ -232,6 +235,36 @@ export interface CompactionPreparation {
 
 export type SleepFn = (ms: number, signal: AbortSignal) => Promise<void>
 
+export interface CachedCompactionContext {
+    /** Exact system prompt sent in the session's last cached provider request. */
+    systemPrompt: string
+    /** Optional developer prompt sent in the session's last cached provider request. */
+    developerPrompt?: string
+    /** Tool definitions sent in the session's last cached provider request. */
+    tools?: readonly ProtocolToolDefinition[]
+    /** Native tools sent in the session's last cached provider request. */
+    nativeTools?: readonly { type: 'web_search' }[]
+    /** Model ID used in the session's last cached provider request. */
+    modelId: string
+    /** Pinned base reasoning effort of the session's last cached provider request. */
+    baseReasoningEffort?: string
+    /** Conversation entries sent in the session's last cached provider request. */
+    requestEntries?: readonly ConversationEntry[]
+    /** Timestamp (ms) when the prompt cache was last written or refreshed. */
+    lastCachedAt?: number
+    /** Timestamp (ms) when the prompt cache expires. */
+    cacheExpiresAt?: number
+}
+
+export interface KeptStartInfo {
+    /** Opening text preview of the first kept message in context. */
+    text: string
+    /** 1-based occurrence index from the end among kept messages sharing the same preview. */
+    fromEnd: number
+    /** Total number of kept entries from the first kept message onward. */
+    count: number
+}
+
 export interface CompactConversationOptions {
     /** Protocol client used only for isolated summary streams. */
     client: ProtocolClient
@@ -251,6 +284,14 @@ export interface CompactConversationOptions {
      * Overflow retry / manual compact use this path; Task 15 owns only-once retry.
      */
     force?: boolean
+    /**
+     * Optional captured session request context enabling cache-hit compaction.
+     * When provided and all preconditions hold, compaction reuses the session's
+     * prompt cache instead of flattening history into a cold request.
+     */
+    cachedContext?: CachedCompactionContext | null
+    /** Compaction trigger reason ('auto' | 'manual' | 'overflow'). Overflow always uses isolated path. */
+    trigger?: 'auto' | 'manual' | 'overflow'
     now?: () => number
     generateId?: () => string
     /** Injectable sleep for summary-level transient retries (Abort-interruptible). */
@@ -620,10 +661,23 @@ export function stripIllegalControls(text: string): string {
 }
 
 /**
+ * Strip model-echoed <read-files> / <modified-files> XML blocks so appended
+ * implementation-owned file lists are never duplicated.
+ */
+export function stripFileOperationTags(text: string): string {
+    return text.replace(
+        /\s*<(read-files|modified-files)>[\s\S]*?<\/\1>/gi,
+        '',
+    )
+}
+
+/**
  * Sanitize model summary body before appending file-list XML and persisting.
  */
 export function sanitizeSummaryBody(text: string): string {
-    return neutralizeSummaryTags(stripIllegalControls(text))
+    return neutralizeSummaryTags(
+        stripIllegalControls(stripFileOperationTags(text)),
+    )
 }
 
 /**
@@ -1108,26 +1162,309 @@ export async function defaultSleep(ms: number, signal: AbortSignal): Promise<voi
     })
 }
 
-function summaryMaxTokens(reserveTokens: number, model: ModelCatalogEntry): number {
-    const fromReserve = Math.floor(reserveTokens * 0.8)
-    const modelMax =
-        typeof model.maxTokens === 'number' &&
-        Number.isFinite(model.maxTokens) &&
-        model.maxTokens > 0
-            ? Math.floor(model.maxTokens)
-            : Number.POSITIVE_INFINITY
-    return Math.min(fromReserve, modelMax)
+export const MIN_DYNAMIC_SUMMARY_OUTPUT_TOKENS = 1_024
+export const DEFAULT_PROMPT_CACHE_TTL_MS = 5 * 60 * 1000
+const SUMMARY_INPUT_SAFETY_MARGIN_TOKENS = 512
+
+function estimateIsolatedPromptInputTokens(promptText: string): number {
+    return (
+        Math.ceil(
+            (SUMMARIZATION_SYSTEM_PROMPT.length + promptText.length) / 4,
+        ) + SUMMARY_INPUT_SAFETY_MARGIN_TOKENS
+    )
 }
 
-function turnPrefixMaxTokens(reserveTokens: number, model: ModelCatalogEntry): number {
-    const fromReserve = Math.floor(reserveTokens * 0.5)
-    const modelMax =
+function sliceUtf16PrefixSafe(text: string, maxUnits: number): string {
+    if (maxUnits <= 0) return ''
+    if (text.length <= maxUnits) return text
+    let end = maxUnits
+    const code = text.charCodeAt(end - 1)
+    if (code >= 0xd800 && code <= 0xdbff) {
+        end -= 1
+    }
+    return text.slice(0, end)
+}
+
+function sliceUtf16SuffixSafe(text: string, maxUnits: number): string {
+    if (maxUnits <= 0) return ''
+    if (text.length <= maxUnits) return text
+    let start = text.length - maxUnits
+    const code = text.charCodeAt(start)
+    if (code >= 0xdc00 && code <= 0xdfff) {
+        start += 1
+    }
+    return text.slice(start)
+}
+
+function trimSectionBody(
+    body: string,
+    budget: number,
+    marker: string,
+): string {
+    if (budget <= 0) return ''
+    if (body.length <= budget) return body
+    const contentBudget = budget - marker.length
+    if (contentBudget > 64) {
+        const half = Math.floor(contentBudget / 2)
+        const head = sliceUtf16PrefixSafe(body, half)
+        const tail = sliceUtf16SuffixSafe(body, contentBudget - head.length)
+        return head + marker + tail
+    }
+    return sliceUtf16PrefixSafe(body, budget)
+}
+
+/**
+ * Ensure an isolated summarization prompt leaves at least MIN_DYNAMIC_SUMMARY_OUTPUT_TOKENS
+ * (when model.contextWindow permits) so input + output never exceed model.contextWindow,
+ * while always preserving XML delimiters, <previous-summary>, and the trailing format instructions.
+ */
+function fitIsolatedPromptToContextWindow(
+    promptText: string,
+    model: ModelCatalogEntry,
+): string {
+    if (
+        typeof model.contextWindow !== 'number' ||
+        !Number.isFinite(model.contextWindow) ||
+        model.contextWindow <= 0
+    ) {
+        return promptText
+    }
+    const contextWindow = Math.floor(model.contextWindow)
+    const minOutput = Math.min(
+        typeof model.maxTokens === 'number' && model.maxTokens > 0
+            ? Math.floor(model.maxTokens)
+            : MIN_DYNAMIC_SUMMARY_OUTPUT_TOKENS,
+        MIN_DYNAMIC_SUMMARY_OUTPUT_TOKENS,
+    )
+    const convOpen = '<conversation>\n'
+    const convClose = '\n</conversation>\n\n'
+    if (promptText.startsWith(convOpen)) {
+        const convCloseIdx = promptText.indexOf(convClose, convOpen.length)
+        if (convCloseIdx >= convOpen.length) {
+            const conversationBody = promptText.slice(convOpen.length, convCloseIdx)
+            const rest = promptText.slice(convCloseIdx + convClose.length)
+
+            const prevOpen = '<previous-summary>\n'
+            const prevClose = '\n</previous-summary>\n\n'
+            let previousSummaryBody: string | undefined
+            let instructions = rest
+            if (rest.startsWith(prevOpen)) {
+                const prevCloseIdx = rest.indexOf(prevClose, prevOpen.length)
+                if (prevCloseIdx >= prevOpen.length) {
+                    previousSummaryBody = rest.slice(prevOpen.length, prevCloseIdx)
+                    instructions = rest.slice(prevCloseIdx + prevClose.length)
+                }
+            }
+
+            const focusPrefix = '\n\nAdditional focus: '
+            const focusIdx = instructions.indexOf(focusPrefix)
+            const coreInstructions =
+                focusIdx >= 0 ? instructions.slice(0, focusIdx) : instructions
+            const focusBody =
+                focusIdx >= 0
+                    ? instructions.slice(focusIdx + focusPrefix.length)
+                    : undefined
+
+            const fixedChars =
+                convOpen.length +
+                convClose.length +
+                (previousSummaryBody !== undefined
+                    ? prevOpen.length + prevClose.length
+                    : 0) +
+                coreInstructions.length
+
+            const totalFixedTokens =
+                Math.ceil((SUMMARIZATION_SYSTEM_PROMPT.length + fixedChars) / 4) +
+                SUMMARY_INPUT_SAFETY_MARGIN_TOKENS
+            const remainingForBodyAndOutput = contextWindow - totalFixedTokens
+            if (remainingForBodyAndOutput <= 1) {
+                return promptText
+            }
+            const targetOutputReserve =
+                remainingForBodyAndOutput - minOutput >= 64
+                    ? minOutput
+                    : Math.min(
+                          minOutput,
+                          Math.max(1, Math.floor(remainingForBodyAndOutput / 2)),
+                      )
+            const maxTotalInputTokens = contextWindow - targetOutputReserve
+            const maxPromptChars =
+                (maxTotalInputTokens - SUMMARY_INPUT_SAFETY_MARGIN_TOKENS) * 4 -
+                SUMMARIZATION_SYSTEM_PROMPT.length
+            if (promptText.length <= maxPromptChars) {
+                return promptText
+            }
+
+            let remainingBudget = Math.max(4, maxPromptChars - fixedChars)
+            let trimmedFocus = ''
+            if (focusBody !== undefined && remainingBudget > focusPrefix.length + 8) {
+                const maxFocusChars = Math.min(
+                    focusBody.length,
+                    Math.max(8, Math.floor((remainingBudget - focusPrefix.length) * 0.2)),
+                )
+                const safeFocus = sliceUtf16PrefixSafe(focusBody, maxFocusChars)
+                if (safeFocus.length > 0) {
+                    trimmedFocus = focusPrefix + safeFocus
+                    remainingBudget -= trimmedFocus.length
+                }
+            }
+
+            const convMarker =
+                '\n...[earlier conversation truncated to fit context window]...\n'
+            if (previousSummaryBody === undefined) {
+                const trimmedConv = trimSectionBody(
+                    conversationBody,
+                    remainingBudget,
+                    convMarker,
+                )
+                return convOpen + trimmedConv + convClose + coreInstructions + trimmedFocus
+            }
+
+            const half = Math.floor(remainingBudget / 2)
+            let convBudget: number
+            let prevBudget: number
+            if (previousSummaryBody.length <= half) {
+                prevBudget = previousSummaryBody.length
+                convBudget = remainingBudget - prevBudget
+            } else if (conversationBody.length <= remainingBudget - half) {
+                convBudget = conversationBody.length
+                prevBudget = remainingBudget - convBudget
+            } else {
+                convBudget = remainingBudget - half
+                prevBudget = half
+            }
+            const prevMarker =
+                '\n...[previous summary truncated to fit context window]...\n'
+            const trimmedConv = trimSectionBody(
+                conversationBody,
+                convBudget,
+                convMarker,
+            )
+            const trimmedPrev = trimSectionBody(
+                previousSummaryBody,
+                prevBudget,
+                prevMarker,
+            )
+            return (
+                convOpen +
+                trimmedConv +
+                convClose +
+                prevOpen +
+                trimmedPrev +
+                prevClose +
+                coreInstructions +
+                trimmedFocus
+            )
+        }
+    }
+
+    const fallbackFixedTokens =
+        Math.ceil(SUMMARIZATION_SYSTEM_PROMPT.length / 4) +
+        SUMMARY_INPUT_SAFETY_MARGIN_TOKENS
+    const fallbackRemaining = contextWindow - fallbackFixedTokens
+    if (fallbackRemaining <= 1) {
+        return promptText
+    }
+    const fallbackOutputReserve =
+        fallbackRemaining - minOutput >= 64
+            ? minOutput
+            : Math.min(minOutput, Math.max(1, Math.floor(fallbackRemaining / 2)))
+    const fallbackMaxChars =
+        (contextWindow - fallbackOutputReserve - SUMMARY_INPUT_SAFETY_MARGIN_TOKENS) *
+            4 -
+        SUMMARIZATION_SYSTEM_PROMPT.length
+    if (promptText.length <= fallbackMaxChars) {
+        return promptText
+    }
+    return sliceUtf16PrefixSafe(promptText, Math.max(1, fallbackMaxChars))
+}
+
+function estimateCachedSummaryInputTokens(
+    protocolEntries: readonly ConversationEntry[],
+    cachedContext: CachedCompactionContext,
+): number {
+    const est = estimateContextTokens(protocolEntries)
+    // When a trusted assistant usage baseline is present (est.usage > 0),
+    // usage.totalTokens already includes systemPrompt, developerPrompt, and tools.
+    if (est.usage > 0) {
+        return est.tokens + SUMMARY_INPUT_SAFETY_MARGIN_TOKENS
+    }
+    const systemChars =
+        (cachedContext.systemPrompt?.length ?? 0) +
+        (cachedContext.developerPrompt?.length ?? 0)
+    const toolsChars = cachedContext.tools?.length
+        ? JSON.stringify(cachedContext.tools).length
+        : 0
+    const nativeToolsChars = cachedContext.nativeTools?.length
+        ? JSON.stringify(cachedContext.nativeTools).length
+        : 0
+    return (
+        est.tokens +
+        Math.ceil((systemChars + toolsChars + nativeToolsChars) / 4) +
+        SUMMARY_INPUT_SAFETY_MARGIN_TOKENS
+    )
+}
+
+/**
+ * Compute summary output token budget (Pi 1.4+ semantics):
+ * Uses the model's own maxTokens instead of capping by reserveTokens,
+ * and dynamically shrinks when needed so input + output fit within contextWindow.
+ */
+export function resolveSummaryMaxTokens(
+    model: ModelCatalogEntry,
+    estimatedInputTokens = 0,
+    fallbackReserveTokens: number = DEFAULT_COMPACTION_SETTINGS.reserveTokens,
+): number {
+    const hasModelMax =
         typeof model.maxTokens === 'number' &&
         Number.isFinite(model.maxTokens) &&
         model.maxTokens > 0
-            ? Math.floor(model.maxTokens)
-            : Number.POSITIVE_INFINITY
-    return Math.min(fromReserve, modelMax)
+    const modelMax = hasModelMax
+        ? Math.floor(model.maxTokens)
+        : Math.max(1, Math.floor(fallbackReserveTokens * 0.8))
+
+    if (
+        typeof estimatedInputTokens === 'number' &&
+        Number.isFinite(estimatedInputTokens) &&
+        estimatedInputTokens > 0 &&
+        typeof model.contextWindow === 'number' &&
+        Number.isFinite(model.contextWindow) &&
+        model.contextWindow > 0
+    ) {
+        const contextWindow = Math.floor(model.contextWindow)
+        const remaining = contextWindow - Math.ceil(estimatedInputTokens)
+        if (remaining < modelMax) {
+            if (remaining > 0) {
+                return remaining
+            }
+            return Math.min(
+                modelMax,
+                 Math.min(contextWindow, MIN_DYNAMIC_SUMMARY_OUTPUT_TOKENS),
+            )
+        }
+    }
+
+    return modelMax
+}
+
+function summaryMaxTokens(
+    reserveTokens: number,
+    model: ModelCatalogEntry,
+    estimatedInputTokens = 0,
+): number {
+    return resolveSummaryMaxTokens(model, estimatedInputTokens, reserveTokens)
+}
+
+function turnPrefixMaxTokens(
+    reserveTokens: number,
+    model: ModelCatalogEntry,
+    estimatedInputTokens = 0,
+): number {
+    return resolveSummaryMaxTokens(
+        model,
+        estimatedInputTokens,
+         Math.max(1, Math.floor(reserveTokens * 0.625)),
+    )
 }
 
 function extractAssistantText(entry: AssistantEntry): string {
@@ -1204,6 +1541,351 @@ function buildTurnPrefixPromptText(entries: readonly ConversationEntry[]): strin
         'conversation',
     )
     return `<conversation>\n${conversationText}\n</conversation>\n\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`
+}
+
+const KEPT_START_PREVIEW_MAX_CODE_POINTS = 400
+
+function entryPreviewText(entry: ConversationEntry): string | undefined {
+    let raw: string | undefined
+    if (entry.kind === 'user') {
+        const texts: string[] = []
+        let hasImage = false
+        for (const block of entry.content) {
+            if (block.type === 'text' && block.text.trim()) {
+                texts.push(block.text)
+            } else if (block.type === 'image') {
+                hasImage = true
+            }
+        }
+        if (texts.length > 0) {
+            raw = texts.join('\n')
+        } else if (hasImage) {
+            raw = IMAGE_PLACEHOLDER
+        }
+    } else if (entry.kind === 'assistant') {
+        const parts: string[] = []
+        for (const block of entry.content) {
+            if (block.type === 'text' && block.text.trim()) {
+                parts.push(block.text)
+            } else if (block.type === 'toolCall') {
+                parts.push(
+                    `[tool call: ${block.name} ${safeJsonStringify(block.arguments ?? {})}]`,
+                )
+            }
+        }
+        if (parts.length > 0) {
+            raw = parts.join('\n')
+        }
+    }
+
+    const trimmed = raw?.trim()
+    if (!trimmed) return undefined
+    const units = Array.from(trimmed)
+    if (units.length <= KEPT_START_PREVIEW_MAX_CODE_POINTS) {
+        return trimmed
+    }
+    return `${units.slice(0, KEPT_START_PREVIEW_MAX_CODE_POINTS).join('')}…`
+}
+
+/**
+ * Locate the opening preview text of the first kept message in the compacted view.
+ * Returns undefined if there are no prior entries to summarize or no kept message has preview text.
+ */
+export function findKeptStart(
+    compactedEntries: readonly ConversationEntry[],
+    firstKeptEntryId: string,
+): KeptStartInfo | undefined {
+    const startIndex = compactedEntries.findIndex(
+        (entry) => entry.id === firstKeptEntryId,
+    )
+    if (startIndex <= 0) return undefined
+
+    const keptEntries = compactedEntries.slice(startIndex)
+    const previews = keptEntries.map((entry) => entryPreviewText(entry))
+    // Only accept a preview from the exact firstKeptEntryId entry (index 0 of keptEntries)
+    // so the <kept-start> boundary never drifts past kept messages without text.
+    const firstText = previews[0]
+    if (typeof firstText !== 'string' || firstText.length === 0) return undefined
+
+    const fromEnd = previews.filter((preview) => preview === firstText).length
+    const count = keptEntries.filter(
+        (entry) =>
+            entry.kind === 'user' ||
+            entry.kind === 'assistant' ||
+            entry.kind === 'toolResult',
+    ).length
+    if (count <= 0) return undefined
+
+    return {
+        text: firstText,
+        fromEnd,
+        count,
+    }
+}
+
+export function resolveSessionBaseReasoningEffort(
+    entries: readonly ConversationEntry[],
+    fallback?: string,
+): string | undefined {
+    for (const entry of entries) {
+        if (
+            (entry.kind === 'user' || entry.kind === 'assistant') &&
+            entry.reasoningEffort
+        ) {
+            return entry.reasoningEffort
+        }
+    }
+    return fallback
+}
+
+function stableJsonEqual(a: unknown, b: unknown): boolean {
+    if (a === b) return true
+    if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') {
+        return false
+    }
+    if (Array.isArray(a) || Array.isArray(b)) {
+        if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) {
+            return false
+        }
+        for (let i = 0; i < a.length; i++) {
+            if (!stableJsonEqual(a[i], b[i])) return false
+        }
+        return true
+    }
+    const objA = a as Record<string, unknown>
+    const objB = b as Record<string, unknown>
+    const keysA = Object.keys(objA)
+    const keysB = Object.keys(objB)
+    if (keysA.length !== keysB.length) return false
+    for (const key of keysA) {
+        if (!Object.prototype.hasOwnProperty.call(objB, key)) return false
+        if (!stableJsonEqual(objA[key], objB[key])) return false
+    }
+    return true
+}
+
+function areEntriesPrefixEquivalent(
+    expected: ConversationEntry,
+    actual: ConversationEntry,
+): boolean {
+    if (expected.id !== actual.id || expected.kind !== actual.kind) {
+        return false
+    }
+    switch (expected.kind) {
+        case 'user': {
+            const act = actual as UserEntry
+            return (
+                expected.reasoningEffort === act.reasoningEffort &&
+                stableJsonEqual(expected.content, act.content)
+            )
+        }
+        case 'assistant': {
+            const act = actual as AssistantEntry
+            return (
+                expected.model === act.model &&
+                expected.stopReason === act.stopReason &&
+                expected.status === act.status &&
+                expected.reasoningEffort === act.reasoningEffort &&
+                stableJsonEqual(expected.content, act.content)
+            )
+        }
+        case 'toolResult': {
+            const act = actual as ToolResultEntry
+            return (
+                expected.toolCallId === act.toolCallId &&
+                expected.toolName === act.toolName &&
+                Boolean(expected.isError) === Boolean(act.isError) &&
+                stableJsonEqual(expected.content, act.content)
+            )
+        }
+        case 'compaction': {
+            const act = actual as CompactionEntry
+            return (
+                expected.summary === act.summary &&
+                expected.firstKeptEntryId === act.firstKeptEntryId
+            )
+        }
+    }
+}
+
+/**
+ * Build the trailing user instruction for cache-hit compaction.
+ * Quotes the <kept-start> boundary so the model summarizes only messages before it.
+ */
+export function buildCachedSummaryPrompt(
+    kept: KeptStartInfo,
+    customInstructions?: string,
+): string {
+    const repeated =
+        kept.fromEnd > 1
+            ? ` Several kept messages begin with this text: it is number ${kept.fromEnd} of them, counting back from the end.`
+            : ''
+    const toolCalls = kept.text.includes('[tool call: ')
+        ? ' Tool calls are written as [tool call: name arguments].'
+        : ''
+    const focus = customInstructions?.trim()
+        ? `\n\nAdditional focus: ${customInstructions.trim()}`
+        : ''
+    const safeKeptText = neutralizeClosingTag(kept.text, 'kept-start')
+
+    return `Stop working on the task and do not call any tools. Write a structured context checkpoint summary of the earlier part of the conversation above. Another LLM will continue the work from your summary, followed by the last ${kept.count} messages of the conversation, which stay in context verbatim.
+
+The kept messages start with the message that begins with the text below.${repeated}${toolCalls}
+
+<kept-start>
+${safeKeptText}
+</kept-start>
+
+Summarize only the messages before it, as if the conversation ended right there. Done lists only work finished before it. Whatever happens from that message on, including its tool calls, their results, and later replies, has not happened as far as your summary knows: leave it out, or list it under Next Steps if it was already planned.
+
+If the conversation starts with an earlier <summary>, fold it into the new one: preserve its facts, move finished items from "In Progress" to "Done", and update "Next Steps".
+
+Use this EXACT format:
+
+## Goal
+[What is the user trying to accomplish? Can be multiple items if the session covers different tasks.]
+
+## Constraints & Preferences
+- [Any constraints, preferences, or requirements mentioned by user]
+- [Or "(none)" if none were mentioned]
+
+## Progress
+### Done
+- [x] [Completed tasks/changes]
+
+### In Progress
+- [ ] [Current work]
+
+### Blocked
+- [Issues preventing progress, if any]
+
+## Key Decisions
+- **[Decision]**: [Brief rationale]
+
+## Next Steps
+1. [Ordered list of what should happen next]
+
+## Critical Context
+- [Any data, examples, or references needed to continue]
+- [Or "(none)" if not applicable]
+
+Keep each section concise. Preserve exact file paths, function names, and error messages. Do not include <read-files> or <modified-files> blocks; they are appended automatically. Reply with the summary only, and stop it right before the message that begins with the <kept-start> text.${focus}`
+}
+
+/**
+ * On OpenAI Responses API models, tool_choice is not part of the cached prefix,
+ * so setting toolChoice: 'none' disables tool calls while preserving cache hits.
+ * On Claude/Anthropic models, changing tool_choice invalidates the message cache,
+ * so toolChoice is left undefined ('auto') and the prompt instructs no tool calls.
+ */
+export function shouldDisableToolsForCachedSummary(
+    modelId: string,
+    tools?: readonly ProtocolToolDefinition[],
+    nativeTools?: readonly { type: 'web_search' }[],
+): boolean {
+    const hasTools =
+        (Array.isArray(tools) && tools.length > 0) ||
+        (Array.isArray(nativeTools) && nativeTools.length > 0)
+    if (!hasTools) return false
+    return !/claude|anthropic/i.test(modelId)
+}
+
+function isAbortSummaryError(error: unknown, signal: AbortSignal): boolean {
+    if (signal.aborted) return true
+    if (error instanceof Error && error.name === 'AbortError') return true
+    const message =
+        error instanceof Error
+            ? error.message
+            : typeof error === 'string'
+              ? error
+              : String(error ?? '')
+    return /request was aborted|aborted by user|the operation was aborted/i.test(
+        message,
+    )
+}
+
+/**
+ * Validate the preconditions for cache-hit compaction:
+ * 0. Fast context compaction MUST be disabled (`fastContextCompaction === false`).
+ *    When fast context compaction is enabled, legacy isolated compaction is used.
+ * 1. Valid cachedContext & non-overflow trigger
+ * 2. Same model as the last cached turn
+ * 3. Prompt cache has not expired
+ * 4. Conversation only grew by appending (strictly extends requestEntries) & has valid <kept-start>
+ */
+export function canUseCachedCompaction(
+    compactedEntries: readonly ConversationEntry[],
+    preparation: CompactionPreparation,
+    options: CompactConversationOptions,
+    nowTime: number,
+): { keptStart: KeptStartInfo; cachedContext: CachedCompactionContext } | undefined {
+    if (options.fastContextCompaction !== false) return undefined
+    const cachedContext = options.cachedContext
+    if (!cachedContext) return undefined
+    if (options.trigger === 'overflow') return undefined
+    if (cachedContext.modelId !== options.model.id) {
+        return undefined
+    }
+    const effectiveExpiresAt =
+        typeof cachedContext.cacheExpiresAt === 'number' &&
+        Number.isFinite(cachedContext.cacheExpiresAt)
+            ? cachedContext.cacheExpiresAt
+            : typeof cachedContext.lastCachedAt === 'number' &&
+                Number.isFinite(cachedContext.lastCachedAt)
+              ? cachedContext.lastCachedAt + DEFAULT_PROMPT_CACHE_TTL_MS
+              : undefined
+    if (effectiveExpiresAt === undefined || nowTime >= effectiveExpiresAt) {
+        return undefined
+    }
+
+    // Must have at least one completed replayable assistant in the active context
+    // and its model (when recorded) must match the current model.
+    let lastReplayableAssistant: AssistantEntry | undefined
+    for (let i = compactedEntries.length - 1; i >= 0; i--) {
+        const entry = compactedEntries[i]
+        if (entry?.kind === 'assistant' && isReplayableAssistant(entry)) {
+            lastReplayableAssistant = entry
+            break
+        }
+    }
+    if (!lastReplayableAssistant) {
+        return undefined
+    }
+    if (
+        lastReplayableAssistant.model &&
+        lastReplayableAssistant.model !== options.model.id
+    ) {
+        return undefined
+    }
+
+    // Verify append-only growth and content equivalence against the captured request entries.
+    const prefix = cachedContext.requestEntries
+    if (
+        !prefix ||
+        prefix.length === 0 ||
+        compactedEntries.length < prefix.length
+    ) {
+        return undefined
+    }
+    for (let i = 0; i < prefix.length; i++) {
+        const expected = prefix[i]
+        const actual = compactedEntries[i]
+        if (
+            !expected ||
+            !actual ||
+            !areEntriesPrefixEquivalent(expected, actual)
+        ) {
+            return undefined
+        }
+    }
+
+    const keptStart = findKeptStart(
+        compactedEntries,
+        preparation.firstKeptEntryId,
+    )
+    if (!keptStart) return undefined
+
+    return { keptStart, cachedContext }
 }
 
 async function collectStream(
@@ -1430,6 +2112,146 @@ async function runIsolatedSummary(params: {
     throw lastError instanceof Error ? lastError : new Error(String(lastError))
 }
 
+async function runCachedSummary(params: {
+    client: ProtocolClient
+    model: ModelCatalogEntry
+    sessionId: string
+    compactedEntries: readonly ConversationEntry[]
+    keptStart: KeptStartInfo
+    cachedContext: CachedCompactionContext
+    customInstructions?: string
+    reserveTokens: number
+    reasoningEffort?: string
+    baseReasoningEffort?: string
+    speed?: string
+    signal: AbortSignal
+    now: () => number
+    generateId: () => string
+}): Promise<AssistantEntry> {
+    const {
+        client,
+        model,
+        sessionId,
+        compactedEntries,
+        keptStart,
+        cachedContext,
+        customInstructions,
+        reserveTokens,
+        reasoningEffort,
+        baseReasoningEffort,
+        speed,
+        signal,
+        now,
+        generateId,
+    } = params
+
+    if (signal.aborted) {
+        throw new Error('Request was aborted')
+    }
+
+    const promptText = buildCachedSummaryPrompt(keptStart, customInstructions)
+    const instructionEntry: UserEntry = {
+        id: generateId(),
+        sessionId,
+        createdAt: now(),
+        kind: 'user',
+        content: [{ type: 'text', text: promptText }],
+    }
+
+    const protocolEntries: ConversationEntry[] = compactedEntries.map(
+        (entry) => {
+            if (entry.kind !== 'toolResult') return deepCloneValue(entry)
+            const cloned = deepCloneValue(entry)
+            const { displayMetadata: _displayMetadata, ...rest } = cloned
+            return rest
+        },
+    )
+    protocolEntries.push(instructionEntry)
+
+    const estimatedInputTokens = estimateCachedSummaryInputTokens(
+        protocolEntries,
+        cachedContext,
+    )
+    if (
+        typeof model.contextWindow === 'number' &&
+        Number.isFinite(model.contextWindow) &&
+        model.contextWindow > 0
+    ) {
+        const minRequiredOutput = Math.min(
+            typeof model.maxTokens === 'number' && model.maxTokens > 0
+                ? Math.floor(model.maxTokens)
+                : MIN_DYNAMIC_SUMMARY_OUTPUT_TOKENS,
+            MIN_DYNAMIC_SUMMARY_OUTPUT_TOKENS,
+        )
+        if (
+            Math.floor(model.contextWindow) - Math.ceil(estimatedInputTokens) <
+            minRequiredOutput
+        ) {
+            throw new Error(
+                'Cached summarization skipped: insufficient remaining context window for summary output',
+            )
+        }
+    }
+    const maxOutputTokens = summaryMaxTokens(
+        reserveTokens,
+        model,
+        estimatedInputTokens,
+    )
+
+    const seed: AssistantEntry = {
+        id: generateId(),
+        sessionId,
+        createdAt: now(),
+        kind: 'assistant',
+        model: model.id,
+        content: [],
+        status: 'streaming',
+        stopReason: 'pending',
+    }
+
+    const disableTools = shouldDisableToolsForCachedSummary(
+        model.id,
+        cachedContext.tools,
+        cachedContext.nativeTools,
+    )
+
+    const gen = client.stream(
+        {
+            model,
+            systemPrompt: cachedContext.systemPrompt,
+            developerPrompt: cachedContext.developerPrompt,
+            entries: protocolEntries,
+            tools: cachedContext.tools ? [...cachedContext.tools] : undefined,
+            nativeTools: cachedContext.nativeTools
+                ? [...cachedContext.nativeTools]
+                : undefined,
+            ...(disableTools ? { toolChoice: 'none' as const } : {}),
+            reasoningEffort,
+            baseReasoningEffort:
+                cachedContext.baseReasoningEffort ??
+                resolveSessionBaseReasoningEffort(
+                    protocolEntries,
+                    baseReasoningEffort,
+                ),
+            speed,
+            seed,
+        },
+        {
+            connectionMode: 'isolated',
+            promptCacheKey: sessionId,
+            maxOutputTokens,
+            signal,
+        },
+    )
+
+    const result = await collectStream(gen)
+    if (signal.aborted) {
+        throw new Error('Request was aborted')
+    }
+    assertSummaryAssistantOk(result, 'Cached summarization')
+    return result
+}
+
 /**
  * Compact a conversation by summarizing discarded history into a single CompactionEntry.
  * On failure/abort the input entries array is never mutated; a new deep-cloned array is returned on success.
@@ -1450,8 +2272,6 @@ export async function compactConversation(
     const sleep = options.sleep ?? defaultSleep
     const retryDelaysMs = options.summaryRetryDelaysMs ?? SUMMARY_RETRY_DELAYS_MS
 
-    const historyBudget = summaryMaxTokens(settings.reserveTokens, options.model)
-    const prefixBudget = turnPrefixMaxTokens(settings.reserveTokens, options.model)
     const summaryReasoningEffort =
         options.fastContextCompaction === false
             ? options.reasoningEffort
@@ -1460,25 +2280,144 @@ export async function compactConversation(
                   options.reasoningEffort,
               )
 
-    let summaryText: string
+    let summaryText: string | undefined
     let usage: Usage | undefined
 
-    if (preparation.isSplitTurn && preparation.turnPrefixEntries.length > 0) {
-        const hasHistoryMessages = preparation.historyEntries.length > 0
-        const hasPreviousSummary = Boolean(preparation.previousSummary)
+    const compactedEntries = buildCompactedContext(entries)
+    const cachedPlan = canUseCachedCompaction(
+        compactedEntries,
+        preparation,
+        options,
+        now(),
+    )
 
-        // History side: model call when there are messages (or previous summary update),
-        // otherwise a deterministic structured "no prior history" checkpoint.
-        // Prefix always uses an independent isolated call. Final merge is always
-        // history + Turn Context (split turn).
-        let historyResult: string
-        let historyUsage: Usage | undefined
+    if (cachedPlan) {
+        try {
+            const cachedEntry = await runCachedSummary({
+                client: options.client,
+                model: options.model,
+                sessionId: options.sessionId,
+                compactedEntries,
+                keptStart: cachedPlan.keptStart,
+                cachedContext: cachedPlan.cachedContext,
+                customInstructions: options.customInstructions,
+                reserveTokens: settings.reserveTokens,
+                reasoningEffort: summaryReasoningEffort,
+                baseReasoningEffort: options.reasoningEffort,
+                speed: options.speed,
+                signal,
+                now,
+                generateId,
+            })
+            const candidateText = stripFileOperationTags(
+                extractAssistantText(cachedEntry),
+            )
+            validateSummaryStructure(candidateText)
+            summaryText = candidateText
+            usage = cachedEntry.usage
+        } catch (error) {
+            if (isAbortSummaryError(error, signal)) {
+                throw error instanceof Error
+                    ? error
+                    : new Error(String(error))
+            }
+            // Any non-abort failure on cached path falls back cleanly to isolated compaction.
+            summaryText = undefined
+            usage = undefined
+        }
+    }
 
-        if (hasHistoryMessages || hasPreviousSummary) {
-            const historyPrompt = buildHistoryPromptText(
-                preparation.historyEntries,
-                preparation.previousSummary,
-                options.customInstructions,
+    if (summaryText === undefined) {
+        if (preparation.isSplitTurn && preparation.turnPrefixEntries.length > 0) {
+            const hasHistoryMessages = preparation.historyEntries.length > 0
+            const hasPreviousSummary = Boolean(preparation.previousSummary)
+
+            // History side: model call when there are messages (or previous summary update),
+            // otherwise a deterministic structured "no prior history" checkpoint.
+            // Prefix always uses an independent isolated call. Final merge is always
+            // history + Turn Context (split turn).
+            let historyResult: string
+            let historyUsage: Usage | undefined
+
+            if (hasHistoryMessages || hasPreviousSummary) {
+                const historyPrompt = fitIsolatedPromptToContextWindow(
+                    buildHistoryPromptText(
+                        preparation.historyEntries,
+                        preparation.previousSummary,
+                        options.customInstructions,
+                    ),
+                    options.model,
+                )
+                const historyBudget = summaryMaxTokens(
+                    settings.reserveTokens,
+                    options.model,
+                    estimateIsolatedPromptInputTokens(historyPrompt),
+                )
+                const historyEntry = await runIsolatedSummary({
+                    client: options.client,
+                    model: options.model,
+                    sessionId: options.sessionId,
+                    promptText: historyPrompt,
+                    maxOutputTokens: historyBudget,
+                    reasoningEffort: summaryReasoningEffort,
+                    speed: options.speed,
+                    signal,
+                    now,
+                    generateId,
+                    sleep,
+                    retryDelaysMs,
+                    label: 'Summarization',
+                })
+                historyResult = extractAssistantText(historyEntry)
+                validateSummaryStructure(historyResult)
+                historyUsage = historyEntry.usage
+            } else {
+                historyResult = NO_PRIOR_HISTORY_SUMMARY
+                historyUsage = undefined
+            }
+
+            const prefixPrompt = fitIsolatedPromptToContextWindow(
+                buildTurnPrefixPromptText(preparation.turnPrefixEntries),
+                options.model,
+            )
+            const prefixBudget = turnPrefixMaxTokens(
+                settings.reserveTokens,
+                options.model,
+                estimateIsolatedPromptInputTokens(prefixPrompt),
+            )
+            const prefixEntry = await runIsolatedSummary({
+                client: options.client,
+                model: options.model,
+                sessionId: options.sessionId,
+                promptText: prefixPrompt,
+                maxOutputTokens: prefixBudget,
+                reasoningEffort: summaryReasoningEffort,
+                speed: options.speed,
+                signal,
+                now,
+                generateId,
+                sleep,
+                retryDelaysMs,
+                label: 'Turn prefix summarization',
+            })
+            const prefixResult = extractAssistantText(prefixEntry)
+            validateTurnPrefixStructure(prefixResult)
+
+            summaryText = `${historyResult}\n\n---\n\n**Turn Context (split turn):**\n\n${prefixResult}`
+            usage = mergeUsage(historyUsage, prefixEntry.usage)
+        } else {
+            const historyPrompt = fitIsolatedPromptToContextWindow(
+                buildHistoryPromptText(
+                    preparation.historyEntries,
+                    preparation.previousSummary,
+                    options.customInstructions,
+                ),
+                options.model,
+            )
+            const historyBudget = summaryMaxTokens(
+                settings.reserveTokens,
+                options.model,
+                estimateIsolatedPromptInputTokens(historyPrompt),
             )
             const historyEntry = await runIsolatedSummary({
                 client: options.client,
@@ -1495,59 +2434,10 @@ export async function compactConversation(
                 retryDelaysMs,
                 label: 'Summarization',
             })
-            historyResult = extractAssistantText(historyEntry)
-            validateSummaryStructure(historyResult)
-            historyUsage = historyEntry.usage
-        } else {
-            historyResult = NO_PRIOR_HISTORY_SUMMARY
-            historyUsage = undefined
+            summaryText = extractAssistantText(historyEntry)
+            validateSummaryStructure(summaryText)
+            usage = historyEntry.usage
         }
-
-        const prefixPrompt = buildTurnPrefixPromptText(preparation.turnPrefixEntries)
-        const prefixEntry = await runIsolatedSummary({
-            client: options.client,
-            model: options.model,
-            sessionId: options.sessionId,
-            promptText: prefixPrompt,
-            maxOutputTokens: prefixBudget,
-            reasoningEffort: summaryReasoningEffort,
-            speed: options.speed,
-            signal,
-            now,
-            generateId,
-            sleep,
-            retryDelaysMs,
-            label: 'Turn prefix summarization',
-        })
-        const prefixResult = extractAssistantText(prefixEntry)
-        validateTurnPrefixStructure(prefixResult)
-
-        summaryText = `${historyResult}\n\n---\n\n**Turn Context (split turn):**\n\n${prefixResult}`
-        usage = mergeUsage(historyUsage, prefixEntry.usage)
-    } else {
-        const historyPrompt = buildHistoryPromptText(
-            preparation.historyEntries,
-            preparation.previousSummary,
-            options.customInstructions,
-        )
-        const historyEntry = await runIsolatedSummary({
-            client: options.client,
-            model: options.model,
-            sessionId: options.sessionId,
-            promptText: historyPrompt,
-            maxOutputTokens: historyBudget,
-            reasoningEffort: summaryReasoningEffort,
-            speed: options.speed,
-            signal,
-            now,
-            generateId,
-            sleep,
-            retryDelaysMs,
-            label: 'Summarization',
-        })
-        summaryText = extractAssistantText(historyEntry)
-        validateSummaryStructure(summaryText)
-        usage = historyEntry.usage
     }
 
     // Sanitize model body before appending implementation-owned file list XML.
