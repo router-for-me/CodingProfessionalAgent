@@ -120,7 +120,7 @@ describe('GatewayDiscoveryService', () => {
         expect(service.selectPrimaryAddress([], 'my-mac.local')).toBe('my-mac.local')
     })
 
-    it('parses TXT records correctly with types and flags', () => {
+    it('parses legacy TXT records correctly with types and flags', () => {
         const rawTxt: Record<string, string | Buffer> = {
             version: '1',
             product: 'cliproxyapi',
@@ -132,11 +132,14 @@ describe('GatewayDiscoveryService', () => {
             api_anthropic: '/v1',
         }
         const parsed = service.parseTxtRecordMap(rawTxt)
-        expect(parsed.product).toBe('cliproxyapi')
-        expect(parsed.authRequired).toBe(true)
-        expect(parsed.authMethods).toEqual(['api_key'])
-        expect(parsed.protocols).toEqual(['openai', 'anthropic', 'gemini'])
-        expect(parsed.endpoints.openai).toBe('/v1')
+        expect(parsed).not.toBeNull()
+        expect(parsed!.product).toBe('cliproxyapi')
+        expect(parsed!.authRequired).toBe(true)
+        expect(parsed!.authMethods).toEqual(['api_key'])
+        // Legacy family tokens map to each family's primary operation
+        expect(parsed!.protocols).toEqual(['chat-completions', 'messages'])
+        expect(parsed!.endpoints['chat-completions']).toBe('/v1/chat/completions')
+        expect(parsed!.endpoints.messages).toBe('/v1/messages')
     })
 
     it('parses TXT records with Buffer values and handles tls=1', () => {
@@ -149,12 +152,15 @@ describe('GatewayDiscoveryService', () => {
             API_GEMINI: '/v1beta',
         }
         const parsed = service.parseTxtRecordMap(rawTxt)
-        expect(parsed.product).toBe('cliproxyapi')
-        expect(parsed.version).toBe('2.0.0')
-        expect(parsed.isTls).toBe(true)
-        expect(parsed.authRequired).toBe(false)
-        expect(parsed.features).toEqual(['chat', 'responses'])
-        expect(parsed.endpoints.gemini).toBe('/v1beta')
+        expect(parsed).not.toBeNull()
+        expect(parsed!.product).toBe('cliproxyapi')
+        expect(parsed!.version).toBe('2.0.0')
+        expect(parsed!.isTls).toBe(true)
+        expect(parsed!.authRequired).toBe(false)
+        expect(parsed!.features).toEqual(['chat', 'responses'])
+        // Without a protocols list, only the advertised base paths are exposed
+        expect(parsed!.endpoints.api_gemini).toBe('/v1beta')
+        expect(parsed!.protocols).toBeUndefined()
     })
 
     it('parseTxtRecords returns key-value string dictionary with lowercased keys', () => {
@@ -239,7 +245,8 @@ describe('GatewayDiscoveryService', () => {
         expect(results[0].instanceName).toBe('CPA Primary')
         expect(results[0].baseUrl).toBe('https://192.168.1.100:8317')
         expect(results[0].authRequired).toBe(true)
-        expect(results[0].endpoints?.openai).toBe('/v1')
+        // Legacy protocol token "openai" resolves to the chat completions operation
+        expect(results[0].endpoints?.['chat-completions']).toBe('/v1/chat/completions')
 
         expect(results[1].product).toBe('other-gateway')
         expect(results[1].instanceName).toBe('Generic Gateway')
@@ -387,5 +394,264 @@ describe('GatewayDiscoveryService', () => {
         const results = await discoverPromise
         expect(results).toHaveLength(256)
         expect(mockDestroy).toHaveBeenCalled()
+    })
+})
+
+describe('GatewayDiscoveryService draft TXT schema (draft-su-ai-gateway-discovery-00)', () => {
+    let service: GatewayDiscoveryService
+
+    beforeEach(() => {
+        vi.clearAllMocks()
+        mockOnUpCallback = undefined
+        shouldThrowInConstructor = false
+        shouldThrowInDestroy = false
+        service = new GatewayDiscoveryService()
+    })
+
+    afterEach(() => {
+        vi.useRealTimers()
+    })
+
+    it('parses a full draft record with operation-level endpoints below the mount path', () => {
+        const parsed = service.parseTxtRecordMap({
+            txtvers: '1',
+            path: '/ai',
+            tls: '1',
+            auth: '1',
+            protocols: 'chat-completions,responses,messages,generate-content,interactions',
+            auth_type: 'api_key',
+            product: 'cliproxyapi',
+            id: '8F3B',
+            role: 'standalone',
+        })
+        expect(parsed).not.toBeNull()
+        expect(parsed!.version).toBe('1')
+        expect(parsed!.path).toBe('/ai')
+        expect(parsed!.isTls).toBe(true)
+        expect(parsed!.authRequired).toBe(true)
+        expect(parsed!.authMethods).toEqual(['api_key'])
+        expect(parsed!.product).toBe('cliproxyapi')
+        expect(parsed!.instanceId).toBe('8F3B')
+        expect(parsed!.nodeRole).toBe('standalone')
+        expect(parsed!.features).toBeUndefined()
+        expect(parsed!.endpoints).toEqual({
+            'chat-completions': '/ai/v1/chat/completions',
+            responses: '/ai/v1/responses',
+            messages: '/ai/v1/messages',
+            'generate-content': '/ai/v1beta/models/{model}:generateContent',
+            interactions: '/ai/v1beta/interactions',
+        })
+    })
+
+    it('derives extended protocol routes and ignores unknown draft tokens', () => {
+        const parsed = service.parseTxtRecordMap({
+            txtvers: '1',
+            path: '/',
+            tls: '0',
+            auth: '0',
+            protocols: 'responses-ws,realtime,images,videos,audio,count-tokens,search,completions,future_2',
+            auth_type: 'oauth,future_auth',
+        })
+        expect(parsed).not.toBeNull()
+        expect(parsed!.protocols).toEqual([
+            'responses-ws',
+            'realtime',
+            'images',
+            'videos',
+            'audio',
+            'count-tokens',
+            'search',
+            'completions',
+        ])
+        expect(parsed!.endpoints['responses-ws']).toBe('/v1/responses')
+        expect(parsed!.endpoints.realtime).toBe('/v1/realtime')
+        expect(parsed!.endpoints.images).toBe('/v1/images/generations')
+        expect(parsed!.endpoints['count-tokens']).toBe('/v1/messages/count_tokens')
+        expect(parsed!.endpoints.search).toBe('/v1/alpha/search')
+        // Unknown auth tokens are dropped; recognised ones are kept
+        expect(parsed!.authMethods).toEqual(['oauth'])
+        expect(parsed!.authRequired).toBe(false)
+    })
+
+    it.each([
+        ['unsupported version', { txtvers: '2', path: '/', tls: '0', auth: '1' }],
+        ['missing path', { txtvers: '1', tls: '0', auth: '1' }],
+        ['legacy-style tls flag', { txtvers: '1', path: '/', tls: 'true', auth: '1' }],
+        ['missing auth flag', { txtvers: '1', path: '/', tls: '0' }],
+        ['protocol-relative path', { txtvers: '1', path: '//evil', tls: '0', auth: '1' }],
+        ['traversal path', { txtvers: '1', path: '/a/../b', tls: '0', auth: '1' }],
+        ['query in path', { txtvers: '1', path: '/ai?x=y', tls: '0', auth: '1' }],
+        ['percent-encoded path', { txtvers: '1', path: '/a%41', tls: '0', auth: '1' }],
+        ['single-dot segment', { txtvers: '1', path: '/a/./b', tls: '0', auth: '1' }],
+        ['empty segment', { txtvers: '1', path: '/a//b', tls: '0', auth: '1' }],
+        ['bare txtvers key', { txtvers: undefined, version: '1', path: '/', tls: '0', auth: '1', auth_required: 'true', api_openai: '/v1' }],
+        ['empty txtvers value', { 'txtvers=': undefined, version: '1', path: '/', tls: '0', auth: '1', auth_required: 'true', api_openai: '/v1' }],
+        ['trailing-slash path', { txtvers: '1', path: '/ai/', tls: '0', auth: '1' }],
+        ['whitespace-padded token', { txtvers: '1', path: '/', tls: '0', auth: '1', protocols: 'responses, messages' }],
+        ['uppercase token', { txtvers: '1', path: '/', tls: '0', auth: '1', protocols: 'Responses' }],
+        ['empty optional value', { txtvers: '1', path: '/', tls: '0', auth: '1', product: '' }],
+    ])('rejects invalid draft record: %s', (_name, rawTxt) => {
+        expect(service.parseTxtRecordMap(rawTxt as Record<string, string>)).toBeNull()
+    })
+
+    it('accepts legal mount paths with embedded dots and RFC 3986 pchar characters', () => {
+        for (const path of ['/a..b/.hidden', "/AZaz09-._~!$&'()*+,;=:@/x"]) {
+            const parsed = service.parseTxtRecordMap({
+                txtvers: '1',
+                path,
+                tls: '0',
+                auth: '1',
+                protocols: 'responses',
+            })
+            expect(parsed).not.toBeNull()
+            expect(parsed!.path).toBe(path)
+            expect(parsed!.endpoints.responses).toBe(`${path}/v1/responses`)
+        }
+    })
+
+    it('does not expose prototype property names as supported protocols', () => {
+        const parsed = service.parseTxtRecordMap({
+            txtvers: '1',
+            path: '/ai',
+            tls: '0',
+            auth: '1',
+            protocols: 'constructor,__proto__,responses',
+        })
+        expect(parsed).not.toBeNull()
+        expect(parsed!.protocols).toEqual(['responses'])
+        expect(parsed!.endpoints).toEqual({ responses: '/ai/v1/responses' })
+    })
+
+    it('keeps the bare txtvers presence marker without affecting other bare keys', () => {
+        // Mirrors the real bonjour-service decoder output: a bare "txtvers"
+        // string decodes to an undefined value under the key "txtvers",
+        // while "txtvers=" decodes to an undefined value under the literal
+        // key "txtvers=". Both must block legacy downgrade.
+        expect(service.parseTxtRecords({ txtvers: undefined, Bare: undefined, tls: '0' })).toEqual({
+            txtvers: '',
+            tls: '0',
+        })
+        expect(service.parseTxtRecords({ 'txtvers=': undefined, tls: '0' })).toEqual({
+            txtvers: '',
+            tls: '0',
+        })
+    })
+
+    it('never downgrades an invalid draft record to legacy parsing', () => {
+        const parsed = service.parseTxtRecordMap({
+            txtvers: '2',
+            version: '1',
+            path: '/',
+            tls: '0',
+            auth: '1',
+            auth_required: 'true',
+            api_openai: '/v1',
+            protocols: 'responses',
+        })
+        expect(parsed).toBeNull()
+    })
+
+    it('does not let legacy keys leak into draft parsing', () => {
+        const parsed = service.parseTxtRecordMap({
+            txtvers: '1',
+            path: '/',
+            tls: '0',
+            auth: '1',
+            instance_id: 'legacy-id',
+            node_role: 'legacy-role',
+            auth_methods: 'api_key',
+            api_openai: '/v1',
+        })
+        expect(parsed).not.toBeNull()
+        expect(parsed!.instanceId).toBeUndefined()
+        expect(parsed!.nodeRole).toBeUndefined()
+        expect(parsed!.authMethods).toBeUndefined()
+        expect(parsed!.endpoints).toEqual({})
+    })
+
+    it('does not let draft keys leak into legacy parsing', () => {
+        const parsed = service.parseTxtRecordMap({
+            version: '1',
+            tls: '0',
+            auth_required: 'false',
+            api_openai: '/v1',
+            api_gemini: '/proxy/v1beta',
+            id: 'draft-id',
+            role: 'draft-role',
+            auth_type: 'oauth',
+            path: '/ignored',
+        })
+        expect(parsed).not.toBeNull()
+        expect(parsed!.protocols).toBeUndefined()
+        expect(parsed!.endpoints).toEqual({ api_openai: '/v1', api_gemini: '/proxy/v1beta' })
+        expect(parsed!.instanceId).toBeUndefined()
+        expect(parsed!.nodeRole).toBeUndefined()
+        expect(parsed!.path).toBeUndefined()
+    })
+
+    it('keeps legacy base paths only (no inferred operations) when protocols were omitted', () => {
+        const parsed = service.parseTxtRecordMap({
+            version: '1',
+            tls: '0',
+            auth_required: 'true',
+            api_openai: '/v1',
+            api_anthropic: '/bad/../path',
+            api_gemini: '/v1beta',
+        })
+        expect(parsed).not.toBeNull()
+        expect(parsed!.endpoints).toEqual({ api_openai: '/v1', api_gemini: '/v1beta' })
+        expect(parsed!.protocols).toBeUndefined()
+    })
+
+    it('discovers a draft gateway with mount path in baseUrl and drops invalid drafts', async () => {
+        vi.useFakeTimers()
+        const discoverPromise = service.discover(1000)
+
+        mockOnUpCallback?.({
+            name: 'Draft Gateway',
+            host: 'draft.local',
+            port: 8317,
+            addresses: ['192.168.1.60'],
+            txt: {
+                txtvers: '1',
+                path: '/ai',
+                tls: '1',
+                auth: '1',
+                protocols: 'responses,messages',
+                auth_type: 'api_key',
+                product: 'cliproxyapi',
+                id: 'AB12',
+                role: 'standalone',
+            },
+        } as unknown as Service)
+
+        mockOnUpCallback?.({
+            name: 'Invalid Draft Gateway',
+            host: 'invalid.local',
+            port: 8317,
+            addresses: ['192.168.1.61'],
+            txt: {
+                txtvers: '2',
+                path: '/',
+                tls: '0',
+                auth: '0',
+                product: 'cliproxyapi',
+            },
+        } as unknown as Service)
+
+        await vi.advanceTimersByTimeAsync(1000)
+        const results = await discoverPromise
+
+        expect(results).toHaveLength(1)
+        expect(results[0].instanceName).toBe('Draft Gateway')
+        expect(results[0].baseUrl).toBe('https://192.168.1.60:8317/ai')
+        expect(results[0].path).toBe('/ai')
+        expect(results[0].tls).toBe(true)
+        expect(results[0].authRequired).toBe(true)
+        expect(results[0].authMethods).toEqual(['api_key'])
+        expect(results[0].instanceId).toBe('AB12')
+        expect(results[0].nodeRole).toBe('standalone')
+        expect(results[0].endpoints?.responses).toBe('/ai/v1/responses')
+        expect(results[0].endpoints?.messages).toBe('/ai/v1/messages')
     })
 })

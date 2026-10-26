@@ -1023,9 +1023,18 @@ export interface DiscoveredGateway {
     authRequired: boolean
     authMethods?: string[]
     protocols?: string[]
+    /** Legacy CPA advertisements only; draft advertisements omit this field. */
     features?: string[]
     endpoints?: Record<string, string>
     rawTxt?: Record<string, string>
+    /** Draft mount path (e.g. "/" or "/ai"); present for draft advertisements. */
+    path?: string
+    /** Whether the gateway origin uses TLS; mirrors the TXT tls flag. */
+    tls?: boolean
+    /** Draft "id" / legacy "instance_id" value when advertised. */
+    instanceId?: string
+    /** Draft "role" / legacy "node_role" value when advertised. */
+    nodeRole?: string
 }
 
 export interface GatewayDiscoveryService {

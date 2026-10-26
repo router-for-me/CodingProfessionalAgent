@@ -308,7 +308,7 @@ describe('StartupSplashOverlay', () => {
         expect(discoverFn).toHaveBeenCalledWith(3000)
     })
 
-    it('renders discovered gateway selector, auto-selects first gateway, and updates baseUrl', async () => {
+    it('renders discovered gateway selector without auto-selecting; explicit selection updates baseUrl', async () => {
         const mockGateways: DiscoveredGateway[] = [
             {
                 instanceName: 'Primary Gateway',
@@ -352,17 +352,29 @@ describe('StartupSplashOverlay', () => {
             vi.advanceTimersByTime(400)
         })
 
-        // Gateway selector should be present
+        // Gateway selector should be present but stay in manual mode:
+        // discovered gateways are never auto-selected or persisted
         const selector = screen.getByTestId('gateway-selector')
         expect(selector).toBeInTheDocument()
-        expect(selector).toHaveTextContent('Primary Gateway')
-        expect(selector).toHaveTextContent(/cliproxyapi/i)
-        expect(selector).toHaveTextContent('Key Required')
-
-        // baseUrl should be updated in settings store
-        expect(useSettingsStore.getState().settings.cliProxyApi.baseUrl).toBe('http://192.168.1.10:8317')
+        expect(selector).toHaveTextContent('Manual address input...')
+        expect(selector).not.toHaveTextContent('Primary Gateway')
+        expect(useSettingsStore.getState().settings.cliProxyApi.baseUrl).toBe('')
+        expect(screen.getByTestId('startup-base-url-input')).toBeInTheDocument()
 
         // Click selector to open dropdown menu
+        fireEvent.click(selector)
+        expect(screen.getByTestId('gateway-selector-menu')).toBeInTheDocument()
+
+        // Explicitly select the first gateway
+        const option0 = screen.getByTestId('gateway-option-0')
+        expect(option0).toHaveTextContent('Primary Gateway')
+        expect(option0).toHaveTextContent('Key Required')
+        fireEvent.click(option0)
+        expect(selector).toHaveTextContent('Primary Gateway')
+        expect(selector).toHaveTextContent(/cliproxyapi/i)
+        expect(useSettingsStore.getState().settings.cliProxyApi.baseUrl).toBe('http://192.168.1.10:8317')
+
+        // Reopen the dropdown and select the secondary gateway
         fireEvent.click(selector)
         expect(screen.getByTestId('gateway-selector-menu')).toBeInTheDocument()
 
@@ -399,7 +411,14 @@ describe('StartupSplashOverlay', () => {
             vi.advanceTimersByTime(400)
         })
 
-        // When gateway is selected, manual input is not rendered
+        // Gateways are not auto-selected: the manual input stays visible
+        expect(screen.getByTestId('startup-base-url-input')).toBeInTheDocument()
+
+        // Open dropdown and select the gateway explicitly
+        fireEvent.click(screen.getByTestId('gateway-selector'))
+        fireEvent.click(screen.getByTestId('gateway-option-0'))
+
+        // Manual input field should now be hidden
         expect(screen.queryByTestId('startup-base-url-input')).not.toBeInTheDocument()
 
         // Open dropdown and select manual input option
@@ -529,6 +548,10 @@ describe('StartupSplashOverlay', () => {
             vi.advanceTimersByTime(400)
         })
 
+        // Explicitly select the discovered no-auth gateway first
+        fireEvent.click(screen.getByTestId('gateway-selector'))
+        fireEvent.click(screen.getByTestId('gateway-option-0'))
+
         // API key input has optional placeholder
         expect(screen.getByTestId('startup-api-key-input')).toHaveAttribute(
             'placeholder',
@@ -612,11 +635,16 @@ describe('StartupSplashOverlay', () => {
         fireEvent.keyDown(selector, { key: 'Escape' })
         expect(screen.queryByTestId('gateway-selector-menu')).not.toBeInTheDocument()
 
-        // 3. ArrowDown reopens
+        // 3. ArrowDown reopens with the highlight on the manual option
+        // (no gateway is selected yet); ArrowDown again moves to Option 0
         fireEvent.keyDown(selector, { key: 'ArrowDown' })
         expect(screen.getByTestId('gateway-selector-menu')).toBeInTheDocument()
 
-        // Option 0 (Gateway One) was selected. Press ArrowDown to move highlight to Option 1 (Gateway Two)
+        fireEvent.keyDown(selector, { key: 'ArrowDown' })
+        const option0 = screen.getByTestId('gateway-option-0')
+        expect(option0).toHaveAttribute('data-highlighted', 'true')
+
+        // ArrowDown moves the highlight to Option 1 (Gateway Two)
         fireEvent.keyDown(selector, { key: 'ArrowDown' })
         const option1 = screen.getByTestId('gateway-option-1')
         expect(option1).toHaveAttribute('data-highlighted', 'true')

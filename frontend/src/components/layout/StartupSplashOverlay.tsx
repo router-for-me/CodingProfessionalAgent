@@ -66,7 +66,7 @@ export function StartupSplashOverlay({
     const [showPassword, setShowPassword] = useState(false)
     const [baseUrl, setBaseUrl] = useState(cliProxyApi.baseUrl || 'http://127.0.0.1:8317')
     const [apiKey, setApiKey] = useState(cliProxyApi.apiKey || '')
-    const [selectedGatewayKey, setSelectedGatewayKey] = useState<string>('')
+    const [selectedGatewayKey, setSelectedGatewayKey] = useState<string>('manual')
     const [hasManuallyEditedAddress, setHasManuallyEditedAddress] = useState(false)
     const [isDropdownOpen, setIsDropdownOpen] = useState(false)
     const [highlightedIndex, setHighlightedIndex] = useState<number>(-1)
@@ -144,22 +144,23 @@ export function StartupSplashOverlay({
         }
     }, [isConfigured, triggerDiscovery])
 
-    // Auto-select first discovered gateway if not in manual mode and address has not been manually edited
+    // Discovered gateways are NEVER selected or written to settings
+    // automatically: mDNS advertisements are unauthenticated, so an on-link
+    // advertiser must not become the default endpoint or receive the user's
+    // credentials without an explicit selection (see the trust boundary in
+    // upstream CLIProxyAPI docs/lan-discovery.md). The selector stays in
+    // manual mode until the user picks a gateway; if an explicitly selected
+    // gateway disappears from a later scan, fall back to manual mode without
+    // touching the persisted settings.
     useEffect(() => {
         if (hasManuallyEditedAddress || selectedGatewayKey === 'manual') {
             return
         }
-        if (gateways.length > 0) {
-            const stillExists = gateways.some((g) => getGatewayKey(g) === selectedGatewayKey)
-            if (!stillExists) {
-                const firstGw = gateways[0]
-                const key = getGatewayKey(firstGw)
-                setSelectedGatewayKey(key)
-                setBaseUrl(firstGw.baseUrl)
-                setCliProxyApi({ baseUrl: firstGw.baseUrl })
-            }
+        const stillExists = gateways.some((g) => getGatewayKey(g) === selectedGatewayKey)
+        if (!stillExists) {
+            setSelectedGatewayKey('manual')
         }
-    }, [gateways, selectedGatewayKey, hasManuallyEditedAddress, setCliProxyApi])
+    }, [gateways, selectedGatewayKey, hasManuallyEditedAddress])
 
     // Initialize or reset highlighted index when dropdown opens/closes
     useEffect(() => {
@@ -241,8 +242,9 @@ export function StartupSplashOverlay({
     }, [isFadingOut])
 
     const selectedGateway =
-        gateways.find((g) => getGatewayKey(g) === selectedGatewayKey) ||
-        (gateways.length > 0 && selectedGatewayKey !== 'manual' ? gateways[0] : null)
+        selectedGatewayKey === 'manual'
+            ? null
+            : (gateways.find((g) => getGatewayKey(g) === selectedGatewayKey) ?? null)
 
     const isAuthRequired =
         selectedGatewayKey === 'manual' || (selectedGateway ? selectedGateway.authRequired : true)
@@ -672,9 +674,7 @@ export function StartupSplashOverlay({
                                               >
                                                   {gateways.map((gw, idx) => {
                                                       const key = getGatewayKey(gw)
-                                                      const isSelected =
-                                                          key === selectedGatewayKey ||
-                                                          (!selectedGatewayKey && idx === 0)
+                                                      const isSelected = key === selectedGatewayKey
                                                       const isHighlighted = highlightedIndex === idx
                                                       return (
                                                           <button
