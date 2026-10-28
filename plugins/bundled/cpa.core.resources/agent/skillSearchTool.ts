@@ -39,7 +39,7 @@ export function createSkillSearchTool(): AgentTool {
         label: 'Skill search',
         description: SKILL_SEARCH_TOOL_DESCRIPTION,
         parameters: SKILL_SEARCH_TOOL_PARAMETERS,
-        exposure: 'direct',
+        exposure: 'both',
         validate(input: unknown): Record<string, unknown> {
             if (input && typeof input === 'object' && !Array.isArray(input)) {
                 return input as Record<string, unknown>

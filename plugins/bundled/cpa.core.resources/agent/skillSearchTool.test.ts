@@ -13,6 +13,7 @@ describe('skill_search tool', () => {
 
     it('searches the catalog passed on the execution context', async () => {
         expect(tool.name).toBe(SKILL_SEARCH_TOOL_NAME)
+        expect(tool.exposure).toBe('both')
         const result = await tool.execute('call-1', { query: '压缩' }, {
             skills: [
                 compact,
