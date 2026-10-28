@@ -7,9 +7,10 @@ import type {
 import {
     defaultAskController,
     invokeAskRpc,
+    parseAskEventPayload,
     useAskStore,
 } from '../shared/askStore.js'
-import type { AskOption, AskRequest } from '../shared/types.js'
+import type { AskDecision, AskOption, AskRequest } from '../shared/types.js'
 
 export const ASK_TOOL_NAME = 'ask'
 export const ASK_COUNTDOWN_SECONDS = 180
@@ -202,6 +203,95 @@ export function createAskTool(toolOptions?: CreateAskToolOptions): AgentTool {
                     ?.capabilityClient)
             void invokeAskRpc('ask:setRequest', [sessionId, request], effectiveCapClient)
 
+            let unsubAction: (() => void) | undefined
+            if (typeof effectiveCapClient?.subscribe === 'function') {
+                try {
+                    unsubAction = effectiveCapClient.subscribe('ask:action', (raw) => {
+                        const data = parseAskEventPayload<{
+                            action?: string
+                            sessionId?: string
+                            toolCallId?: string
+                            decision?: AskDecision
+                        }>(raw)
+                        if (!data || data.sessionId !== sessionId) return
+                        if (data.toolCallId && data.toolCallId !== effectiveCallId) return
+                        if (data.action === 'submitAnswer' && data.decision) {
+                            useAskStore
+                                .getState()
+                                .submitAnswer(sessionId, effectiveCallId, data.decision)
+                        } else if (data.action === 'cancelCountdown') {
+                            useAskStore.getState().cancelCountdown(sessionId, effectiveCallId)
+                        } else if (data.action === 'cancel') {
+                            useAskStore.getState().cancel(sessionId, effectiveCallId)
+                        }
+                    })
+                } catch {
+                    // Ignore capability subscription failure in non-host environments
+                }
+            }
+
+            let pollTimer: ReturnType<typeof setInterval> | undefined
+            if (typeof effectiveCapClient?.invoke === 'function') {
+                let syncInFlight = false
+                pollTimer = setInterval(() => {
+                    if (syncInFlight || !defaultAskController.hasWaiter(sessionId, effectiveCallId)) {
+                        return
+                    }
+                    syncInFlight = true
+                    void invokeAskRpc<{
+                        request?: AskRequest | null
+                        resolved?: {
+                            action?: 'submitAnswer' | 'cancel'
+                            decision?: AskDecision
+                        } | null
+                    }>(
+                        'ask:getRequests',
+                        [{ sessionId, toolCallId: effectiveCallId }],
+                        effectiveCapClient,
+                    )
+                        .then((remote) => {
+                            if (!remote || typeof remote !== 'object') return
+                            if ('resolved' in remote && remote.resolved) {
+                                if (
+                                    remote.resolved.action === 'submitAnswer' &&
+                                    remote.resolved.decision
+                                ) {
+                                    useAskStore
+                                        .getState()
+                                        .submitAnswer(
+                                            sessionId,
+                                            effectiveCallId,
+                                            remote.resolved.decision,
+                                        )
+                                    return
+                                }
+                                if (remote.resolved.action === 'cancel') {
+                                    useAskStore
+                                        .getState()
+                                        .cancel(sessionId, effectiveCallId)
+                                    return
+                                }
+                            }
+                            const remoteReq =
+                                'request' in remote
+                                    ? remote.request
+                                    : ((remote as Record<string, AskRequest | undefined>)[
+                                          sessionId
+                                      ] ?? null)
+                            if (
+                                remoteReq &&
+                                remoteReq.id === request.id &&
+                                remoteReq.countdownDeadline === undefined
+                            ) {
+                                useAskStore.getState().cancelCountdown(sessionId, effectiveCallId)
+                            }
+                        })
+                        .finally(() => {
+                            syncInFlight = false
+                        })
+                }, 1000)
+            }
+
             const signal = toolContext?.signal
 
             try {
@@ -267,6 +357,16 @@ export function createAskTool(toolOptions?: CreateAskToolOptions): AgentTool {
                     }
                 }
             } finally {
+                if (pollTimer !== undefined) {
+                    clearInterval(pollTimer)
+                }
+                if (typeof unsubAction === 'function') {
+                    try {
+                        unsubAction()
+                    } catch {
+                        // Ignore unsubscribe error
+                    }
+                }
                 useAskStore.getState().clearRequest(sessionId, request.id)
                 void invokeAskRpc('ask:clearRequest', [sessionId, request.id], effectiveCapClient)
             }

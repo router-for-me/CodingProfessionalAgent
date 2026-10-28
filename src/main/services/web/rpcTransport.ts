@@ -80,13 +80,21 @@ export class WebRpcTransport {
             runtime === 'main' || runtime === 'renderer' || runtime === 'agent'
                 ? runtime
                 : undefined
+        const normalizedFrameUrl =
+            typeof context?.frameUrl === 'string' && context.frameUrl.startsWith('/')
+                ? ''
+                : context?.frameUrl
         const mergedContext: Partial<RpcInvocationContext> = {
             ...context,
+            ...(normalizedFrameUrl !== undefined ? { frameUrl: normalizedFrameUrl } : {}),
             ...(requestRuntime ? { runtime: requestRuntime } : {}),
             ...(requestClientId
                 ? {
                       clientId: requestClientId,
-                      documentId: context?.documentId ?? `web:${requestClientId}`,
+                      documentId:
+                          !context?.documentId || context.documentId === 'web:http-rpc'
+                              ? `web:${requestClientId}`
+                              : context.documentId,
                   }
                 : {}),
         }

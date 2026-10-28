@@ -466,4 +466,117 @@ describe('cpa.core.ask agent entry', () => {
         await askAgentEntry.deactivate?.()
         await askMainEntry.deactivate?.()
     })
+
+    it('resolves custom text answer from web client via per-execution subscription or state polling even if startup subscription was lost', async () => {
+        vi.useFakeTimers()
+        const mainRpcs = new Map<string, (ctx: any, args: any[]) => Promise<any>>()
+        const actionListeners = new Set<(payload: any) => void>()
+        let dropActionEvents = false
+
+        const mainContext: any = {
+            manifest,
+            generation: 1,
+            capabilities: new Set(['ui.overlay']),
+            events: {
+                emit: vi.fn((kind: string, event: any) => {
+                    if (kind === 'ask:action' && !dropActionEvents) {
+                        actionListeners.forEach((cb) => cb(event))
+                    }
+                }),
+            },
+            register: vi.fn((reg: any) => {
+                if (reg.kind === 'rpc') {
+                    mainRpcs.set(reg.id, reg.value.invoke)
+                }
+                return () => {}
+            }),
+        }
+
+        await askMainEntry.activate(mainContext)
+
+        const mockCapClient: any = {
+            has: () => true,
+            invoke: vi.fn(async (method: string, args: any[] = []) => {
+                const rpc = mainRpcs.get(method)
+                if (!rpc) throw new Error(`Missing RPC ${method}`)
+                return rpc({}, args)
+            }),
+            subscribe: vi.fn((eventName: string, listener: (payload: any) => void) => {
+                if (eventName === 'ask:action') {
+                    actionListeners.add(listener)
+                    return () => actionListeners.delete(listener)
+                }
+                return () => {}
+            }),
+        }
+
+        let factory: any
+        await askAgentEntry.activate({
+            manifest,
+            generation: 1,
+            capabilities: new Set(['ui.overlay']),
+            capabilityClient: mockCapClient,
+            events: eventBus,
+            register: vi.fn((reg: any) => {
+                if (reg.kind === 'tool-factory') {
+                    factory = reg.value
+                }
+                return () => {}
+            }),
+            getService: vi.fn(),
+        } as any)
+
+        // Simulate startup subscription being wiped prior to tool execution
+        actionListeners.clear()
+
+        const tool = factory.create({})
+        const pending1 = tool.execute(
+            'web-custom-call-1',
+            {
+                question: 'Which approach?',
+                options: [{ title: 'Default option', recommended: true }],
+                allowCustom: true,
+            },
+            { sessionId: 'web-custom-sess-1', toolCallId: 'web-custom-call-1' } as any,
+        )
+
+        // Per-execution subscription in askTool.execute should have registered a fresh listener
+        expect(actionListeners.size).toBe(1)
+
+        await mockCapClient.invoke('ask:cancelCountdown', ['web-custom-sess-1', 'web-custom-call-1'])
+        await mockCapClient.invoke('ask:submitAnswer', [
+            'web-custom-sess-1',
+            'web-custom-call-1',
+            { type: 'custom', text: 'Use custom approach instead' },
+        ])
+
+        const res1 = await pending1
+        expect((res1.content[0] as any).text).toBe('User response: Use custom approach instead')
+
+        // Now test fallback reconciliation when ask:action events are completely dropped
+        dropActionEvents = true
+        const pending2 = tool.execute(
+            'web-custom-call-2',
+            {
+                question: 'Fallback question?',
+                options: [{ title: 'Recommended option', recommended: true }],
+                allowCustom: true,
+            },
+            { sessionId: 'web-custom-sess-1', toolCallId: 'web-custom-call-2' } as any,
+        )
+
+        await mockCapClient.invoke('ask:cancelCountdown', ['web-custom-sess-1', 'web-custom-call-2'])
+        await mockCapClient.invoke('ask:submitAnswer', [
+            'web-custom-sess-1',
+            'web-custom-call-2',
+            { type: 'custom', text: 'Recovered via state polling' },
+        ])
+
+        await vi.advanceTimersByTimeAsync(1000)
+        const res2 = await pending2
+        expect((res2.content[0] as any).text).toBe('User response: Recovered via state polling')
+
+        await askAgentEntry.deactivate?.()
+        await askMainEntry.deactivate?.()
+    })
 })

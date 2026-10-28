@@ -773,12 +773,45 @@ describe('Renderer Host Capability and Transport Integration', () => {
         })
         expect(res1.ok).toBe(true)
 
-        // 2. Trigger navigation / reload
+        // 2. Trigger same-document / hash navigation: handle and subscriptions must remain intact
+        const subscribeHandler = ipcHandlers.get('cpa:capability:subscribe')
+        const subRes = await subscribeHandler(doc1Event, {
+            handle: handle1,
+            eventName: 'session:updated',
+            subscriptionId: 'sub_hash_nav_test',
+        })
+        expect(subRes.ok).toBe(true)
+
         for (const navListener of navigationListeners) {
-            navListener({ isMainFrame: true })
+            navListener({ isMainFrame: true, isSameDocument: true })
+            navListener({ isMainFrame: true, isInPlace: true })
+            navListener({}, 'file:///app/index.html#/chat/sess-1', true, true)
         }
 
-        // 3. Old handle is now REVOKED and invalid
+        const resAfterHashNav = await invokeHandler(doc1Event, {
+            handle: handle1,
+            method: 'native:readFile',
+            args: ['/file1.txt'],
+        })
+        expect(resAfterHashNav.ok).toBe(true)
+
+        mockWebContents.send.mockClear()
+        broker.emit('session:updated', { sessionId: 'sess-1' })
+        expect(mockWebContents.send).toHaveBeenCalledWith(
+            'cpa:capability:event:sub_hash_nav_test',
+            { sessionId: 'sess-1' },
+        )
+
+        // 3. Trigger cross-document navigation / reload
+        for (const navListener of navigationListeners) {
+            navListener({ isMainFrame: true, isSameDocument: false })
+        }
+
+        // 4. Old handle is now REVOKED and invalid, and subscription is cleaned up
+        mockWebContents.send.mockClear()
+        broker.emit('session:updated', { sessionId: 'sess-1' })
+        expect(mockWebContents.send).not.toHaveBeenCalled()
+
         const resOld = await invokeHandler(doc1Event, {
             handle: handle1,
             method: 'native:readFile',
@@ -787,7 +820,7 @@ describe('Renderer Host Capability and Transport Integration', () => {
         expect(resOld.ok).toBe(false)
         expect(resOld.error?.message).toMatch(/Invalid or expired capability handle/)
 
-        // 4. New document claims fresh handle
+        // 5. New document claims fresh handle
         const doc2Event = {
             sender: mockWebContents,
             senderFrame: {

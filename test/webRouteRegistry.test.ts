@@ -179,6 +179,35 @@ describe('WebRouteRegistry & Web Transport', () => {
                     transport: 'web',
                 }),
             )
+
+            // When routeContext is pre-populated with default http-rpc documentId and /api/rpc frameUrl,
+            // an explicit request clientId overrides documentId and normalizes frameUrl for WS parity.
+            const routeContext = identityAdapter.createRouteContext({
+                method: 'POST',
+                url: '/api/rpc',
+                headers: {},
+            } as any)
+            await transport.handleHttpRequest(
+                {
+                    id: 'req-2',
+                    method: 'ask:submitAnswer',
+                    args: ['sess-1', 'call-1', { type: 'custom', text: 'hello' }],
+                    clientId: 'client_ws_1',
+                    runtime: 'renderer',
+                },
+                routeContext.rpcContext,
+            )
+            expect(handler).toHaveBeenLastCalledWith(
+                'ask:submitAnswer',
+                ['sess-1', 'call-1', { type: 'custom', text: 'hello' }],
+                expect.objectContaining({
+                    clientId: 'client_ws_1',
+                    documentId: 'web:client_ws_1',
+                    frameUrl: '',
+                    runtime: 'renderer',
+                    transport: 'web',
+                }),
+            )
         })
 
         it('adapts WebSocket RPC messages and injects connection clientId', async () => {

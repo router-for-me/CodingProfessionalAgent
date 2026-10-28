@@ -58,20 +58,42 @@ export function isAskRequestRemotelyCleared(requestId: string): boolean {
     return remotelyClearedRequestIds.has(requestId)
 }
 
+function getCandidateCapabilityClients(
+    clientOverride?: PluginCapabilityClient,
+): PluginCapabilityClient[] {
+    const candidates: PluginCapabilityClient[] = []
+    const addCandidate = (client: PluginCapabilityClient | undefined) => {
+        if (
+            client &&
+            typeof client.invoke === 'function' &&
+            !candidates.includes(client)
+        ) {
+            candidates.push(client)
+        }
+    }
+    addCandidate(clientOverride)
+    addCandidate(askCapabilityClient)
+    const registered = Array.from(contextCapabilityClients.values())
+    for (let i = registered.length - 1; i >= 0; i -= 1) {
+        addCandidate(registered[i])
+    }
+    return candidates
+}
+
 export async function invokeAskRpc<T = unknown>(
     method: string,
     args: unknown[] = [],
     clientOverride?: PluginCapabilityClient,
 ): Promise<T | undefined> {
-    const client = clientOverride ?? askCapabilityClient
-    if (!client || typeof client.invoke !== 'function') {
-        return undefined
+    const candidates = getCandidateCapabilityClients(clientOverride)
+    for (const client of candidates) {
+        try {
+            return await client.invoke<T>(method, args)
+        } catch {
+            // Try next available capability client if current one fails
+        }
     }
-    try {
-        return await client.invoke<T>(method, args)
-    } catch {
-        return undefined
-    }
+    return undefined
 }
 
 export async function invokeAskRpcStrict<T = unknown>(
@@ -79,16 +101,19 @@ export async function invokeAskRpcStrict<T = unknown>(
     args: unknown[] = [],
     clientOverride?: PluginCapabilityClient,
 ): Promise<{ ok: true; value: T } | { ok: false; transportError: boolean }> {
-    const client = clientOverride ?? askCapabilityClient
-    if (!client || typeof client.invoke !== 'function') {
+    const candidates = getCandidateCapabilityClients(clientOverride)
+    if (candidates.length === 0) {
         return { ok: false, transportError: false }
     }
-    try {
-        const value = await client.invoke<T>(method, args)
-        return { ok: true, value }
-    } catch {
-        return { ok: false, transportError: true }
+    for (const client of candidates) {
+        try {
+            const value = await client.invoke<T>(method, args)
+            return { ok: true, value }
+        } catch {
+            // Try next available capability client if current one fails
+        }
     }
+    return { ok: false, transportError: true }
 }
 
 export function parseAskEventPayload<T = Record<string, unknown>>(raw: unknown): T | null {

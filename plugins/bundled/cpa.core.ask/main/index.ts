@@ -6,8 +6,29 @@ import type {
 } from '@cpa/plugin-api'
 import type { AskDecision, AskRequest } from '../shared/types.js'
 
+interface ResolvedAskAction {
+    sessionId: string
+    toolCallId: string
+    action: 'submitAnswer' | 'cancel'
+    decision?: AskDecision
+    updatedAt: number
+}
+
 const requestsBySession = new Map<string, AskRequest>()
+const resolvedByCallKey = new Map<string, ResolvedAskAction>()
 const activeMainContexts = new Set<object>()
+
+function recordResolvedAction(entry: ResolvedAskAction): void {
+    const key = `${entry.sessionId}:${entry.toolCallId}`
+    resolvedByCallKey.delete(key)
+    resolvedByCallKey.set(key, entry)
+    if (resolvedByCallKey.size > 256) {
+        const oldestKey = resolvedByCallKey.keys().next().value
+        if (oldestKey) {
+            resolvedByCallKey.delete(oldestKey)
+        }
+    }
+}
 
 export const askMainEntry = definePluginEntry({
     runtime: 'main',
@@ -62,6 +83,9 @@ export const askMainEntry = definePluginEntry({
                     if (!sessionId) return false
                     if (request) {
                         requestsBySession.set(sessionId, request)
+                        if (request.toolCallId) {
+                            resolvedByCallKey.delete(`${sessionId}:${request.toolCallId}`)
+                        }
                     } else {
                         requestsBySession.delete(sessionId)
                     }
@@ -98,7 +122,26 @@ export const askMainEntry = definePluginEntry({
                 method: 'ask:getRequests',
                 ipcChannel: 'ask:getRequests',
                 capability: 'ui.overlay',
-                invoke: async () => {
+                invoke: async (_rpcCtx, args) => {
+                    const query = args?.[0]
+                    if (
+                        query &&
+                        typeof query === 'object' &&
+                        !Array.isArray(query) &&
+                        typeof (query as { sessionId?: unknown }).sessionId === 'string'
+                    ) {
+                        const sessionId = (query as { sessionId: string }).sessionId
+                        const toolCallId =
+                            typeof (query as { toolCallId?: unknown }).toolCallId === 'string'
+                                ? (query as { toolCallId: string }).toolCallId
+                                : ''
+                        return {
+                            request: requestsBySession.get(sessionId) ?? null,
+                            resolved: toolCallId
+                                ? (resolvedByCallKey.get(`${sessionId}:${toolCallId}`) ?? null)
+                                : null,
+                        }
+                    }
                     return Object.fromEntries(requestsBySession.entries())
                 },
             },
@@ -112,10 +155,19 @@ export const askMainEntry = definePluginEntry({
                     const decision = args[2] as AskDecision | undefined
                     if (!sessionId || !toolCallId || !decision) return false
                     const current = requestsBySession.get(sessionId)
-                    if (!current || current.toolCallId !== toolCallId) {
+                    if (current && current.toolCallId !== toolCallId) {
                         return false
                     }
-                    requestsBySession.delete(sessionId)
+                    recordResolvedAction({
+                        sessionId,
+                        toolCallId,
+                        action: 'submitAnswer',
+                        decision,
+                        updatedAt: Date.now(),
+                    })
+                    if (current) {
+                        requestsBySession.delete(sessionId)
+                    }
                     emitEvent(
                         'ask:action',
                         {
@@ -126,15 +178,17 @@ export const askMainEntry = definePluginEntry({
                         },
                         rpcCtx,
                     )
-                    emitEvent(
-                        'ask:state-changed',
-                        {
-                            sessionId,
-                            request: null,
-                            requestId: current.id,
-                        },
-                        rpcCtx,
-                    )
+                    if (current) {
+                        emitEvent(
+                            'ask:state-changed',
+                            {
+                                sessionId,
+                                request: null,
+                                requestId: current.id,
+                            },
+                            rpcCtx,
+                        )
+                    }
                     return true
                 },
             },
@@ -189,6 +243,12 @@ export const askMainEntry = definePluginEntry({
                     if (!current || (toolCallId && current.toolCallId !== toolCallId)) {
                         return false
                     }
+                    recordResolvedAction({
+                        sessionId,
+                        toolCallId: current.toolCallId,
+                        action: 'cancel',
+                        updatedAt: Date.now(),
+                    })
                     requestsBySession.delete(sessionId)
                     emitEvent(
                         'ask:action',
@@ -226,11 +286,13 @@ export const askMainEntry = definePluginEntry({
             activeMainContexts.delete(context)
             if (activeMainContexts.size === 0) {
                 requestsBySession.clear()
+                resolvedByCallKey.clear()
             }
             return
         }
         activeMainContexts.clear()
         requestsBySession.clear()
+        resolvedByCallKey.clear()
     },
 })
 

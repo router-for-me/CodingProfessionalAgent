@@ -57,12 +57,16 @@ const claimedDocuments = new Set<string>()
 const senderHostHandles = new Map<string, CapabilityHandle>()
 
 interface WebContentsNavigationBinding {
-    navListener: (navEvt: any) => void
+    navListener: (navEvt: any, url?: string, isInPlace?: boolean, isMainFrame?: boolean) => void
     destroyedListener?: () => void
 }
 const webContentsNavBindings = new Map<WebContents, WebContentsNavigationBinding>()
 
-function cleanupWebContentsState(webContents: WebContents, broker: MainCapabilityBroker): void {
+function cleanupWebContentsState(
+    webContents: WebContents,
+    broker: MainCapabilityBroker,
+    services?: AppServices,
+): void {
     // 1. Revoke and clean handles belonging to this webContents
     for (const [k, h] of Array.from(senderHostHandles.entries())) {
         if (k.startsWith(`${webContents.id}:`)) {
@@ -74,6 +78,18 @@ function cleanupWebContentsState(webContents: WebContents, broker: MainCapabilit
             senderHostHandles.delete(k)
             claimedDocuments.delete(k)
         }
+    }
+
+    try {
+        broker.revokeSender(webContents.id)
+    } catch {
+        // Ignore cleanup error on already-revoked sender handles
+    }
+
+    try {
+        services?.pluginActivationCoordinator?.clearSenderIssuance?.(webContents.id)
+    } catch {
+        // Ignore cleanup error on sender ticket issuance state
     }
 
     // 2. Unsubscribe and clean IPC subscriptions belonging to this webContents
@@ -498,14 +514,22 @@ export function registerCapabilityTransport(options: RegisterCapabilityTransport
             const webContents = event.sender
             if (webContents && typeof webContents.on === 'function') {
                 if (!webContentsNavBindings.has(webContents)) {
-                    const navListener = (navEvt: any) => {
-                        if (navEvt?.isMainFrame ?? true) {
-                            cleanupWebContentsState(webContents, broker)
+                    const navListener = (
+                        navEvt: any,
+                        _url?: string,
+                        isInPlace?: boolean,
+                        isMainFrame?: boolean,
+                    ) => {
+                        if (navEvt?.isSameDocument || navEvt?.isInPlace || isInPlace) {
+                            return
+                        }
+                        if (navEvt?.isMainFrame ?? isMainFrame ?? true) {
+                            cleanupWebContentsState(webContents, broker, services)
                         }
                     }
 
                     const destroyedListener = () => {
-                        cleanupWebContentsState(webContents, broker)
+                        cleanupWebContentsState(webContents, broker, services)
                         const binding = webContentsNavBindings.get(webContents)
                         if (binding) {
                             webContentsNavBindings.delete(webContents)
