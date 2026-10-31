@@ -3,8 +3,9 @@ import * as fs from 'node:fs/promises'
 import * as fsSync from 'node:fs'
 import * as path from 'node:path'
 import * as os from 'node:os'
-import { SessionDatabaseService, computeStreaks, parseRightSidebar } from '../plugins/bundled/cpa.core.session-manager/main/sessionDatabaseService.js'
+import { SessionDatabaseService, computeStreaks, extractSearchableSessionText, extractSnippet, extractTextFromEntry, parseRightSidebar } from '../plugins/bundled/cpa.core.session-manager/main/sessionDatabaseService.js'
 import type { SessionRightSidebarState } from '../src/shared/types.js'
+import { applySessionSchemaAndMigrations } from '../plugins/bundled/cpa.core.session-manager/main/sessionSqliteSchema.js'
 
 describe('SessionDatabaseService', () => {
   let service: SessionDatabaseService
@@ -34,6 +35,647 @@ describe('SessionDatabaseService', () => {
       removedEntryIds: baseline?.entries.filter((entry) => !retainedIds.has(entry.id)).map((entry) => entry.id),
     })
   }
+
+  describe('session search index', () => {
+    it('extracts searchable fields while excluding tool outputs and opaque signatures', () => {
+      const args = { path: 'file.ts', content: 'x'.repeat(2500), signature: 'hidden-argument' }
+      const circular: Record<string, unknown> = {}
+      circular.self = circular
+      const entries = [
+        null, 'ignored', 42,
+        { kind: 'toolResult', text: 'hidden-kind-output' },
+        { type: 'toolResult', content: 'hidden-type-output' },
+        {
+          kind: 'user', text: 'Prompt', thought: 'Thought', errorMessage: 'Error',
+          signature: 'hidden-top-level', thinkingSignature: 'hidden-thinking', encryptedContent: 'hidden-encrypted',
+          content: [
+            'String block',
+            { text: 'Text block', thinking: 'Thinking block', signature: 'hidden-block' },
+            { type: 'toolCall', name: 'write', arguments: args },
+            { type: 'toolCall', name: 'edit', arguments: 'y'.repeat(2500) },
+            { type: 'toolCall', name: 'read', arguments: circular },
+            { type: 'toolCall', name: 'bash', arguments: { command: 'pwd', signature: 'hidden-nested' } },
+          ],
+          parts: ['String part', { text: 'Text part', thinkingSignature: 'hidden-part' }],
+        },
+        { kind: 'compaction', content: 'Summary' },
+        { kind: 'assistant', text: '' },
+      ]
+      const text = extractSearchableSessionText(entries)
+      expect(text).toBe([
+        'Prompt Thought Error String block Text block Thinking block write',
+        JSON.stringify(args).slice(0, 2000),
+        'edit', 'y'.repeat(2000), 'read', 'bash', '{"command":"pwd"}', 'String part Text part',
+      ].join(' ') + '\nSummary')
+      expect(text).not.toContain('hidden-')
+      expect(extractTextFromEntry({ kind: 'toolResult', text: 'Legacy output' })).toBe('Legacy output')
+      expect(extractTextFromEntry({ content: [{ type: 'toolCall', name: 'write', arguments: args }] }))
+        .toContain('x'.repeat(2500))
+    })
+
+    it.each(['performance', 'PERFORMANCE', '性能优化', '搜索', 'go', 's', '😀🚀', 'say "hello"'])
+      ('searches indexed content for %s', async (query) => {
+        await service.set('indexed', {
+          title: 'Dialogue',
+          entries: [{ id: 'indexed-entry', kind: 'assistant', content: [
+            { type: 'text', text: 'performance 性能优化 搜索 go 😀🚀 say "hello" %_' },
+          ] }],
+        })
+        expect(await service.search(query)).toEqual([
+          expect.objectContaining({ sessionId: 'indexed', matchType: 'content', snippet: expect.any(String) }),
+        ])
+      })
+
+    it.each(['école', 'ÉCOLE', 'é', 'É', 'éc', 'ÉC', 'ёж', 'ЁЖ', 'ж', 'Ж'])
+      ('matches Unicode content case-insensitively for %s', async (query) => {
+        await service.set('unicode-content', {
+          title: 'Conversation', entries: [{ id: 'unicode-entry', kind: 'assistant', text: 'ÉCOLE ЁЖ' }],
+        })
+        expect(await service.search(query)).toEqual([
+          expect.objectContaining({ sessionId: 'unicode-content', matchType: 'content' }),
+        ])
+      })
+
+    it.each([['ÉCOLE', 'école'], ['école', 'ÉCOLE'], ['ЁЖ', 'ёж'], ['ёж', 'ЁЖ'], ['École', 'é'], ['ёж', 'Ж']])
+      ('matches Unicode title %s with query %s', async (title, query) => {
+        await service.set('unicode-title', { title, entries: [] })
+        expect(await service.search(query)).toEqual([
+          expect.objectContaining({ sessionId: 'unicode-title', matchType: 'title' }),
+        ])
+      })
+
+    it.each([
+      ['İSTANBUL', 'i\u0307st'], ['Აბგ', 'აბგ'], ['Kelvin', 'kelvin'],
+      ['İSTANBUL', 'i\u0307'], ['Აბგ', 'აბ'], ['Kelvin', 'k'], ['Kelvin', 'ke'],
+      ['kelvin', 'KELVIN'], ['ΟΣ', 'Σ'], ['Σ', 'ς'], ['Straße', 'STRASSE'],
+      ['STRASSE', 'Straße'], ['ẞ', 'ss'], ['İSTANBUL', 'istanbul'],
+    ])('matches title and content %s with Unicode-folded query %s', async (text, query) => {
+      await service.set('folded-title', { title: text, entries: [] })
+      await service.set('folded-content', {
+        title: 'Conversation', entries: [{ id: 'folded-entry', kind: 'assistant', text }],
+      })
+      expect(await service.search(query)).toEqual([
+        expect.objectContaining({ sessionId: 'folded-title', matchType: 'title' }),
+        expect.objectContaining({ sessionId: 'folded-content', matchType: 'content' }),
+      ])
+    })
+
+    it('indexes decomposed dotted I for dotless content searches', async () => {
+        await service.set('decomposed-dotted-i', {
+            title: 'Conversation',
+            entries: [{ id: 'decomposed-entry', kind: 'assistant', text: 'i\u0307stanbul' }],
+        })
+        expect(service.getDb().prepare('SELECT has_unicode_case FROM session_search_docs').get())
+            .toEqual({ has_unicode_case: 1 })
+        expect(await service.search('istanbul')).toEqual([
+            expect.objectContaining({ sessionId: 'decomposed-dotted-i', matchType: 'content', snippet: 'i\u0307stanbul' }),
+        ])
+    })
+
+    it('does not rescan indexed uncased content during repeated searches', async () => {
+        const text = 'ASCII 性能优化 indexedkeyword'
+        await service.set('uncased-indexed', {
+            title: 'Conversation', entries: [{ id: 'uncased-entry', kind: 'assistant', text }],
+        })
+        const db = service.getDb()
+        expect(db.prepare('SELECT has_unicode_case FROM session_search_docs').get())
+            .toEqual({ has_unicode_case: 0 })
+        const hasUnicodeCase = vi.fn((_text: unknown) => 0)
+        const contains = vi.fn((haystack: string, needle: string) =>
+            haystack.toLowerCase().includes(needle.toLowerCase()) ? 1 : 0,
+        )
+        db.function('cpa_has_non_ascii_cased', hasUnicodeCase)
+        db.function('cpa_icontains', contains)
+        const getStatement = vi.spyOn(service as any, 'getStatement')
+        try {
+            for (const query of ['missingkeyword', 'anothermissingkeyword', 'missingkeyword']) {
+                expect(await service.search(query)).toEqual([])
+            }
+            expect(hasUnicodeCase).not.toHaveBeenCalled()
+            expect(contains.mock.calls.map(([haystack]) => haystack))
+                .toEqual(['Conversation', 'Conversation', 'Conversation'])
+            const pendingQueries = getStatement.mock.calls
+                .map(([sql]) => String(sql))
+                .filter((sql) => sql.includes('LEFT JOIN session_search_docs'))
+            expect(pendingQueries.length).toBeGreaterThan(0)
+            for (const sql of pendingQueries) {
+                expect(sql).not.toContain('content_text')
+            }
+        } finally {
+            getStatement.mockRestore()
+        }
+    })
+
+    it.each([
+      ['kelvin', 'kelvin', 'Kelvin'], ['i\u0307st', 'i\u0307stanbul', 'İSTANBUL'],
+      ['აბგ', 'აბგ', 'Აბგ'], ['école', 'école', 'ÉCOLE'],
+    ])('merges and sorts FTS and Unicode matches for %s', async (query, ftsText, unicodeText) => {
+      for (const [id, text, updatedAt] of [
+        ['fts-old', ftsText, 1], ['unicode-new', unicodeText, 3], ['fts-middle', ftsText, 2],
+      ] as const) {
+        await service.set(id, {
+          title: 'Conversation', updatedAt, entries: [{ id: `${id}-entry`, kind: 'assistant', text }],
+        })
+      }
+      expect((await service.search(query)).map((item) => item.sessionId))
+        .toEqual(['unicode-new', 'fts-middle', 'fts-old'])
+      expect((await service.search(query, 1)).map((item) => item.sessionId))
+        .toEqual(['unicode-new'])
+    })
+
+    it('supplements ASCII FTS matches with newer Unicode documents missing from FTS matches', async () => {
+      for (const [id, text, updatedAt] of [
+        ['ascii-match', 'kelvin', 1], ['unicode-match', 'Kelvin', 2],
+      ] as const) {
+        await service.set(id, {
+          title: 'Conversation', updatedAt, entries: [{ id: `${id}-entry`, kind: 'assistant', text }],
+        })
+      }
+      const db = service.getDb()
+      db.exec(`
+        INSERT INTO session_search_fts(session_search_fts, rowid, content_text)
+        SELECT 'delete', rowid, content_text FROM session_search_docs WHERE session_id = 'unicode-match'
+      `)
+      expect(db.prepare("SELECT rowid FROM session_search_fts WHERE content_text MATCH 'kelvin'").all())
+        .toHaveLength(1)
+      expect((await service.search('kelvin')).map((item) => item.sessionId))
+        .toEqual(['unicode-match', 'ascii-match'])
+      expect((await service.search('kelvin', 1)).map((item) => item.sessionId))
+        .toEqual(['unicode-match'])
+    })
+
+    it.each([
+      ['ΟΣ', 'Σ', '... Σ ...'], ['Straße', 'STRASSE', 'Straße ...'], ['İSTANBUL', 'i\u0307st', 'İST ...'],
+      ['😀Straße', 'STRASSE', '... Straße ...'],
+    ])('extracts snippets from %s using original match offsets for %s', (text, query, snippet) => {
+      expect(extractSnippet(`${text} trailing`, query, 0)).toBe(snippet)
+    })
+
+    it('preserves snippet offsets after length-changing lowercase characters', async () => {
+      const text = 'İ'.repeat(100) + ' needle'
+      expect(extractSnippet(text, 'needle')).toBe('... ' + 'İ'.repeat(39) + ' needle')
+      await service.set('snippet-offsets', {
+        title: 'Conversation', entries: [{ id: 'snippet-offsets-entry', kind: 'assistant', text }],
+      })
+      expect(await service.search('needle')).toEqual([
+        expect.objectContaining({ sessionId: 'snippet-offsets', snippet: expect.stringContaining('needle') }),
+      ])
+    })
+
+    it('maintains Unicode flags across content and metadata saves without rewriting FTS', async () => {
+      const db = service.getDb()
+      const getFlag = () => db.prepare('SELECT has_unicode_case FROM session_search_docs WHERE session_id = ?').get('unicode-flag')
+      await service.setMeta({ id: 'unicode-flag', title: 'Conversation', updatedAt: 1 })
+      expect(getFlag()).toEqual({ has_unicode_case: 0 })
+      await service.set('unicode-flag', {
+        updatedAt: 2, entries: [{ id: 'flag-entry', kind: 'assistant', text: 'Kelvin' }],
+      })
+      expect(getFlag()).toEqual({ has_unicode_case: 1 })
+      const ftsData = db.prepare('SELECT * FROM session_search_fts_data').all()
+      db.prepare('UPDATE session_search_docs SET has_unicode_case = 0').run()
+      await service.setMeta({ id: 'unicode-flag', updatedAt: 3 })
+      expect(getFlag()).toEqual({ has_unicode_case: 1 })
+      expect(db.prepare('SELECT * FROM session_search_fts_data').all()).toEqual(ftsData)
+      await replaceHistory('unicode-flag', {
+        updatedAt: 4, entries: [{ id: 'flag-entry', kind: 'assistant', text: 'ASCII 性能优化' }],
+      })
+      expect(getFlag()).toEqual({ has_unicode_case: 0 })
+    })
+
+    it('upgrades legacy search documents and backfills Unicode flags even with current timestamps', async () => {
+      await service.set('legacy-unicode', {
+        title: 'Conversation', updatedAt: 10,
+        entries: [{ id: 'legacy-unicode-entry', kind: 'assistant', text: 'İSTANBUL Აბგ Kelvin' }],
+      })
+      const db = service.getDb()
+      db.exec(`
+        DROP INDEX IF EXISTS idx_session_search_docs_unicode_case;
+        ALTER TABLE session_search_docs DROP COLUMN has_unicode_case;
+      `)
+      applySessionSchemaAndMigrations(db)
+      expect(db.prepare('SELECT has_unicode_case FROM session_search_docs').get()).toEqual({ has_unicode_case: -1 })
+      for (const query of ['i\u0307st', 'აბგ', 'kelvin']) {
+        expect(await service.search(query)).toEqual([
+          expect.objectContaining({ sessionId: 'legacy-unicode', matchType: 'content' }),
+        ])
+      }
+      expect(db.prepare('SELECT updated_at, has_unicode_case FROM session_search_docs').get())
+        .toEqual({ updated_at: 10, has_unicode_case: 1 })
+    })
+
+    it('backfills Unicode flags in the background without a timestamp change', async () => {
+      await service.set('background-unicode', {
+        title: 'Conversation', updatedAt: 10,
+        entries: [{ id: 'background-unicode-entry', kind: 'assistant', text: 'Აბგ' }],
+      })
+      service.getDb().prepare('UPDATE session_search_docs SET has_unicode_case = -1').run()
+      service.close()
+      vi.useFakeTimers()
+      vi.stubEnv('VITEST', '')
+      vi.stubEnv('NODE_ENV', 'production')
+      try {
+        service = new SessionDatabaseService({ customDir: tempDir })
+        const getFlag = () => service.getDb().prepare('SELECT has_unicode_case FROM session_search_docs').get()
+        expect(getFlag()).toEqual({ has_unicode_case: -1 })
+        vi.advanceTimersByTime(20)
+        expect(getFlag()).toEqual({ has_unicode_case: 1 })
+        expect(vi.getTimerCount()).toBe(0)
+      } finally {
+        service.close()
+        vi.unstubAllEnvs()
+        vi.useRealTimers()
+      }
+    })
+
+    it('rebuilds a recreated FTS table over existing search documents', async () => {
+      await service.set('recreated-fts', {
+        title: 'Conversation', entries: [{ id: 'recreated-entry', kind: 'assistant', text: 'preservedkeyword' }],
+      })
+      const db = service.getDb()
+      const docs = db.prepare('SELECT * FROM session_search_docs').all()
+      db.exec('DROP TABLE session_search_fts')
+      applySessionSchemaAndMigrations(db)
+      applySessionSchemaAndMigrations(db)
+      expect(db.prepare('SELECT * FROM session_search_docs').all()).toEqual(docs)
+      expect(db.prepare("SELECT rowid FROM session_search_fts WHERE content_text MATCH 'preservedkeyword'").all())
+        .toHaveLength(1)
+      expect(await service.search('preservedkeyword')).toEqual([
+        expect.objectContaining({ sessionId: 'recreated-fts', matchType: 'content' }),
+      ])
+    })
+
+    it('handles non-string arguments in the Unicode SQLite function', () => {
+      expect(service.getDb().prepare(`
+        SELECT cpa_icontains(NULL, 'é') AS null_text, cpa_icontains(1, 'é') AS number_text,
+          cpa_icontains('ÉCOLE', NULL) AS null_query, cpa_icontains('ÉCOLE', 'école') AS unicode_match
+      `).get()).toEqual({ null_text: 0, number_text: 0, null_query: 0, unicode_match: 1 })
+      expect(service.getDb().prepare(`
+        SELECT cpa_has_non_ascii_cased(NULL) AS null_text, cpa_has_non_ascii_cased(1) AS number_text,
+          cpa_has_non_ascii_cased('ASCII 性能优化') AS uncased, cpa_has_non_ascii_cased('Kelvin') AS cased
+      `).get()).toEqual({ null_text: 0, number_text: 0, uncased: 0, cased: 1 })
+    })
+
+    it('excludes archived sessions, subagents, raw tool results, and signature-only matches', async () => {
+      const signature = 'c2lnbmF0dXJlYmFzZTY0'
+      await service.set('opaque', {
+        title: 'Conversation',
+        entries: [
+          { id: 'raw-kind', kind: 'toolResult', content: 'hidden-output' },
+          { id: 'raw-type', type: 'toolResult', text: 'hidden-output' },
+          { id: 'opaque-entry', kind: 'assistant', signature, thinkingSignature: signature, encryptedContent: signature,
+            content: [{ type: 'thinking', thinking: 'Visible reasoning', signature }] },
+        ],
+      })
+      await service.set('subagent', {
+        title: 'hidden-output', isSubagent: true,
+        entries: [{ id: 'subagent-entry', kind: 'assistant', text: 'hidden-output' }],
+      })
+      await service.set('archived', {
+        title: 'hidden-output', archivedAt: 100,
+        entries: [{ id: 'archived-entry', kind: 'assistant', text: 'hidden-output' }],
+      })
+      expect(await service.search('hidden-output')).toEqual([])
+      expect(await service.search('bmF0dXJl')).toEqual([])
+      expect(await service.search('Visible reasoning')).toHaveLength(1)
+      expect(service.getDb().prepare('SELECT * FROM session_search_docs WHERE session_id = ?').get('subagent'))
+        .toBeUndefined()
+    })
+
+    it('limits content matches, deduplicates title matches, and orders by recency', async () => {
+      for (const [id, updatedAt, title] of [
+        ['title', 1, 'needle overview'], ['older', 2, 'Older conversation'], ['newer', 3, 'Newer conversation'],
+      ] as const) {
+        await service.set(id, {
+          title, updatedAt, entries: [{ id: `${id}-entry`, kind: 'assistant', text: 'needle content' }],
+        })
+      }
+      expect((await service.search('needle', 2)).map((item) => item.sessionId)).toEqual(['title', 'newer'])
+      expect((await service.search('needle')).map((item) => item.sessionId)).toEqual(['title', 'newer', 'older'])
+      expect(await service.search('needle', 0)).toEqual([])
+      expect(await service.search('  ')).toEqual([])
+    })
+
+    it('updates and deletes FTS entries together with saved session history', async () => {
+      await service.set('mutable', {
+        title: 'Conversation', entries: [{ id: 'mutable-entry', kind: 'assistant', text: 'obsoletekeyword' }],
+      })
+      expect(await service.search('obsoletekeyword')).toHaveLength(1)
+      await replaceHistory('mutable', {
+        entries: [{ id: 'mutable-entry', kind: 'assistant', text: 'replacementkeyword' }],
+      })
+      expect(await service.search('obsoletekeyword')).toEqual([])
+      expect(await service.search('replacementkeyword')).toHaveLength(1)
+      await service.delete('mutable')
+      expect(await service.search('replacementkeyword')).toEqual([])
+      expect(service.getDb().prepare('SELECT * FROM session_search_docs').all()).toEqual([])
+      expect(service.getDb().prepare("SELECT rowid FROM session_search_fts WHERE content_text MATCH 'replacementkeyword'").all())
+        .toEqual([])
+    })
+
+    it('removes indexed documents for descendants when deleting a parent', async () => {
+      await service.set('parent-search', { entries: [] })
+      await service.set('child-search', {
+        parentSessionId: 'parent-search',
+        entries: [{ id: 'child-search-entry', kind: 'assistant', text: 'descendantkeyword' }],
+      })
+      await service.delete('parent-search')
+      expect(service.getDb().prepare('SELECT * FROM session_search_docs').all()).toEqual([])
+      expect(service.getDb().prepare("SELECT rowid FROM session_search_fts WHERE content_text MATCH 'descendantkeyword'").all())
+        .toEqual([])
+    })
+
+    it('synchronizes metadata timestamps without rewriting FTS content', async () => {
+      await service.setMeta({ id: 'metadata', title: 'Conversation', updatedAt: 10 })
+      expect(service.getDb().prepare('SELECT updated_at, content_text FROM session_search_docs WHERE session_id = ?').get('metadata'))
+        .toEqual({ updated_at: 10, content_text: '' })
+      await service.set('metadata', {
+        updatedAt: 20, entries: [{ id: 'metadata-entry', kind: 'assistant', text: 'metadatakeyword' }],
+      })
+      const ftsData = service.getDb().prepare('SELECT * FROM session_search_fts_data').all()
+      await service.setMeta({ id: 'metadata', title: 'Renamed conversation', updatedAt: 30 })
+      expect(service.getDb().prepare('SELECT updated_at, content_text FROM session_search_docs WHERE session_id = ?').get('metadata'))
+        .toEqual({ updated_at: 30, content_text: 'metadatakeyword' })
+      expect(service.getDb().prepare('SELECT * FROM session_search_fts_data').all()).toEqual(ftsData)
+      expect(await service.search('metadatakeyword')).toHaveLength(1)
+      await service.setMeta({ id: 'metadata', parentSessionId: 'parent', updatedAt: 40 })
+      expect(service.getDb().prepare('SELECT is_subagent FROM sessions WHERE id = ?').get('metadata')).toEqual({ is_subagent: 1 })
+      expect(service.getDb().prepare('SELECT * FROM session_search_docs WHERE session_id = ?').get('metadata')).toBeUndefined()
+      expect(await service.search('metadatakeyword')).toEqual([])
+      expect(await service.search('Renamed conversation')).toEqual([])
+      await service.setMeta({ id: 'metadata', parentSessionId: null })
+      expect(service.getDb().prepare('SELECT is_subagent FROM sessions WHERE id = ?').get('metadata')).toEqual({ is_subagent: 1 })
+      expect(await service.search('metadatakeyword')).toEqual([])
+      await service.setMeta({ id: 'new-subagent', parentSessionId: 'parent' })
+      expect(service.getDb().prepare('SELECT * FROM session_search_docs WHERE session_id = ?').get('new-subagent')).toBeUndefined()
+    })
+
+    it('removes documents when sessions become subagents through content saves or child upserts', async () => {
+      for (const id of ['converted', 'child-upsert']) {
+        await service.set(id, {
+          title: 'Conversation', entries: [{ id: `${id}-entry`, kind: 'assistant', text: 'conversionkeyword' }],
+        })
+      }
+      await replaceHistory('converted', {
+        isSubagent: true, entries: [{ id: 'converted-entry', kind: 'assistant', text: 'conversionkeyword' }],
+      })
+      await service.set('parent-upsert', {
+        entries: [], subAgents: [{ id: 'child-agent', sessionId: 'child-upsert', name: 'Child' }],
+      })
+      expect(await service.search('conversionkeyword')).toEqual([])
+      expect(service.getDb().prepare('SELECT session_id FROM session_search_docs').all()).toEqual([{ session_id: 'parent-upsert' }])
+    })
+
+    it('backfills legacy sessions in multiple batches and refreshes stale documents on demand', async () => {
+      const db = service.getDb()
+      const insertSession = db.prepare('INSERT INTO sessions (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)')
+      const insertEntry = db.prepare(`
+        INSERT INTO session_entries (id, session_id, kind, created_at, entry_index, payload_json)
+        VALUES (?, ?, ?, 1, ?, ?)
+      `)
+      db.transaction(() => {
+        for (let i = 0; i < 105; i++) {
+          const id = `legacy-${i}`
+          insertSession.run(id, 'Legacy conversation', 1, i + 1)
+          insertEntry.run(`${id}-entry`, id, 'assistant', 0, JSON.stringify({ kind: 'assistant', text: 'legacykeyword 性能优化' }))
+        }
+        insertEntry.run('corrupt', 'legacy-0', 'assistant', 1, '{invalid')
+        insertEntry.run('raw-tool', 'legacy-0', 'toolResult', 2, JSON.stringify({ kind: 'toolResult', text: 'excludedkeyword' }))
+        insertEntry.run('legacy-type', 'legacy-0', 'unknown', 3, JSON.stringify({ type: 'toolResult', text: 'excludedkeyword' }))
+        db.prepare('INSERT INTO session_search_docs (session_id, updated_at, content_text) VALUES (?, ?, ?)')
+          .run('legacy-0', 0, 'obsoletelegacykeyword')
+      })()
+      expect((await service.search('legacykeyword', 200)).map((item) => item.sessionId))
+        .toEqual(Array.from({ length: 105 }, (_, index) => `legacy-${104 - index}`))
+      expect(db.prepare('SELECT COUNT(*) AS count FROM session_search_docs').get()).toEqual({ count: 105 })
+      expect(await service.search('obsoletelegacykeyword')).toEqual([])
+      expect(await service.search('excludedkeyword')).toEqual([])
+      expect(await service.search('性能优化', 200)).toHaveLength(105)
+    })
+
+    it('preserves unsafe integer timestamps inside SQLite when saving search documents', async () => {
+      const db = service.getDb()
+      db.exec(`
+        CREATE TRIGGER unsafe_session_timestamp AFTER INSERT ON sessions BEGIN
+          UPDATE sessions SET updated_at = 9007199254740993 WHERE id = new.id;
+        END;
+      `)
+      await service.set('unsafe-save', {
+        title: 'Conversation', entries: [{ id: 'unsafe-save-entry', kind: 'assistant', text: 'unsafekeyword' }],
+      })
+      expect(db.prepare(`
+        SELECT s.updated_at = d.updated_at AS synchronized, CAST(d.updated_at AS TEXT) AS timestamp
+        FROM sessions s JOIN session_search_docs d ON d.session_id = s.id WHERE s.id = ?
+      `).get('unsafe-save')).toEqual({ synchronized: 1, timestamp: '9007199254740993' })
+    })
+
+    it.each([9007199254740993n, 9223372036854775807n])
+      ('finishes backfilling the exact unsafe integer timestamp %s', async (timestamp) => {
+        const db = service.getDb()
+        db.prepare('INSERT INTO sessions (id, title, created_at, updated_at) VALUES (?, ?, 1, ?)')
+          .run('unsafe-backfill', 'Conversation', timestamp)
+        db.prepare(`
+          INSERT INTO session_entries (id, session_id, kind, created_at, entry_index, payload_json)
+          VALUES (?, ?, 'assistant', 1, 0, ?)
+        `).run('unsafe-backfill-entry', 'unsafe-backfill', JSON.stringify({ kind: 'assistant', text: 'unsafekeyword' }))
+        expect(await service.search('unsafekeyword')).toHaveLength(1)
+        expect(db.prepare(`
+          SELECT s.updated_at = d.updated_at AS synchronized, CAST(d.updated_at AS TEXT) AS timestamp
+          FROM sessions s JOIN session_search_docs d ON d.session_id = s.id WHERE s.id = ?
+        `).get('unsafe-backfill')).toEqual({ synchronized: 1, timestamp: String(timestamp) })
+      })
+
+    it('stops retrying a session when backfill cannot make progress', async () => {
+      await service.set('stuck-backfill', {
+        title: 'Conversation', updatedAt: 100,
+        entries: [{ id: 'stuck-entry', kind: 'assistant', text: 'stuckkeyword' }],
+      })
+      const db = service.getDb()
+      db.prepare('UPDATE session_search_docs SET updated_at = 0').run()
+      db.exec(`
+        CREATE TRIGGER keep_search_doc_stale AFTER UPDATE OF updated_at ON session_search_docs BEGIN
+          UPDATE session_search_docs SET updated_at = 0 WHERE session_id = new.session_id;
+        END;
+      `)
+      const backfill = vi.spyOn(service as any, 'backfillSearchIndexBatch')
+      try {
+        expect(await service.search('stuckkeyword')).toHaveLength(1)
+        expect(backfill).toHaveBeenCalledTimes(2)
+      } finally {
+        backfill.mockRestore()
+      }
+    })
+
+    it('backfills legacy file databases in background batches and stops when complete', () => {
+      const db = service.getDb()
+      db.transaction(() => {
+        for (let i = 0; i < 30; i++) {
+          db.prepare('INSERT INTO sessions (id, title, created_at, updated_at) VALUES (?, ?, 1, 1)')
+            .run(`background-${i}`, 'Background conversation')
+        }
+      })()
+      db.prepare(`
+        INSERT INTO sessions (id, title, parent_session_id, is_subagent, created_at, updated_at)
+        VALUES ('legacy-background-child', 'Legacy child', 'parent', 0, 1, 1)
+      `).run()
+      service.close()
+      vi.useFakeTimers()
+      vi.stubEnv('VITEST', '')
+      vi.stubEnv('NODE_ENV', 'production')
+      try {
+        service = new SessionDatabaseService({ customDir: tempDir })
+        const countDocs = () => service.getDb().prepare('SELECT COUNT(*) AS count FROM session_search_docs').get()
+        expect(countDocs()).toEqual({ count: 0 })
+        vi.advanceTimersByTime(19)
+        expect(countDocs()).toEqual({ count: 0 })
+        vi.advanceTimersByTime(1)
+        expect(countDocs()).toEqual({ count: 25 })
+        vi.advanceTimersByTime(20)
+        expect(countDocs()).toEqual({ count: 30 })
+        expect(vi.getTimerCount()).toBe(0)
+      } finally {
+        service.close()
+        vi.unstubAllEnvs()
+        vi.useRealTimers()
+      }
+    })
+
+    it('clears pending background backfill when closed', () => {
+      service.getDb().prepare('INSERT INTO sessions (id, title, created_at, updated_at) VALUES (?, ?, 1, 1)')
+        .run('pending-background', 'Background conversation')
+      service.close()
+      vi.useFakeTimers()
+      vi.stubEnv('VITEST', '')
+      vi.stubEnv('NODE_ENV', 'production')
+      try {
+        service = new SessionDatabaseService({ customDir: tempDir })
+        expect(vi.getTimerCount()).toBe(1)
+        service.close()
+        expect(vi.getTimerCount()).toBe(0)
+        vi.runAllTimers()
+      } finally {
+        service.close()
+        vi.unstubAllEnvs()
+        vi.useRealTimers()
+      }
+    })
+
+    it('searches existing indexed content when backfill cannot write to the database', async () => {
+      await service.set('readonly-search', {
+        title: 'Conversation', entries: [{ id: 'readonly-entry', kind: 'assistant', text: 'readonlykeyword' }],
+      })
+      service.getDb().pragma('query_only = ON')
+      expect(await service.search('readonlykeyword')).toEqual([
+        expect.objectContaining({ sessionId: 'readonly-search', matchType: 'content' }),
+      ])
+    })
+
+    it.each(['missing-unicode-column', 'unbackfilled-unicode-flag'])
+      ('searches unmigrated Unicode content in a read-only database with %s', async (mode) => {
+        for (const [id, text, updatedAt] of [
+          ['readonly-ascii', 'kelvin', 1], ['readonly-unicode', 'Kelvin ΟΣ Straße İSTANBUL Აბგ', 2],
+        ] as const) {
+          await service.set(id, {
+            title: 'Conversation', updatedAt, entries: [{ id: `${id}-entry`, kind: 'assistant', text }],
+          })
+        }
+        const db = service.getDb()
+        db.exec(`
+          INSERT INTO session_search_fts(session_search_fts, rowid, content_text)
+          SELECT 'delete', rowid, content_text FROM session_search_docs WHERE session_id = 'readonly-unicode'
+        `)
+        if (mode === 'missing-unicode-column') {
+          db.exec(`
+            DROP INDEX idx_session_search_docs_unicode_case;
+            ALTER TABLE session_search_docs DROP COLUMN has_unicode_case;
+          `)
+        } else {
+          db.prepare('UPDATE session_search_docs SET has_unicode_case = -1').run()
+        }
+        db.pragma('query_only = ON')
+        applySessionSchemaAndMigrations(db)
+
+        for (const query of ['kelvin', 'k', 'Σ', 'STRASSE', 'i\u0307st', 'აბგ']) {
+          expect(await service.search(query, 1)).toEqual([
+            expect.objectContaining({ sessionId: 'readonly-unicode', matchType: 'content' }),
+          ])
+        }
+        if (mode === 'unbackfilled-unicode-flag') {
+          expect(db.prepare('SELECT has_unicode_case FROM session_search_docs').all())
+            .toEqual([{ has_unicode_case: -1 }, { has_unicode_case: -1 }])
+        } else {
+          expect(db.prepare('PRAGMA table_info(session_search_docs)').all())
+            .not.toContainEqual(expect.objectContaining({ name: 'has_unicode_case' }))
+        }
+      })
+
+    it.each(['missing-docs', 'missing-fts', 'incomplete', 'stale'])
+      ('searches complete legacy content in a read-only database with %s', async (mode) => {
+        for (const [id, updatedAt, title] of [
+          ['title', 1, 'readonlykeyword overview'], ['indexed', 2, 'Indexed conversation'],
+          ['newer', 4, 'Newer conversation'],
+        ] as const) {
+          await service.set(id, {
+            title, updatedAt, entries: [{ id: `${id}-entry`, kind: 'assistant', text: 'readonlykeyword ÉCOLE' }],
+          })
+        }
+        await service.set('excluded', {
+          title: 'Conversation', entries: [
+            { id: 'readonly-raw', kind: 'toolResult', text: 'excludedkeyword' },
+            { id: 'readonly-type', type: 'toolResult', text: 'excludedkeyword' },
+            { id: 'readonly-opaque', kind: 'assistant', signature: 'excludedkeyword',
+              content: [{ type: 'toolCall', name: 'read', arguments: { signature: 'excludedkeyword' } }] },
+          ],
+        })
+        for (const id of ['archived', 'flagged', 'parented']) {
+          await service.set(id, {
+            title: 'readonlykeyword',
+            entries: [{ id: `${id}-entry`, kind: 'assistant', text: 'readonlykeyword ÉCOLE excludedkeyword' }],
+          })
+        }
+        const db = service.getDb()
+        db.prepare('UPDATE sessions SET archived_at = 1 WHERE id = ?').run('archived')
+        db.prepare('UPDATE sessions SET is_subagent = 1 WHERE id = ?').run('flagged')
+        db.prepare('UPDATE sessions SET parent_session_id = ? WHERE id = ?').run('parent', 'parented')
+        db.prepare(`
+          INSERT INTO session_entries (id, session_id, kind, created_at, entry_index, payload_json)
+          VALUES ('corrupt-readonly', 'newer', 'assistant', 1, -1, '{invalid')
+        `).run()
+        db.prepare('DELETE FROM session_search_docs WHERE session_id IN (?, ?)').run('newer', 'excluded')
+        if (mode === 'stale') {
+          db.prepare('INSERT INTO session_search_docs (session_id, updated_at, content_text) VALUES (?, 0, ?)')
+            .run('newer', 'obsoletekeyword')
+        }
+        if (mode === 'missing-docs' || mode === 'missing-fts') {
+          db.exec(`
+            DROP TRIGGER trg_session_search_docs_ai;
+            DROP TRIGGER trg_session_search_docs_ad;
+            DROP TRIGGER trg_session_search_docs_au;
+            DROP TABLE session_search_fts;
+          `)
+          if (mode === 'missing-docs') db.exec('DROP TABLE session_search_docs')
+        }
+        db.pragma('query_only = ON')
+
+        expect((await service.search('readonlykeyword')).map((item) => item.sessionId))
+          .toEqual(['title', 'newer', 'indexed'])
+        expect((await service.search('readonlykeyword', 2)).map((item) => item.sessionId))
+          .toEqual(['title', 'newer'])
+        expect((await service.search('é')).map((item) => item.sessionId)).toEqual(['newer', 'indexed', 'title'])
+        expect(await service.search('excludedkeyword')).toEqual([])
+        expect(await service.search('obsoletekeyword')).toEqual([])
+      })
+
+    it.each(['is_subagent', 'parent_session_id'])('cleans up stray legacy subagents identified by %s', async (column) => {
+      await service.set('stray', {
+        title: 'straytitle', entries: [{ id: 'stray-entry', kind: 'assistant', text: 'straykeyword' }],
+      })
+      const value = column === 'is_subagent' ? 1 : 'parent'
+      service.getDb().prepare(`UPDATE sessions SET ${column} = ? WHERE id = ?`).run(value, 'stray')
+      expect(await service.search('straytitle')).toEqual([])
+      expect(await service.search('straykeyword')).toEqual([])
+      expect(service.getDb().prepare('SELECT * FROM session_search_docs').all()).toEqual([])
+    })
+  })
 
   it('rejects partial snapshots before changing history, metadata, or derived turns', async () => {
     const entries = [
@@ -167,13 +809,14 @@ describe('SessionDatabaseService', () => {
     const syncPragma = db.pragma('synchronous', { simple: true })
     expect(syncPragma).toBe(1)
 
-    // All 11 custom indexes in sqlite_master
+    // All custom indexes in sqlite_master
     const indexes = db
       .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'")
       .all()
       .map((r: any) => r.name)
 
-    expect(indexes).toHaveLength(13)
+    expect(indexes).toHaveLength(14)
+    expect(indexes).toContain('idx_session_search_docs_unicode_case')
     expect(indexes).toContain('idx_isolated_model_usage_session')
     expect(indexes).toContain('idx_isolated_model_usage_parent')
     expect(indexes).toContain('idx_sessions_project')

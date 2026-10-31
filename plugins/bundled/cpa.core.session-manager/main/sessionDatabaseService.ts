@@ -39,6 +39,7 @@ export interface SessionDatabaseOptions {
 
 const SKILL_DIR_REGEX = /(?:^|\/)([a-zA-Z0-9_-]+)\/(?:SKILL|skill)\.md$/i
 const SKILLS_FILE_REGEX = /(?:^|\/)skills\/([a-zA-Z0-9_-]+)\.md$/i
+const NON_ASCII_CASED_RE = /(?:(?=[^\x00-\x7f])\p{Cased}|\u0307)/u
 
 export interface SessionFilePayload {
   id: string
@@ -75,12 +76,61 @@ function entriesRevision(payloads: string[]): string {
   return crypto.createHash('sha256').update(JSON.stringify(payloads)).digest('hex')
 }
 
+function hasNonAsciiCasedChars(text: string): number {
+  return /[^\x00-\x7f]/.test(text) && NON_ASCII_CASED_RE.test(text) ? 1 : 0
+}
+
+function foldSearchText(text: string): string {
+    return text.toLowerCase().replace(/ς/g, 'σ').replace(/ß/g, 'ss')
+}
+
+function caseInsensitiveIndexOf(
+    haystack: string,
+    needle: string,
+): { index: number; matchLength: number } | null {
+    if (!needle) return null
+    const lowerText = haystack.toLowerCase()
+    const lowerQuery = needle.toLowerCase()
+
+    // Lowercasing and sigma folding preserve offsets unless a character expands or loses its dot.
+    if (lowerText.length === haystack.length && lowerQuery.length === needle.length &&
+        !/[ß\u0307]/.test(lowerText) && !/[ß\u0307]/.test(lowerQuery)) {
+        const index = lowerText.replace(/ς/g, 'σ').indexOf(lowerQuery.replace(/ς/g, 'σ'))
+        return index === -1 ? null : { index, matchLength: needle.length }
+    }
+
+    const foldedQuery = foldSearchText(needle)
+    // Preserve explicit dotted queries while also accepting dotless queries for dotted I.
+    const preserveDots = foldedQuery.includes('\u0307')
+    let foldedText = ''
+    const starts: number[] = []
+    const ends: number[] = []
+    let offset = 0
+    for (const ch of haystack) {
+        const folded = preserveDots
+            ? foldSearchText(ch)
+            : foldSearchText(ch).replace(/\u0307/g, '')
+        foldedText += folded
+        for (let i = 0; i < folded.length; i++) {
+            starts.push(offset)
+            ends.push(offset + ch.length)
+        }
+        offset += ch.length
+    }
+
+    const matchIndex = foldedText.indexOf(foldedQuery)
+    if (matchIndex === -1) return null
+    const index = starts[matchIndex]!
+    return { index, matchLength: ends[matchIndex + foldedQuery.length - 1]! - index }
+}
+
 export class SessionDatabaseService {
   private db: DatabaseType | null = null
   private dbPath: string
   private readonly customDir?: string
   private readonly getHomeDir: () => string
   private statementCache = new Map<string, Statement>()
+  private searchIndexBackfillTimer: ReturnType<typeof setTimeout> | null = null
 
   private getStatement(sql: string): Statement {
     let stmt = this.statementCache.get(sql)
@@ -139,6 +189,13 @@ export class SessionDatabaseService {
     }
 
     this.db = new Database(this.dbPath)
+    this.db.function('cpa_icontains', (haystack: unknown, needle: unknown) => {
+      if (typeof haystack !== 'string' || typeof needle !== 'string') return 0
+      return caseInsensitiveIndexOf(haystack, needle) ? 1 : 0
+    })
+    this.db.function('cpa_has_non_ascii_cased', (text: unknown) => {
+      return typeof text === 'string' ? hasNonAsciiCasedChars(text) : 0
+    })
 
     // SQLite Configurations
     try {
@@ -152,6 +209,7 @@ export class SessionDatabaseService {
 
     // Create Tables and Indexes
     this.createTables()
+    this.scheduleSearchIndexBackfill()
   }
 
   private createTables(): void {
@@ -484,7 +542,7 @@ export class SessionDatabaseService {
     `)
 
     const getSessionMetaStmt = this.getStatement(`
-      SELECT project_id, parent_session_id, is_subagent FROM sessions WHERE id = ?
+      SELECT project_id, parent_session_id, is_subagent, updated_at FROM sessions WHERE id = ?
     `)
 
     const deleteEntriesStmt = this.getStatement(`DELETE FROM session_entries WHERE session_id = ?`)
@@ -667,12 +725,27 @@ export class SessionDatabaseService {
             project_id: string | null
             parent_session_id: string | null
             is_subagent: number
+            updated_at: number
           }
         | undefined
 
       const effectiveProjectId = sessionMeta?.project_id ?? projectId ?? null
       const effectiveParentSessionId = sessionMeta?.parent_session_id ?? parentSessionId ?? null
       const effectiveIsSubagent = sessionMeta?.is_subagent ?? isSubagent ?? 0
+
+      if (effectiveIsSubagent === 0 && effectiveParentSessionId === null) {
+        const searchText = extractSearchableSessionText(entries)
+        this.getStatement(`
+          INSERT INTO session_search_docs (session_id, updated_at, content_text, has_unicode_case)
+          VALUES (?, COALESCE((SELECT updated_at FROM sessions WHERE id = ?), ?), ?, ?)
+          ON CONFLICT(session_id) DO UPDATE SET
+            updated_at = excluded.updated_at,
+            content_text = excluded.content_text,
+            has_unicode_case = excluded.has_unicode_case
+        `).run(sessionId, sessionId, updatedAt ?? now, searchText, hasNonAsciiCasedChars(searchText))
+      } else {
+        this.getStatement('DELETE FROM session_search_docs WHERE session_id = ?').run(sessionId)
+      }
 
       // 2. Refresh session entries
       deleteEntriesStmt.run(sessionId)
@@ -785,6 +858,7 @@ export class SessionDatabaseService {
               created_at: sa.createdAt,
               updated_at: sa.updatedAt,
             })
+            this.getStatement('DELETE FROM session_search_docs WHERE session_id = ?').run(sa.sessionId)
 
             // Backfill child conversation_turns and skill_invocations
             updateChildTurnsStmt.run({
@@ -1058,10 +1132,12 @@ export class SessionDatabaseService {
       for (const child of childSessions) {
         tombstoneStmt.run(child.id, Date.now())
         deleteAgentStmt.run(child.id)
+        this.getStatement('DELETE FROM session_search_docs WHERE session_id = ?').run(child.id)
         deleteSessionStmt.run(child.id)
       }
       tombstoneStmt.run(sessionId, Date.now())
       deleteAgentStmt.run(sessionId)
+      this.getStatement('DELETE FROM session_search_docs WHERE session_id = ?').run(sessionId)
 
       // Delete the main session (cascades to session_entries, subagents, turns, skills)
       deleteSessionStmt.run(sessionId)
@@ -1217,9 +1293,19 @@ export class SessionDatabaseService {
 
         this.getStatement(`
           UPDATE sessions
-          SET title = ?, project_id = ?, schedule_id = ?, parent_session_id = ?, branch = ?, pinned = ?, unread = ?, archived_at = ?, right_sidebar_json = ?, first_prompt_at = ?, model_id = ?, reasoning_effort = ?, speed = ?, work_location = ?, worktree_path = ?, environment_id = ?, worktree_setup_json = ?, pinned_summary_visible = ?, updated_at = ?
+          SET title = ?, project_id = ?, schedule_id = ?, parent_session_id = ?, is_subagent = CASE WHEN ? IS NOT NULL THEN 1 ELSE is_subagent END, branch = ?, pinned = ?, unread = ?, archived_at = ?, right_sidebar_json = ?, first_prompt_at = ?, model_id = ?, reasoning_effort = ?, speed = ?, work_location = ?, worktree_path = ?, environment_id = ?, worktree_setup_json = ?, pinned_summary_visible = ?, updated_at = ?
           WHERE id = ?
-        `).run(newTitle, newProjectId, newScheduleId, newParentSessionId, newBranch, newPinned, newUnread, newArchivedAt, newRightSidebarJson, newFirstPromptAt, newModelId, newReasoningEffort, newSpeed, newWorkLocation, newWorktreePath, newEnvironmentId, newWorktreeSetupJson, newPinnedSummaryVisible, newUpdatedAt, meta.id)
+        `).run(newTitle, newProjectId, newScheduleId, newParentSessionId, 'parentSessionId' in meta ? newParentSessionId : null, newBranch, newPinned, newUnread, newArchivedAt, newRightSidebarJson, newFirstPromptAt, newModelId, newReasoningEffort, newSpeed, newWorkLocation, newWorktreePath, newEnvironmentId, newWorktreeSetupJson, newPinnedSummaryVisible, newUpdatedAt, meta.id)
+
+        if (newParentSessionId) {
+          this.getStatement('DELETE FROM session_search_docs WHERE session_id = ?').run(meta.id)
+        } else {
+          this.getStatement(`
+            UPDATE session_search_docs
+            SET updated_at = ?, has_unicode_case = cpa_has_non_ascii_cased(content_text)
+            WHERE session_id = ?
+          `).run(newUpdatedAt, meta.id)
+        }
 
         if ('projectId' in meta) {
           const effectiveProj = meta.projectId || null
@@ -1278,6 +1364,12 @@ export class SessionDatabaseService {
             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
           )
         `).run(meta.id, projectId, scheduleId, parentSessionId, isSubagent, title, branch, pinned, unread, archivedAt, rightSidebarJson, firstPromptAt, modelId, reasoningEffort, speed, workLocation, worktreePath, environmentId, worktreeSetupJson, pinnedSummaryVisible, createdAt, updatedAt)
+        if (isSubagent === 0) {
+          this.getStatement(`
+            INSERT OR IGNORE INTO session_search_docs (session_id, updated_at, content_text, has_unicode_case)
+            VALUES (?, ?, '', ?)
+          `).run(meta.id, updatedAt, hasNonAsciiCasedChars(''))
+        }
       }
     })
 
@@ -2152,6 +2244,99 @@ export class SessionDatabaseService {
     return { whereSql, params }
   }
 
+  private backfillSearchIndexBatch(limit: number, attemptedSessionIds = new Set<string>()): number {
+    const db = this.getDb()
+    this.getStatement(`
+      DELETE FROM session_search_docs WHERE session_id IN (
+        SELECT d.session_id FROM session_search_docs d
+        JOIN sessions s ON s.id = d.session_id WHERE s.is_subagent != 0 OR s.parent_session_id IS NOT NULL
+      )
+    `).run()
+
+    const sessions = this.getStatement(`
+      SELECT s.id
+      FROM sessions s
+      LEFT JOIN session_search_docs d ON d.session_id = s.id
+      WHERE s.is_subagent = 0 AND s.parent_session_id IS NULL
+        AND (d.session_id IS NULL OR d.updated_at < s.updated_at
+          OR d.has_unicode_case IS NULL OR d.has_unicode_case < 0)
+      ORDER BY s.updated_at DESC
+      LIMIT ?
+    `).all(limit) as Array<{ id: string }>
+    const pendingSessions = sessions.filter((session) => !attemptedSessionIds.has(session.id))
+    if (pendingSessions.length === 0) return 0
+
+    const backfillTx = db.transaction(() => {
+      for (const session of pendingSessions) {
+        attemptedSessionIds.add(session.id)
+        const rows = this.getStatement(`
+          SELECT payload_json FROM session_entries
+          WHERE session_id = ? AND kind != 'toolResult' ORDER BY entry_index ASC
+        `).all(session.id) as Array<{ payload_json: string }>
+        const parsedEntries: unknown[] = []
+        for (const row of rows) {
+          try {
+            parsedEntries.push(JSON.parse(row.payload_json))
+          } catch {
+            // Ignore corrupt JSON payloads during backfill.
+          }
+        }
+        const searchText = extractSearchableSessionText(parsedEntries)
+        this.getStatement(`
+          INSERT INTO session_search_docs (session_id, updated_at, content_text, has_unicode_case)
+          VALUES (?, COALESCE((SELECT updated_at FROM sessions WHERE id = ?), 0), ?, ?)
+          ON CONFLICT(session_id) DO UPDATE SET
+            updated_at = excluded.updated_at,
+            content_text = excluded.content_text,
+            has_unicode_case = excluded.has_unicode_case
+        `).run(session.id, session.id, searchText, hasNonAsciiCasedChars(searchText))
+      }
+    })
+    backfillTx()
+    return pendingSessions.length
+  }
+
+  private ensureSearchIndexBackfilled(): void {
+    const attemptedSessionIds = new Set<string>()
+    try {
+      while (this.backfillSearchIndexBatch(100, attemptedSessionIds) > 0) {}
+    } catch {
+      // Read-only databases may not allow search index backfill.
+    }
+  }
+
+  private scheduleSearchIndexBackfill(): void {
+    if (process.env.VITEST || process.env.NODE_ENV === 'test' || this.dbPath === ':memory:' ||
+      !this.db?.open || this.searchIndexBackfillTimer) return
+
+    try {
+      const pending = this.getStatement(`
+        SELECT s.id FROM sessions s
+        LEFT JOIN session_search_docs d ON d.session_id = s.id
+        WHERE s.is_subagent = 0 AND s.parent_session_id IS NULL
+          AND (d.session_id IS NULL OR d.updated_at < s.updated_at
+            OR d.has_unicode_case IS NULL OR d.has_unicode_case < 0)
+        LIMIT 1
+      `).get()
+      if (!pending) return
+
+      this.searchIndexBackfillTimer = setTimeout(() => {
+        this.searchIndexBackfillTimer = null
+        if (!this.db?.open) return
+        try {
+          if (this.backfillSearchIndexBatch(25) > 0) {
+            this.scheduleSearchIndexBackfill()
+          }
+        } catch {
+          // Stop background backfill if the database cannot be written.
+        }
+      }, 20)
+      this.searchIndexBackfillTimer.unref?.()
+    } catch {
+      // Search tables may be unavailable in a read-only legacy database.
+    }
+  }
+
   async search(
     query: string,
     limit: number = 50,
@@ -2161,7 +2346,6 @@ export class SessionDatabaseService {
       return []
     }
 
-    const db = this.getDb()
     const results: SessionSearchResultItem[] = []
     const seenSessionIds = new Set<string>()
 
@@ -2169,11 +2353,12 @@ export class SessionDatabaseService {
     const titleStmt = this.getStatement(`
       SELECT id, project_id, branch, title, updated_at
       FROM sessions
-      WHERE archived_at IS NULL AND title LIKE ?
+      WHERE archived_at IS NULL AND is_subagent = 0 AND parent_session_id IS NULL
+        AND cpa_icontains(title, ?) = 1
       ORDER BY updated_at DESC
       LIMIT ?
     `)
-    const titleRows = titleStmt.all(`%${trimmed}%`, limit) as Array<{
+    const titleRows = titleStmt.all(trimmed, limit) as Array<{
       id: string
       project_id: string | null
       branch: string | null
@@ -2197,57 +2382,133 @@ export class SessionDatabaseService {
       return results.slice(0, limit)
     }
 
-    // 2. Search in session entries payload_json
+    // 2. Search indexed plain text without parsing session entry payloads.
+    const searchTables = this.getStatement(`
+      SELECT name FROM sqlite_master
+      WHERE type = 'table' AND name IN ('session_search_docs', 'session_search_fts')
+    `).all() as Array<{ name: string }>
+    const hasSearchDocs = searchTables.some((table) => table.name === 'session_search_docs')
+    const hasSearchFts = searchTables.some((table) => table.name === 'session_search_fts')
     const remainingLimit = limit - results.length
-    const contentStmt = this.getStatement(`
-      SELECT se.session_id, se.payload_json, s.project_id, s.branch, s.title, s.updated_at
-      FROM session_entries se
-      JOIN sessions s ON se.session_id = s.id
-      WHERE s.archived_at IS NULL AND se.payload_json LIKE ?
-      ORDER BY s.updated_at DESC
-    `)
-    const contentRows = contentStmt.all(`%${trimmed}%`) as Array<{
+    type ContentSearchRow = {
       session_id: string
-      payload_json: string
       project_id: string | null
       branch: string | null
       title: string
       updated_at: number
-    }>
-
+    }
     const contentMatches = new Map<string, SessionSearchResultItem>()
-    for (const row of contentRows) {
-      if (seenSessionIds.has(row.session_id)) {
-        continue
-      }
-      if (contentMatches.has(row.session_id)) {
-        continue
-      }
+    const addContentMatch = (row: ContentSearchRow, text: string): boolean => {
+      if (seenSessionIds.has(row.session_id) || contentMatches.has(row.session_id)) return false
+      const snippet = extractSnippet(text, trimmed)
+      if (!snippet) return false
+      contentMatches.set(row.session_id, {
+        sessionId: row.session_id,
+        title: row.title,
+        projectId: row.project_id || undefined,
+        branch: row.branch || undefined,
+        updatedAt: row.updated_at,
+        matchType: 'content',
+        snippet,
+      })
+      return true
+    }
 
+    let unindexedJoin = ''
+    let unindexedCondition = ''
+    let hasUnindexedSessions = true
+    if (hasSearchDocs) {
       try {
-        const parsed = JSON.parse(row.payload_json)
-        const text = extractTextFromEntry(parsed)
-        const snippet = extractSnippet(text, trimmed)
-        if (snippet) {
-          contentMatches.set(row.session_id, {
-            sessionId: row.session_id,
-            title: row.title,
-            projectId: row.project_id || undefined,
-            branch: row.branch || undefined,
-            updatedAt: row.updated_at,
-            matchType: 'content',
-            snippet,
-          })
-          if (contentMatches.size >= remainingLimit) {
-            break
+        this.ensureSearchIndexBackfilled()
+        const foldedQuery = foldSearchText(trimmed)
+        const useFts = Array.from(foldedQuery).length >= 3 && hasSearchFts
+        const unicodeCondition = 'd.has_unicode_case = 1 AND cpa_icontains(d.content_text, ?) = 1'
+        const contentStmt = this.getStatement(useFts ? `
+          SELECT s.id AS session_id, d.content_text, s.project_id, s.branch, s.title, s.updated_at
+          FROM session_search_fts f
+          JOIN session_search_docs d ON d.rowid = f.rowid
+          JOIN sessions s ON s.id = d.session_id
+          WHERE s.archived_at IS NULL AND s.is_subagent = 0 AND s.parent_session_id IS NULL
+            AND d.updated_at >= s.updated_at AND f.content_text MATCH ?
+          ORDER BY s.updated_at DESC
+        ` : `
+          SELECT s.id AS session_id, d.content_text, s.project_id, s.branch, s.title, s.updated_at
+          FROM session_search_docs d
+          JOIN sessions s ON s.id = d.session_id
+          WHERE s.archived_at IS NULL AND s.is_subagent = 0 AND s.parent_session_id IS NULL
+            AND d.updated_at >= s.updated_at
+            AND (instr(lower(d.content_text), lower(?)) > 0 OR (${unicodeCondition}))
+          ORDER BY s.updated_at DESC
+        `)
+        const ftsQuery = '"' + foldedQuery.replace(/"/g, '""') + '"'
+        const searchParams = useFts ? [ftsQuery] : [foldedQuery, trimmed]
+        const iter = contentStmt.iterate(...searchParams) as IterableIterator<ContentSearchRow & { content_text: string }>
+        for (const row of iter) {
+          addContentMatch(row, row.content_text)
+          if (contentMatches.size >= remainingLimit) break
+        }
+
+        // Always merge Unicode matches before limiting, even when FTS already filled the limit.
+        if (useFts) {
+          const unicodeIter = this.getStatement(`
+            SELECT s.id AS session_id, d.content_text, s.project_id, s.branch, s.title, s.updated_at
+            FROM session_search_docs d
+            JOIN sessions s ON s.id = d.session_id
+            WHERE s.archived_at IS NULL AND s.is_subagent = 0 AND s.parent_session_id IS NULL
+              AND d.updated_at >= s.updated_at AND ${unicodeCondition}
+            ORDER BY s.updated_at DESC
+          `).iterate(trimmed) as IterableIterator<ContentSearchRow & { content_text: string }>
+          let unicodeMatches = 0
+          for (const row of unicodeIter) {
+            if (seenSessionIds.has(row.session_id)) continue
+            addContentMatch(row, row.content_text)
+            if (++unicodeMatches >= remainingLimit) break
           }
         }
+
+        // Read-only legacy databases may have missing, stale, or unmigrated search documents.
+        const pendingJoin = 'LEFT JOIN session_search_docs d ON d.session_id = s.id'
+        const pendingCondition = `AND (d.session_id IS NULL OR d.updated_at < s.updated_at
+          OR d.has_unicode_case IS NULL OR d.has_unicode_case < 0)`
+        hasUnindexedSessions = Boolean(this.getStatement(`
+          SELECT s.id FROM sessions s ${pendingJoin}
+          WHERE s.archived_at IS NULL AND s.is_subagent = 0 AND s.parent_session_id IS NULL
+            ${pendingCondition}
+          LIMIT 1
+        `).get())
+        unindexedJoin = pendingJoin
+        unindexedCondition = pendingCondition
       } catch {
-        // Ignore JSON parse errors in payload
+        // Unsupported read-only search schemas must still search the original session entries.
       }
     }
 
-    results.push(...contentMatches.values())
+    if (hasUnindexedSessions) {
+      const iter = this.getStatement(`
+        SELECT s.id AS session_id, se.payload_json, s.project_id, s.branch, s.title, s.updated_at
+        FROM sessions s
+        JOIN session_entries se ON se.session_id = s.id
+        ${unindexedJoin}
+        WHERE s.archived_at IS NULL AND s.is_subagent = 0 AND s.parent_session_id IS NULL
+          AND se.kind != 'toolResult' ${unindexedCondition}
+        ORDER BY s.updated_at DESC, se.entry_index ASC
+      `).iterate() as IterableIterator<ContentSearchRow & { payload_json: string }>
+      let fallbackMatches = 0
+      for (const row of iter) {
+        if (seenSessionIds.has(row.session_id) || contentMatches.has(row.session_id)) continue
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(row.payload_json)
+        } catch {
+          // Ignore corrupt JSON payloads in legacy session entries.
+          continue
+        }
+        if (addContentMatch(row, extractSearchableSessionText([parsed]))) fallbackMatches++
+        if (fallbackMatches >= remainingLimit) break
+      }
+    }
+
+    results.push(...[...contentMatches.values()].sort((a, b) => b.updatedAt - a.updatedAt))
     return results.slice(0, limit)
   }
 
@@ -2300,6 +2561,10 @@ export class SessionDatabaseService {
   }
 
   close(): void {
+    if (this.searchIndexBackfillTimer) {
+      clearTimeout(this.searchIndexBackfillTimer)
+      this.searchIndexBackfillTimer = null
+    }
     if (this.db) {
       try {
         this.statementCache.clear()
@@ -2706,6 +2971,64 @@ export function extractTextFromEntry(entry: unknown): string {
   return parts.join(' ')
 }
 
+export function extractSearchableSessionText(entries: unknown[]): string {
+  const texts: string[] = []
+  for (const entry of entries) {
+    if (!entry || typeof entry !== 'object') continue
+    const obj = entry as Record<string, any>
+    if (obj.kind === 'toolResult' || obj.type === 'toolResult') continue
+
+    const parts: string[] = []
+    if (typeof obj.text === 'string') parts.push(obj.text)
+    if (typeof obj.thought === 'string') parts.push(obj.thought)
+    if (typeof obj.errorMessage === 'string') parts.push(obj.errorMessage)
+
+    if (Array.isArray(obj.content)) {
+      for (const block of obj.content) {
+        if (typeof block === 'string') {
+          parts.push(block)
+        } else if (block && typeof block === 'object') {
+          if (typeof block.text === 'string') parts.push(block.text)
+          if (typeof block.thinking === 'string') parts.push(block.thinking)
+          if (block.type === 'toolCall' && block.name) {
+            parts.push(String(block.name))
+            if (block.arguments) {
+              try {
+                const args = typeof block.arguments === 'string'
+                  ? block.arguments
+                  : JSON.stringify(block.arguments, (key, value) =>
+                    key === 'signature' || key === 'thinkingSignature' || key === 'encryptedContent'
+                      ? undefined
+                      : value,
+                  )
+                if (args) parts.push(args.slice(0, 2000))
+              } catch {
+                // Ignore serialization errors in tool arguments.
+              }
+            }
+          }
+        }
+      }
+    } else if (typeof obj.content === 'string') {
+      parts.push(obj.content)
+    }
+
+    if (Array.isArray(obj.parts)) {
+      for (const part of obj.parts) {
+        if (typeof part === 'string') {
+          parts.push(part)
+        } else if (part && typeof part === 'object' && typeof part.text === 'string') {
+          parts.push(part.text)
+        }
+      }
+    }
+
+    const text = parts.join(' ')
+    if (text) texts.push(text)
+  }
+  return texts.join('\n')
+}
+
 export function extractSnippet(
   fullText: string,
   query: string,
@@ -2713,15 +3036,11 @@ export function extractSnippet(
 ): string | undefined {
   if (!fullText || !query) return undefined
   const normalized = fullText.replace(/\s+/g, ' ').trim()
-  const lowerText = normalized.toLowerCase()
-  const lowerQuery = query.toLowerCase().trim()
-  if (!lowerQuery) return undefined
+  const match = caseInsensitiveIndexOf(normalized, query.trim())
+  if (!match) return undefined
 
-  const index = lowerText.indexOf(lowerQuery)
-  if (index === -1) return undefined
-
-  const start = Math.max(0, index - maxContext)
-  const end = Math.min(normalized.length, index + lowerQuery.length + maxContext)
+  const start = Math.max(0, match.index - maxContext)
+  const end = Math.min(normalized.length, match.index + match.matchLength + maxContext)
 
   let snippet = normalized.slice(start, end)
   if (start > 0) snippet = '... ' + snippet

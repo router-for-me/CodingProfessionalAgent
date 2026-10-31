@@ -65,6 +65,78 @@ export function extractTextFromEntry(entry: unknown): string {
 }
 
 /**
+ * Applies the same content exclusions and tool argument limit as the search index.
+ */
+export function extractSearchableEntryText(entry: unknown): string {
+  if (!entry || typeof entry !== 'object') return ''
+  const obj = entry as Record<string, any>
+  if (obj.kind === 'toolResult' || obj.type === 'toolResult') return ''
+  if (!Array.isArray(obj.content)) return extractTextFromEntry(obj)
+
+  const content = obj.content.map((block: any) => {
+    if (!block || typeof block !== 'object' || block.type !== 'toolCall' || !block.arguments) return block
+    try {
+      const args = typeof block.arguments === 'string'
+        ? block.arguments
+        : JSON.stringify(block.arguments, (key, value) =>
+          key === 'signature' || key === 'thinkingSignature' || key === 'encryptedContent'
+            ? undefined
+            : value,
+        )
+      return { ...block, arguments: args?.slice(0, 2000) }
+    } catch {
+      // Ignore serialization errors while preserving the tool name.
+      return { ...block, arguments: undefined }
+    }
+  })
+  return extractTextFromEntry({ ...obj, content })
+}
+
+function foldSearchText(text: string): string {
+    return text.toLowerCase().replace(/ς/g, 'σ').replace(/ß/g, 'ss')
+}
+
+function caseInsensitiveIndexOf(
+    haystack: string,
+    needle: string,
+): { index: number; matchLength: number } | null {
+    if (!needle) return null
+    const lowerText = haystack.toLowerCase()
+    const lowerQuery = needle.toLowerCase()
+
+    // Lowercasing and sigma folding preserve offsets unless a character expands or loses its dot.
+    if (lowerText.length === haystack.length && lowerQuery.length === needle.length &&
+        !/[ß\u0307]/.test(lowerText) && !/[ß\u0307]/.test(lowerQuery)) {
+        const index = lowerText.replace(/ς/g, 'σ').indexOf(lowerQuery.replace(/ς/g, 'σ'))
+        return index === -1 ? null : { index, matchLength: needle.length }
+    }
+
+    const foldedQuery = foldSearchText(needle)
+    // Preserve explicit dotted queries while also accepting dotless queries for dotted I.
+    const preserveDots = foldedQuery.includes('\u0307')
+    let foldedText = ''
+    const starts: number[] = []
+    const ends: number[] = []
+    let offset = 0
+    for (const ch of haystack) {
+        const folded = preserveDots
+            ? foldSearchText(ch)
+            : foldSearchText(ch).replace(/\u0307/g, '')
+        foldedText += folded
+        for (let i = 0; i < folded.length; i++) {
+            starts.push(offset)
+            ends.push(offset + ch.length)
+        }
+        offset += ch.length
+    }
+
+    const matchIndex = foldedText.indexOf(foldedQuery)
+    if (matchIndex === -1) return null
+    const index = starts[matchIndex]!
+    return { index, matchLength: ends[matchIndex + foldedQuery.length - 1]! - index }
+}
+
+/**
  * Extracts a contextual snippet around the matched keyword.
  */
 export function extractSnippet(
@@ -74,15 +146,11 @@ export function extractSnippet(
 ): string | undefined {
   if (!fullText || !query) return undefined
   const normalized = fullText.replace(/\s+/g, ' ').trim()
-  const lowerText = normalized.toLowerCase()
-  const lowerQuery = query.toLowerCase().trim()
-  if (!lowerQuery) return undefined
+  const match = caseInsensitiveIndexOf(normalized, query.trim())
+  if (!match) return undefined
 
-  const index = lowerText.indexOf(lowerQuery)
-  if (index === -1) return undefined
-
-  const start = Math.max(0, index - maxContext)
-  const end = Math.min(normalized.length, index + lowerQuery.length + maxContext)
+  const start = Math.max(0, match.index - maxContext)
+  const end = Math.min(normalized.length, match.index + match.matchLength + maxContext)
 
   let snippet = normalized.slice(start, end)
   if (start > 0) snippet = '... ' + snippet
@@ -103,14 +171,13 @@ export function splitHighlightSegments(
   }
 
   const trimmedQuery = query.trim()
-  const lowerText = text.toLowerCase()
-  const lowerQuery = trimmedQuery.toLowerCase()
   const segments: Array<{ text: string; match: boolean }> = []
 
   let lastIndex = 0
-  let matchIndex = lowerText.indexOf(lowerQuery, lastIndex)
+  let match = caseInsensitiveIndexOf(text, trimmedQuery)
 
-  while (matchIndex !== -1) {
+  while (match) {
+    const matchIndex = lastIndex + match.index
     if (matchIndex > lastIndex) {
       segments.push({
         text: text.slice(lastIndex, matchIndex),
@@ -118,11 +185,11 @@ export function splitHighlightSegments(
       })
     }
     segments.push({
-      text: text.slice(matchIndex, matchIndex + trimmedQuery.length),
+      text: text.slice(matchIndex, matchIndex + match.matchLength),
       match: true,
     })
-    lastIndex = matchIndex + trimmedQuery.length
-    matchIndex = lowerText.indexOf(lowerQuery, lastIndex)
+    lastIndex = matchIndex + match.matchLength
+    match = caseInsensitiveIndexOf(text.slice(lastIndex), trimmedQuery)
   }
 
   if (lastIndex < text.length) {
@@ -174,8 +241,10 @@ export async function searchChats({
   if (typeof bridge?.SessionSearch === 'function') {
     try {
       const results = await bridge.SessionSearch(trimmed, limit)
-      if (Array.isArray(results) && results.length > 0) {
-        return results
+      if (Array.isArray(results)) {
+        if (results.length > 0 || Object.keys(entriesBySession).length === 0) {
+          return results
+        }
       }
     } catch {
       // Fallback to in-memory search on bridge error
@@ -183,14 +252,13 @@ export async function searchChats({
   }
 
   // Fallback in-memory search
-  const lowerQuery = trimmed.toLowerCase()
   const titleMatches: ChatSearchResultItem[] = []
   const contentMatches: ChatSearchResultItem[] = []
   const seenSessionIds = new Set<string>()
 
   // 1. Search titles first
   for (const session of nonArchivedSessions) {
-    if (session.title.toLowerCase().includes(lowerQuery)) {
+    if (caseInsensitiveIndexOf(session.title, trimmed)) {
       seenSessionIds.add(session.id)
       titleMatches.push({
         sessionId: session.id,
@@ -212,8 +280,8 @@ export async function searchChats({
     if (!entries || !Array.isArray(entries)) continue
 
     for (const entry of entries) {
-      const text = extractTextFromEntry(entry)
-      if (text.toLowerCase().includes(lowerQuery)) {
+      const text = extractSearchableEntryText(entry)
+      if (caseInsensitiveIndexOf(text, trimmed)) {
         const snippet = extractSnippet(text, trimmed)
         if (snippet) {
           seenSessionIds.add(session.id)

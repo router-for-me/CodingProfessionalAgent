@@ -49,12 +49,19 @@ export function ChatSearchModal() {
   const entriesBySession = useMessageStore((s) => s.entriesBySession)
 
   const [query, setQuery] = useState('')
+  const [debouncedQuery, setDebouncedQuery] = useState('')
   const [results, setResults] = useState<ChatSearchResultItem[]>([])
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [searching, setSearching] = useState(false)
 
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  const sessionsRef = useRef(sessions)
+  const entriesBySessionRef = useRef(entriesBySession)
+  const searchGenerationRef = useRef(0)
+  const refreshSearchRef = useRef<(() => Promise<void>) | null>(null)
+  sessionsRef.current = sessions
+  entriesBySessionRef.current = entriesBySession
 
   // Map project names for quick lookup
   const projectMap = useMemo(() => {
@@ -102,36 +109,70 @@ export function ChatSearchModal() {
     [navigate, pushToast, setSearchOpen, t],
   )
 
-  // Execute search when query or sessions change
+  // Only keystrokes restart the debounce, not streaming session updates.
   useEffect(() => {
-    if (!searchOpen) return
+    if (!searchOpen || !query.trim()) {
+      setDebouncedQuery(query)
+      return
+    }
 
-    let cancelled = false
     setSearching(true)
+    const timer = window.setTimeout(() => setDebouncedQuery(query), 150)
+    return () => window.clearTimeout(timer)
+  }, [query, searchOpen])
 
-    void searchChats({
-      query,
-      sessions,
-      entriesBySession,
-      limit: 30,
-    })
-      .then((items) => {
-        if (!cancelled) {
+  // Only query changes invalidate in-flight searches, not streaming updates.
+  useEffect(() => {
+    const generation = ++searchGenerationRef.current
+    let inFlight = false
+    let pendingRefresh = false
+
+    const refreshSearch = async (): Promise<void> => {
+      if (!searchOpen || debouncedQuery !== query || generation !== searchGenerationRef.current) return
+      if (inFlight) {
+        pendingRefresh = true
+        return
+      }
+
+      inFlight = true
+      pendingRefresh = false
+      setSearching(true)
+      try {
+        const items = await searchChats({
+          query: debouncedQuery,
+          sessions: sessionsRef.current,
+          entriesBySession: entriesBySessionRef.current,
+          limit: 30,
+        })
+        if (generation === searchGenerationRef.current) {
           setResults(items)
           setSelectedIndex(0)
-          setSearching(false)
         }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setSearching(false)
+      } catch {
+        // Keep existing results if a search fails; queued updates can retry.
+      } finally {
+        if (generation === searchGenerationRef.current) {
+          inFlight = false
+          if (pendingRefresh) {
+            void refreshSearch()
+          } else {
+            setSearching(false)
+          }
         }
-      })
+      }
+    }
+    refreshSearchRef.current = refreshSearch
 
     return () => {
-      cancelled = true
+      searchGenerationRef.current++
+      refreshSearchRef.current = null
     }
-  }, [query, sessions, entriesBySession, searchOpen])
+  }, [debouncedQuery, query, searchOpen])
+
+  // Coalesce updates during a search into one refresh using the latest snapshots.
+  useEffect(() => {
+    void refreshSearchRef.current?.()
+  }, [debouncedQuery, query, sessions, entriesBySession, searchOpen])
 
   // Focus input and reset state when opened
   useEffect(() => {

@@ -113,6 +113,38 @@ CREATE TABLE IF NOT EXISTS session_entries (
 );
 `
 
+export const SESSION_SEARCH_TABLES_SQL = `
+CREATE TABLE IF NOT EXISTS session_search_docs (
+    rowid INTEGER PRIMARY KEY,
+    session_id TEXT NOT NULL UNIQUE,
+    updated_at INTEGER NOT NULL DEFAULT 0,
+    content_text TEXT NOT NULL DEFAULT '',
+    has_unicode_case INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS session_search_fts USING fts5(
+    content_text,
+    content='session_search_docs',
+    content_rowid='rowid',
+    tokenize='trigram'
+);
+
+CREATE TRIGGER IF NOT EXISTS trg_session_search_docs_ai AFTER INSERT ON session_search_docs BEGIN
+    INSERT INTO session_search_fts(rowid, content_text) VALUES (new.rowid, new.content_text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_session_search_docs_ad AFTER DELETE ON session_search_docs BEGIN
+    INSERT INTO session_search_fts(session_search_fts, rowid, content_text) VALUES('delete', old.rowid, old.content_text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_session_search_docs_au AFTER UPDATE OF content_text ON session_search_docs
+WHEN old.content_text IS NOT new.content_text BEGIN
+    INSERT INTO session_search_fts(session_search_fts, rowid, content_text) VALUES('delete', old.rowid, old.content_text);
+    INSERT INTO session_search_fts(rowid, content_text) VALUES (new.rowid, new.content_text);
+END;
+`
+
 export const SUBAGENTS_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS subagents (
     speed TEXT,
@@ -429,10 +461,26 @@ export function applySessionSchemaAndMigrations(db: DatabaseType): void {
     }
   }
 
-  // 5. Create indexes and the additive metrics view now that all columns exist.
+  // 5. Create indexes, search tables, and the additive metrics view after migrations.
   try {
     db.exec(INDEXES_SQL)
     db.exec(USAGE_METRICS_VIEW_SQL)
+    const hadSearchFts = Boolean(
+      db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_search_fts'").get(),
+    )
+    db.exec(SESSION_SEARCH_TABLES_SQL)
+    try {
+      db.exec('ALTER TABLE session_search_docs ADD COLUMN has_unicode_case INTEGER NOT NULL DEFAULT -1')
+    } catch {
+      // The column already exists in current search documents.
+    }
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_session_search_docs_unicode_case
+      ON session_search_docs(has_unicode_case) WHERE has_unicode_case = 1
+    `)
+    if (!hadSearchFts && db.prepare('SELECT 1 FROM session_search_docs LIMIT 1').get()) {
+      db.exec("INSERT INTO session_search_fts(session_search_fts) VALUES('rebuild')")
+    }
   } catch {
     // Ignore creation errors if a partially migrated database is read-only.
   }
