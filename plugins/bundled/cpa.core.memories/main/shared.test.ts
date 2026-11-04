@@ -1,15 +1,106 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parseLegacyMemoryFilename } from '../shared/legacyFilename.js'
 import { buildSnippet, matchMemoryContent, SearchMatcher, splitLines } from '../shared/memorySearch.js'
 import { approxTokenCount, truncateMiddleWithTokenBudget } from '../shared/tokenBudget.js'
 import { validateAddRequest, validateReadRequest, validateSearchRequest } from '../shared/validation.js'
-import type { ReadMemoriesRequest, SearchMemoriesRequest } from '../shared/types.js'
+import type { ReadMemoriesRequest, SearchMatchMode, SearchMemoriesRequest } from '../shared/types.js'
 
 const queriesError = 'queries must not be empty or contain empty strings'
 const idsError = 'ids is required and must be an array of 1 to 20 positive integers'
 
 describe('memory content matching', () => {
     const content = 'a sqlite\nb\nc SQLite memory'
+
+    afterEach(() => {
+        vi.restoreAllMocks()
+    })
+
+    it.each(['any', 'all_on_same_line', 'all_within_lines'] as const)('does no preparation or line splitting for empty content in %s mode', (mode) => {
+        const matcher = new SearchMatcher(['sqlite'], mode, false, false, 2)
+        const prepare = vi.spyOn(matcher.comparison, 'prepare')
+        const split = vi.spyOn(String.prototype, 'split')
+        const result = matchMemoryContent('', matcher)
+        const splitCalls = split.mock.calls.length
+        split.mockRestore()
+        expect(result).toBeNull()
+        expect(prepare).not.toHaveBeenCalled()
+        expect(splitCalls).toBe(0)
+    })
+
+    it.each([
+        { mode: 'any', queries: ['missing', 'absent'] },
+        { mode: 'all_on_same_line', queries: ['sqlite', 'absent'] },
+        { mode: 'all_within_lines', queries: ['sqlite', 'absent'] },
+    ] satisfies { mode: SearchMatchMode; queries: string[] }[])('rejects missing document queries without splitting lines in $mode mode', ({ mode, queries }) => {
+        const matcher = new SearchMatcher(queries, mode, false, false, 2)
+        const prepare = vi.spyOn(matcher.comparison, 'prepare')
+        const flags = vi.spyOn(matcher, 'matchedQueryFlags')
+        const split = vi.spyOn(String.prototype, 'split')
+        const result = matchMemoryContent(content, matcher)
+        const splitCalls = split.mock.calls.length
+        split.mockRestore()
+        expect(result).toBeNull()
+        expect(prepare).toHaveBeenCalledExactlyOnceWith(content)
+        expect(flags).not.toHaveBeenCalled()
+        expect(splitCalls).toBe(0)
+    })
+
+    it.each(['any', 'all_on_same_line'] as const)('stops preparing lines after the first complete match in %s mode', (mode) => {
+        const matcher = new SearchMatcher(['sqlite', 'memory'], mode, false, false)
+        const prepare = vi.spyOn(matcher.comparison, 'prepare')
+        const text = 'SQLite memory\nunused line\nanother unused line'
+        expect(matchMemoryContent(text, matcher)).toEqual({
+            matchedQueries: ['sqlite', 'memory'], firstMatchLine: 'SQLite memory',
+        })
+        expect(prepare.mock.calls).toEqual([[text], ['SQLite memory']])
+    })
+
+    it('stops any-mode scanning once all document candidates match, ignoring absent queries', () => {
+        const matcher = new SearchMatcher(['missing', 'sqlite', 'memory'], 'any', false, false)
+        const prepare = vi.spyOn(matcher.comparison, 'prepare')
+        const text = 'SQLite memory\nunused line'
+        expect(matchMemoryContent(text, matcher)).toEqual({
+            matchedQueries: ['sqlite', 'memory'], firstMatchLine: 'SQLite memory',
+        })
+        expect(prepare.mock.calls).toEqual([[text], ['SQLite memory']])
+    })
+
+    it('only tests unmatched candidate queries on later lines in any mode', () => {
+        const matcher = new SearchMatcher(['sqlite', 'memory', 'absent'], 'any', false, false)
+        const text = 'sqlite\nsqlite again\nmemory\nunused'
+        const includes = vi.spyOn(String.prototype, 'includes')
+        const result = matchMemoryContent(text, matcher)
+        const calls = includes.mock.calls.map((args, index) => [includes.mock.contexts[index], args[0]])
+        includes.mockRestore()
+        expect(result).toEqual({ matchedQueries: ['sqlite', 'memory'], firstMatchLine: 'sqlite' })
+        expect(calls).toEqual([
+            [text, 'sqlite'], [text, 'memory'], [text, 'absent'],
+            ['sqlite', 'sqlite'], ['sqlite', 'memory'],
+            ['sqlite again', 'memory'], ['memory', 'memory'],
+        ])
+    })
+
+    it.each(['any', 'all_on_same_line', 'all_within_lines'] as const)('does not treat document pre-checks as line matches in %s mode', (mode) => {
+        expect(matchMemoryContent('sql\nite', new SearchMatcher(['sqlite'], mode, false, true, 2))).toBeNull()
+        expect(matchMemoryContent('sqlite\nmemory', new SearchMatcher(['sqlite\nmemory'], mode, false, false, 2))).toBeNull()
+    })
+
+    it.each([
+        { upper: 'ÉCOLE', lower: 'école' },
+        { upper: 'İSTANBUL', lower: 'i\u0307stanbul' },
+        { upper: 'Kelvin', lower: 'kelvin' },
+    ])('preserves Unicode matching for $upper / $lower with all options', ({ upper, lower }) => {
+        for (const mode of ['any', 'all_on_same_line', 'all_within_lines'] as const) {
+            for (const normalized of [false, true]) {
+                for (const caseSensitive of [false, true]) {
+                    const matcher = new SearchMatcher([lower], mode, caseSensitive, normalized, 2)
+                    expect(matchMemoryContent(upper + '\n' + lower, matcher)).toEqual({
+                        matchedQueries: [lower], firstMatchLine: caseSensitive ? lower : upper,
+                    })
+                }
+            }
+        }
+    })
 
     it('unions all any-mode hits in query order and uses the first matching line', () => {
         expect(matchMemoryContent(content, new SearchMatcher(['sqlite', 'memory'], 'any', false, false))).toEqual({

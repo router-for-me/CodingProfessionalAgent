@@ -17,6 +17,60 @@ import type {
 } from '../shared/types.js'
 import { validateAddRequest, validateReadRequest, validateSearchRequest } from '../shared/validation.js'
 
+const NON_ASCII_CASED_RE = /(?:(?=[^\x00-\x7f])\p{Cased}|\u0307)/u
+
+const SEARCH_INDEX_TRIGGERS_SQL = `
+    CREATE TRIGGER IF NOT EXISTS trg_memories_fts_ai AFTER INSERT ON memories BEGIN
+        INSERT INTO memories_fts(rowid, content) VALUES (new.id, new.content);
+        INSERT INTO memories_unicode_docs(memory_id, has_unicode_case) VALUES (new.id, -1)
+            ON CONFLICT(memory_id) DO UPDATE SET has_unicode_case = -1;
+    END;
+    CREATE TRIGGER IF NOT EXISTS trg_memories_fts_ad AFTER DELETE ON memories BEGIN
+        INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.id, old.content);
+        DELETE FROM memories_unicode_docs WHERE memory_id = old.id;
+    END;
+    CREATE TRIGGER IF NOT EXISTS trg_memories_fts_au AFTER UPDATE OF content ON memories
+    WHEN old.content IS NOT new.content BEGIN
+        INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.id, old.content);
+        INSERT INTO memories_fts(rowid, content) VALUES (new.id, new.content);
+        INSERT INTO memories_unicode_docs(memory_id, has_unicode_case) VALUES (new.id, -1)
+            ON CONFLICT(memory_id) DO UPDATE SET has_unicode_case = -1;
+    END;
+`
+
+function checkSearchIndexState(db: DatabaseType): {
+    indexReady: boolean
+    hasUnicodeCaseColumn: boolean
+    triggersReady: boolean
+} {
+    const indexMarker = db.prepare("SELECT value FROM memories_meta WHERE key = 'fts_index_v1'").get() as { value: string } | undefined
+    const searchTriggers = db.prepare(`
+        SELECT count(*) AS count FROM sqlite_master WHERE type = 'trigger'
+        AND name IN ('trg_memories_fts_ai', 'trg_memories_fts_ad', 'trg_memories_fts_au')
+        AND sql LIKE '%memories_unicode_docs%'
+    `).get() as { count: number }
+    const hasUnicodeCaseColumn = (db.pragma('table_info(memories_unicode_docs)') as { name: string }[])
+        .some((column) => column.name === 'has_unicode_case')
+    return {
+        indexReady: indexMarker?.value === '1',
+        hasUnicodeCaseColumn,
+        triggersReady: searchTriggers.count === 3,
+    }
+}
+
+function needsFallbackScan(content: string): boolean {
+    return NON_ASCII_CASED_RE.test(content) || content.includes('\0')
+}
+
+function isFtsEligibleQuery(query: string, caseSensitive: boolean): boolean {
+    if (query.includes('\r') || query.includes('\n') || query.includes('\0')) return false
+    return Array.from(query).length >= 3 && (caseSensitive || !NON_ASCII_CASED_RE.test(query))
+}
+
+function escapeFtsPhrase(q: string): string {
+    return '"' + q.replace(/"/g, '""') + '"'
+}
+
 export interface MemoriesDatabaseOptions {
     memoryRoot?: string
     dbPath?: string
@@ -53,9 +107,29 @@ export class MemoriesDatabaseService {
     search(request: SearchMemoriesRequest): SearchMemoriesResponse {
         const { queries, matchMode, caseSensitive, normalized, lineCount, startIndex, maxResults } = validateSearchRequest(request)
         const db = this.ensureReady()
+        this.syncPendingUnicodeDocs(db)
         const matcher = new SearchMatcher(queries, matchMode, caseSensitive, normalized, lineCount)
         const matches: MemorySearchHit[] = []
-        const rows = db.prepare('SELECT id, title, content FROM memories ORDER BY id DESC').all() as MemoryRow[]
+        let ftsExpression: string | undefined
+        if (!normalized) {
+            const eligible = queries.filter((q) => isFtsEligibleQuery(q, caseSensitive))
+            if (matchMode === 'any') {
+                if (eligible.length === queries.length) {
+                    ftsExpression = eligible.map(escapeFtsPhrase).join(' OR ')
+                }
+            } else if (eligible.length > 0) {
+                ftsExpression = eligible.map(escapeFtsPhrase).join(' AND ')
+            }
+        }
+        const rows = (ftsExpression === undefined
+            ? db.prepare('SELECT id, title, content FROM memories ORDER BY id DESC').all()
+            : db.prepare(`
+                SELECT m.id, m.title, m.content
+                FROM memories m
+                WHERE m.id IN (SELECT rowid FROM memories_fts WHERE content MATCH ?)
+                   OR m.id IN (SELECT memory_id FROM memories_unicode_docs)
+                ORDER BY m.id DESC
+            `).all(ftsExpression)) as MemoryRow[]
         for (const row of rows) {
             const match = matchMemoryContent(row.content, matcher)
             if (match) {
@@ -107,9 +181,13 @@ export class MemoriesDatabaseService {
         const { title, note } = validateAddRequest(request)
         const db = this.ensureReady()
         const timestamp = Date.now()
-        const result = db.prepare('INSERT INTO memories (title, content, created_at, updated_at) VALUES (?, ?, ?, ?)')
-            .run(title, note, timestamp, timestamp)
-        return { success: true, id: Number(result.lastInsertRowid) }
+        const id = db.transaction(() => {
+            const result = db.prepare('INSERT INTO memories (title, content, created_at, updated_at) VALUES (?, ?, ?, ?)')
+                .run(title, note, timestamp, timestamp)
+            this.syncPendingUnicodeDocs(db)
+            return Number(result.lastInsertRowid)
+        })()
+        return { success: true, id }
     }
 
     clear(): void {
@@ -132,6 +210,7 @@ export class MemoriesDatabaseService {
             db.pragma('journal_mode = WAL')
             db.pragma('busy_timeout = 5000')
             db.pragma('synchronous = NORMAL')
+            const hadFtsTable = Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memories_fts'").get())
             db.exec(`
                 CREATE TABLE IF NOT EXISTS memories (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -144,14 +223,72 @@ export class MemoriesDatabaseService {
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS memories_unicode_docs (
+                    memory_id INTEGER PRIMARY KEY,
+                    has_unicode_case INTEGER NOT NULL DEFAULT -1,
+                    FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE CASCADE
+                );
+                CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+                    content,
+                    content='memories',
+                    content_rowid='id',
+                    tokenize='trigram'
+                );
             `)
             this.migrateLegacyFiles(db)
+            this.ensureSearchIndex(db, hadFtsTable)
             this.db = db
             return db
         } catch (error) {
             db.close()
             throw error
         }
+    }
+
+    private ensureSearchIndex(db: DatabaseType, hadFtsTable: boolean): void {
+        const initial = checkSearchIndexState(db)
+        if (hadFtsTable && initial.indexReady && initial.hasUnicodeCaseColumn && initial.triggersReady) {
+            this.syncPendingUnicodeDocs(db)
+            return
+        }
+        db.transaction(() => {
+            const current = checkSearchIndexState(db)
+            if (hadFtsTable && current.indexReady && current.hasUnicodeCaseColumn && current.triggersReady) return
+            if (!current.hasUnicodeCaseColumn) {
+                db.exec('ALTER TABLE memories_unicode_docs ADD COLUMN has_unicode_case INTEGER NOT NULL DEFAULT -1')
+            }
+            db.prepare('DELETE FROM memories_unicode_docs').run()
+            db.prepare("INSERT INTO memories_fts(memories_fts) VALUES('rebuild')").run()
+            db.prepare('INSERT INTO memories_unicode_docs (memory_id) SELECT id FROM memories').run()
+            db.exec(`
+                DROP TRIGGER IF EXISTS trg_memories_fts_ai;
+                DROP TRIGGER IF EXISTS trg_memories_fts_ad;
+                DROP TRIGGER IF EXISTS trg_memories_fts_au;
+            `)
+            db.exec(SEARCH_INDEX_TRIGGERS_SQL)
+            db.prepare("INSERT OR REPLACE INTO memories_meta (key, value) VALUES ('fts_index_v1', '1')").run()
+        }).immediate()
+        this.syncPendingUnicodeDocs(db)
+    }
+
+    private syncPendingUnicodeDocs(db: DatabaseType): void {
+        if (!db.prepare('SELECT 1 FROM memories_unicode_docs WHERE has_unicode_case < 0 LIMIT 1').get()) return
+        db.transaction(() => {
+            const rows = db.prepare(`
+                SELECT m.id, m.content FROM memories_unicode_docs u
+                JOIN memories m ON m.id = u.memory_id
+                WHERE u.has_unicode_case < 0
+            `).all() as Pick<MemoryRow, 'id' | 'content'>[]
+            const update = db.prepare('UPDATE memories_unicode_docs SET has_unicode_case = 1 WHERE memory_id = ?')
+            const remove = db.prepare('DELETE FROM memories_unicode_docs WHERE memory_id = ?')
+            for (const row of rows) {
+                if (needsFallbackScan(row.content)) {
+                    update.run(row.id)
+                } else {
+                    remove.run(row.id)
+                }
+            }
+        }).immediate()
     }
 
     private migrateLegacyFiles(db: DatabaseType): void {

@@ -72,11 +72,28 @@ export function matchMemoryContent(
     content: string,
     matcher: SearchMatcher,
 ): { matchedQueries: string[]; firstMatchLine: string } | null {
+    if (content.length === 0) {
+        return null
+    }
+    const preparedContent = matcher.comparison.prepare(content)
+    const candidateQueryIndices: number[] = []
+    if (matcher.matchMode === 'any') {
+        for (let q = 0; q < matcher.preparedQueries.length; q++) {
+            if (preparedContent.includes(matcher.preparedQueries[q])) {
+                candidateQueryIndices.push(q)
+            }
+        }
+        if (candidateQueryIndices.length === 0) {
+            return null
+        }
+    } else if (!matcher.preparedQueries.every((q) => preparedContent.includes(q))) {
+        return null
+    }
+
     const lines = splitLines(content)
     if (lines.length === 0) {
         return null
     }
-    const lineMatches = lines.map((line) => matcher.matchedQueryFlags(line))
     const matchedFlags = new Array<boolean>(matcher.queries.length).fill(false)
     let firstMatchIndex: number | undefined
 
@@ -88,20 +105,33 @@ export function matchMemoryContent(
     }
 
     if (matcher.matchMode === 'any') {
+        let remainingUnmatchedCandidates = candidateQueryIndices.length
         for (let idx = 0; idx < lines.length; idx++) {
-            const flags = lineMatches[idx]
-            if (flags.some(Boolean)) {
-                collectMatch(idx, flags)
+            const preparedLine = matcher.comparison.prepare(lines[idx])
+            for (const q of candidateQueryIndices) {
+                if (firstMatchIndex !== undefined && matchedFlags[q]) {
+                    continue
+                }
+                if (preparedLine.includes(matcher.preparedQueries[q])) {
+                    firstMatchIndex ??= idx
+                    matchedFlags[q] = true
+                    remainingUnmatchedCandidates--
+                }
+            }
+            if (firstMatchIndex !== undefined && remainingUnmatchedCandidates === 0) {
+                break
             }
         }
     } else if (matcher.matchMode === 'all_on_same_line') {
         for (let idx = 0; idx < lines.length; idx++) {
-            const flags = lineMatches[idx]
+            const flags = matcher.matchedQueryFlags(lines[idx])
             if (flags.every(Boolean)) {
                 collectMatch(idx, flags)
+                break
             }
         }
     } else if (matcher.matchMode === 'all_within_lines') {
+        const lineMatches = lines.map((line) => matcher.matchedQueryFlags(line))
         const lineCount = matcher.lineCount ?? 1
         interface WindowMatch {
             startIndex: number
