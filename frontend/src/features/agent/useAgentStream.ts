@@ -184,6 +184,7 @@ type ServiceRuntime = {
         payload: AgentSendPayload,
         opts?: AgentSendOptions,
     ) => Promise<string | null>
+    compactHandler?: (focus: string, sessionId?: string) => Promise<void>
 }
 
 const IDLE_SNAPSHOT: StreamSnapshot = {
@@ -484,7 +485,9 @@ function bindNativeSync(service: AgentService): void {
                     ) as SessionDelegateRunRequest
                     if (
                         req &&
-                        (req.text?.trim() || (req.images && req.images.length > 0))
+                        (req.action === 'compact' ||
+                            req.text?.trim() ||
+                            (req.images && req.images.length > 0))
                     ) {
                         if (!rt.sendHandler) {
                             rt.pendingDelegateRuns.push(req)
@@ -683,6 +686,7 @@ function createRuntime(): ServiceRuntime {
         lastDiagnostics: [],
         snapshotCache: new Map(),
         sendHandler: undefined,
+        compactHandler: undefined,
     }
 }
 
@@ -1062,6 +1066,10 @@ async function executeDelegateRun(
     }
 
     try {
+        if (req.action === 'compact') {
+            await executeDelegatedCompact(rt, req, startEpoch, markDelegateRunFinished)
+            return
+        }
         if (req.sessionId) {
             const exists = useSessionStore
                 .getState()
@@ -1154,6 +1162,58 @@ async function executeDelegateRun(
             )
         }
         toastPreflight(error)
+    }
+}
+
+/** Delegated `/compact` from a remote client; it never creates a session or a chat message. */
+async function executeDelegatedCompact(
+    rt: ServiceRuntime,
+    req: SessionDelegateRunRequest,
+    startEpoch: ReturnType<typeof getSessionActionEpoch> | null,
+    finish: (succeeded: boolean) => void,
+): Promise<void> {
+    const sessionId = req.sessionId
+    if (!sessionId) {
+        finish(false)
+        return
+    }
+    const hasActiveRun = () => {
+        const flight = rt.runs.get(sessionId)
+        return Boolean(flight && flight.runStatus !== 'idle')
+    }
+    // Clears the requester's pending state when compaction cannot start, unless a run owns the status.
+    const skip = () => {
+        if (!hasActiveRun()) {
+            void getHostBridge()?.SessionBroadcastRunStatus(sessionId, 'idle', '', '')
+        }
+        finish(false)
+    }
+    if (!rt.compactHandler || !useSessionStore.getState().sessions.some((s) => s.id === sessionId)) {
+        skip()
+        return
+    }
+    await ensureSessionLoaded(sessionId)
+    const compactHandler = rt.compactHandler
+    if (
+        !compactHandler ||
+        rt.disposed ||
+        rt.deletedSessionIds.has(sessionId) ||
+        (startEpoch && !isEpochValid(sessionId, startEpoch)) ||
+        hasActiveRun() ||
+        useMessageStore.getState().getEntries(sessionId).length === 0
+    ) {
+        skip()
+        return
+    }
+    try {
+        await compactHandler(req.text ?? '', sessionId)
+        finish(true)
+    } catch (error) {
+        // Once started, compact() toasts its failures and broadcasts idle itself.
+        finish(false)
+        if (!isAbortError(error)) {
+            console.warn('[AgentStream] Delegated compact failed:', error)
+        }
     }
 }
 
@@ -1456,6 +1516,7 @@ export function __resetAgentStreamForTests(service?: AgentService | null): void 
         rt.hostedRunIds.clear()
         rt.pendingTakeoverAborts.clear()
         rt.sendHandler = undefined
+        rt.compactHandler = undefined
         rt.skills = []
         rt.prompts = []
         rt.lastDiagnostics = []
@@ -4118,6 +4179,7 @@ function applyTurnPauseDelta(entries: readonly ConversationEntry[]): Conversatio
             const rt = getRuntime(service)
             rt.sendHandler = send
             rt.sendInternalHandler = sendInternal
+            rt.compactHandler = compact
             if (rt.pendingDelegateRuns.length > 0) {
                 const pending = rt.pendingDelegateRuns.slice()
                 rt.pendingDelegateRuns.length = 0

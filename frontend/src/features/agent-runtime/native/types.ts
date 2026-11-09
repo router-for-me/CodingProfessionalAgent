@@ -92,6 +92,8 @@ export interface SessionDelegateRunRequest {
     userEntryCreatedAt?: number
     skillReferences?: { start: number; name: string }[]
     followUpMode?: 'steer' | 'queue'
+    /** 'compact' compacts the session context instead of sending a message; `text` holds optional focus instructions. */
+    action?: 'compact'
 }
 
 export interface ActiveRunInfo {

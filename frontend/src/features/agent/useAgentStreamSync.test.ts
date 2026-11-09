@@ -1614,6 +1614,134 @@ describe('useAgentStreamSync', () => {
         expect(eventArgs.some((e: any) => e.type === 'compaction-end' || e.kind === 'compaction')).toBe(true)
     })
 
+    it('delegated compact request compacts the session instead of sending a message', async () => {
+        const sessionId = 'sess-delegated-compact'
+        useSessionStore.setState({
+            sessions: [
+                {
+                    id: sessionId,
+                    title: 'Delegated Compact Session',
+                    pinned: false,
+                    createdAt: Date.now(),
+                    updatedAt: Date.now(),
+                },
+            ],
+        })
+        useMessageStore.getState().replaceSessionEntries(sessionId, [
+            {
+                id: 'u1',
+                sessionId,
+                createdAt: 1000,
+                kind: 'user',
+                version: 1,
+                content: [{ type: 'text', text: 'First user message' }],
+            },
+        ])
+        const ackMock = vi.fn().mockResolvedValue(undefined)
+        setHostBridge({
+            SessionBroadcastRunStatus: broadcastRunStatusMock,
+            SessionBroadcastStreamEvent: broadcastStreamEventMock,
+            SessionAbortRun: abortRunMock,
+            SessionDelegateRun: delegateRunMock,
+            SessionClaimPendingDelegateRuns: vi.fn().mockResolvedValue([]),
+            SessionAckDelegateRun: ackMock,
+            onNativeEvent: vi.fn((cb: (event: any) => void) => {
+                nativeEventListeners.push(cb)
+                return () => {
+                    const idx = nativeEventListeners.indexOf(cb)
+                    if (idx >= 0) nativeEventListeners.splice(idx, 1)
+                }
+            }),
+        } as any)
+        const compactInputs: AgentCompactInput[] = []
+        const originalCompact = service.compact.bind(service)
+        service.compact = async (input: AgentCompactInput) => {
+            compactInputs.push(input)
+            return originalCompact(input)
+        }
+
+        renderHook(() => useAgentStream(), {
+            wrapper: createWrapper(service),
+        })
+
+        await act(async () => {
+            nativeEventListeners[0]!({
+                kind: 'session:delegate-run',
+                data: JSON.stringify({
+                    requestId: 'compact-req-1',
+                    sessionId,
+                    text: '',
+                    action: 'compact',
+                }),
+            })
+        })
+
+        await waitFor(() => {
+            expect(ackMock).toHaveBeenCalledWith('compact-req-1')
+        })
+        expect(compactInputs).toHaveLength(1)
+        expect(compactInputs[0]?.sessionId).toBe(sessionId)
+        expect(compactInputs[0]?.customInstructions).toBeUndefined()
+        expect(service.streamChatCalls).toHaveLength(0)
+        expect(broadcastRunStatusMock).toHaveBeenCalledWith(sessionId, 'idle', expect.any(String), '')
+    })
+
+    it('delegated compact request for an empty session is skipped and reports idle', async () => {
+        const sessionId = 'sess-delegated-compact-empty'
+        useSessionStore.setState({
+            sessions: [
+                {
+                    id: sessionId,
+                    title: 'Empty Session',
+                    pinned: false,
+                    createdAt: Date.now(),
+                    updatedAt: Date.now(),
+                },
+            ],
+        })
+        const ackMock = vi.fn().mockResolvedValue(undefined)
+        setHostBridge({
+            SessionBroadcastRunStatus: broadcastRunStatusMock,
+            SessionBroadcastStreamEvent: broadcastStreamEventMock,
+            SessionAbortRun: abortRunMock,
+            SessionDelegateRun: delegateRunMock,
+            SessionClaimPendingDelegateRuns: vi.fn().mockResolvedValue([]),
+            SessionAckDelegateRun: ackMock,
+            onNativeEvent: vi.fn((cb: (event: any) => void) => {
+                nativeEventListeners.push(cb)
+                return () => {
+                    const idx = nativeEventListeners.indexOf(cb)
+                    if (idx >= 0) nativeEventListeners.splice(idx, 1)
+                }
+            }),
+        } as any)
+        const compactSpy = vi.spyOn(service, 'compact')
+
+        renderHook(() => useAgentStream(), {
+            wrapper: createWrapper(service),
+        })
+
+        await act(async () => {
+            nativeEventListeners[0]!({
+                kind: 'session:delegate-run',
+                data: JSON.stringify({
+                    requestId: 'compact-req-empty',
+                    sessionId,
+                    text: '',
+                    action: 'compact',
+                }),
+            })
+        })
+
+        await waitFor(() => {
+            expect(ackMock).toHaveBeenCalledWith('compact-req-empty')
+        })
+        expect(compactSpy).not.toHaveBeenCalled()
+        expect(service.streamChatCalls).toHaveLength(0)
+        expect(broadcastRunStatusMock).toHaveBeenCalledWith(sessionId, 'idle', '', '')
+        expect(broadcastRunStatusMock).not.toHaveBeenCalledWith(sessionId, 'running', expect.any(String), '')
+    })
+
     it('pendingTakeoverAborts auto-expires after 3000ms safety timeout', async () => {
         const remoteSessionId = 'mirror-takeover-expire'
         const oldRemoteRunId = 'remote-run-old-expire'
