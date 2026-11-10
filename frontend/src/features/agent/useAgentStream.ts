@@ -185,6 +185,10 @@ type ServiceRuntime = {
         opts?: AgentSendOptions,
     ) => Promise<string | null>
     compactHandler?: (focus: string, sessionId?: string) => Promise<void>
+    resumeHandler?: (
+        sessionId?: string,
+        onRunFinish?: (succeeded: boolean) => void,
+    ) => Promise<string | null>
 }
 
 const IDLE_SNAPSHOT: StreamSnapshot = {
@@ -486,6 +490,7 @@ function bindNativeSync(service: AgentService): void {
                     if (
                         req &&
                         (req.action === 'compact' ||
+                            req.action === 'resume' ||
                             req.text?.trim() ||
                             (req.images && req.images.length > 0))
                     ) {
@@ -687,6 +692,7 @@ function createRuntime(): ServiceRuntime {
         snapshotCache: new Map(),
         sendHandler: undefined,
         compactHandler: undefined,
+        resumeHandler: undefined,
     }
 }
 
@@ -1070,6 +1076,10 @@ async function executeDelegateRun(
             await executeDelegatedCompact(rt, req, startEpoch, markDelegateRunFinished)
             return
         }
+        if (req.action === 'resume') {
+            await executeDelegatedResume(rt, req, startEpoch, markDelegateRunFinished)
+            return
+        }
         if (req.sessionId) {
             const exists = useSessionStore
                 .getState()
@@ -1213,6 +1223,58 @@ async function executeDelegatedCompact(
         finish(false)
         if (!isAbortError(error)) {
             console.warn('[AgentStream] Delegated compact failed:', error)
+        }
+    }
+}
+
+/** Delegated resume from a remote client; resumes an interrupted turn without adding a user entry. */
+async function executeDelegatedResume(
+    rt: ServiceRuntime,
+    req: SessionDelegateRunRequest,
+    startEpoch: ReturnType<typeof getSessionActionEpoch> | null,
+    finish: (succeeded: boolean) => void,
+): Promise<void> {
+    const sessionId = req.sessionId
+    if (!sessionId) {
+        finish(false)
+        return
+    }
+    const hasActiveRun = () => {
+        const flight = rt.runs.get(sessionId)
+        return Boolean(flight && flight.runStatus !== 'idle')
+    }
+    // Clears the requester's pending state when resume cannot start, unless a run owns the status.
+    const skip = () => {
+        if (!hasActiveRun()) {
+            void getHostBridge()?.SessionBroadcastRunStatus(sessionId, 'idle', '', '')
+        }
+        finish(false)
+    }
+    if (!rt.resumeHandler || !useSessionStore.getState().sessions.some((s) => s.id === sessionId)) {
+        skip()
+        return
+    }
+    await ensureSessionLoaded(sessionId)
+    const resumeHandler = rt.resumeHandler
+    if (
+        !resumeHandler ||
+        rt.disposed ||
+        rt.deletedSessionIds.has(sessionId) ||
+        (startEpoch && !isEpochValid(sessionId, startEpoch)) ||
+        hasActiveRun()
+    ) {
+        skip()
+        return
+    }
+    try {
+        const resumedId = await resumeHandler(sessionId, finish)
+        if (!resumedId) {
+            skip()
+        }
+    } catch (error) {
+        skip()
+        if (!isAbortError(error)) {
+            console.warn('[AgentStream] Delegated resume failed:', error)
         }
     }
 }
@@ -1517,6 +1579,7 @@ export function __resetAgentStreamForTests(service?: AgentService | null): void 
         rt.pendingTakeoverAborts.clear()
         rt.sendHandler = undefined
         rt.compactHandler = undefined
+        rt.resumeHandler = undefined
         rt.skills = []
         rt.prompts = []
         rt.lastDiagnostics = []
@@ -3629,6 +3692,7 @@ export function useAgentStream(
         sessionId: string,
         session: Session,
         entries: ConversationEntry[],
+        onRunFinish?: (succeeded: boolean) => void,
     ): Promise<string | null> => {
         if (!service) return null
         const rt = getRuntime(service)
@@ -3645,6 +3709,9 @@ export function useAgentStream(
         const capturedProjectPaths = resolveProjectPathsById(capturedProjectId)
 
         const token = ++rt.flightToken
+        if (onRunFinish) {
+            registerFlightFinishCallback(rt, token, onRunFinish)
+        }
         const runId = createId()
         rememberHostedRunId(rt, runId)
         const ac = new AbortController()
@@ -3990,7 +4057,10 @@ function applyTurnPauseDelta(entries: readonly ConversationEntry[]): Conversatio
 }
 
     const resumeSession = useCallback(
-        async (targetSessionId?: string): Promise<string | null> => {
+        async (
+            targetSessionId?: string,
+            onRunFinish?: (succeeded: boolean) => void,
+        ): Promise<string | null> => {
             if (!service) return null
             const rt = getRuntime(service)
             if (rt.disposed) return null
@@ -4007,7 +4077,15 @@ function applyTurnPauseDelta(entries: readonly ConversationEntry[]): Conversatio
             const session = sessionState.sessions.find((s) => s.id === sessionId)
             if (!session) return null
 
+            const startEpoch = getSessionActionEpoch(sessionId)
+            const isResumeCancelled = () =>
+                rt.disposed ||
+                rt.deletedSessionIds.has(sessionId) ||
+                !isEpochValid(sessionId, startEpoch) ||
+                rt.runs.has(sessionId)
+
             await ensureSessionLoaded(sessionId)
+            if (isResumeCancelled()) return null
             const rawEntries = useMessageStore.getState().getEntries(sessionId)
             const unfinishedSubAgents = useSubAgentStore.getState().agents.filter(
                 (a) =>
@@ -4029,6 +4107,7 @@ function applyTurnPauseDelta(entries: readonly ConversationEntry[]): Conversatio
             // Ensure child subagent sessions are loaded and cleaned
             for (const subAgent of unfinishedSubAgents) {
                 await ensureSessionLoaded(subAgent.sessionId)
+                if (isResumeCancelled()) return null
                 const childRaw = useMessageStore.getState().getEntries(subAgent.sessionId)
                 const childWithPause = applyTurnPauseDelta(childRaw)
                 const childEntries = cleanUnfinishedEntries(childWithPause)
@@ -4037,6 +4116,7 @@ function applyTurnPauseDelta(entries: readonly ConversationEntry[]): Conversatio
                     schedulePersist(true)
                 }
             }
+            if (isResumeCancelled()) return null
 
             const refreshedEntries = useMessageStore.getState().getEntries(sessionId)
             const cleanedRefreshed = cleanUnfinishedEntries(refreshedEntries)
@@ -4070,10 +4150,11 @@ function applyTurnPauseDelta(entries: readonly ConversationEntry[]): Conversatio
                     signal: ac.signal,
                     allowSetup: false,
                 })
-                if (!prepResult.ok || !prepResult.prepared) {
+                if (!prepResult.ok || !prepResult.prepared || isResumeCancelled()) {
                     return null
                 }
                 for (const subAgent of unfinishedSubAgents) {
+                    if (isResumeCancelled()) return null
                     const childEntries = useMessageStore.getState().getEntries(subAgent.sessionId)
                     if (service.subAgents) {
                         try {
@@ -4086,10 +4167,11 @@ function applyTurnPauseDelta(entries: readonly ConversationEntry[]): Conversatio
                         }
                     }
                 }
+                onRunFinish?.(true)
                 return sessionId
             }
 
-            return runPreparedChat(sessionId, session, cleanedRefreshed)
+            return runPreparedChat(sessionId, session, cleanedRefreshed, onRunFinish)
         },
         [service, scopedSessionId],
     )
@@ -4180,6 +4262,7 @@ function applyTurnPauseDelta(entries: readonly ConversationEntry[]): Conversatio
             rt.sendHandler = send
             rt.sendInternalHandler = sendInternal
             rt.compactHandler = compact
+            rt.resumeHandler = resumeSession
             if (rt.pendingDelegateRuns.length > 0) {
                 const pending = rt.pendingDelegateRuns.slice()
                 rt.pendingDelegateRuns.length = 0

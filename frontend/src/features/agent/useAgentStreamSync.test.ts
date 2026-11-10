@@ -1742,6 +1742,272 @@ describe('useAgentStreamSync', () => {
         expect(broadcastRunStatusMock).not.toHaveBeenCalledWith(sessionId, 'running', expect.any(String), '')
     })
 
+    it('delegated resume request resumes an interrupted session and ACKs on completion', async () => {
+        const sessionId = 'sess-delegated-resume'
+        useSessionStore.setState({
+            sessions: [
+                {
+                    id: sessionId,
+                    title: 'Delegated Resume Session',
+                    pinned: false,
+                    createdAt: Date.now(),
+                    updatedAt: Date.now(),
+                },
+            ],
+        })
+        useMessageStore.getState().replaceSessionEntries(sessionId, [
+            {
+                id: 'u1',
+                sessionId,
+                createdAt: 1000,
+                kind: 'user',
+                version: 1,
+                content: [{ type: 'text', text: 'Continue task' }],
+            },
+            {
+                id: 'a1',
+                sessionId,
+                createdAt: 1100,
+                completedAt: 1500,
+                kind: 'assistant',
+                version: 1,
+                status: 'aborted',
+                stopReason: 'aborted',
+                content: [{ type: 'text', text: 'Partial answer' }],
+            },
+        ])
+        const ackMock = vi.fn().mockResolvedValue(undefined)
+        setHostBridge({
+            SessionBroadcastRunStatus: broadcastRunStatusMock,
+            SessionBroadcastStreamEvent: broadcastStreamEventMock,
+            SessionAbortRun: abortRunMock,
+            SessionDelegateRun: delegateRunMock,
+            SessionClaimPendingDelegateRuns: vi.fn().mockResolvedValue([]),
+            SessionAckDelegateRun: ackMock,
+            onNativeEvent: vi.fn((cb: (event: any) => void) => {
+                nativeEventListeners.push(cb)
+                return () => {
+                    const idx = nativeEventListeners.indexOf(cb)
+                    if (idx >= 0) nativeEventListeners.splice(idx, 1)
+                }
+            }),
+        } as any)
+
+        renderHook(() => useAgentStream(), {
+            wrapper: createWrapper(service),
+        })
+
+        await act(async () => {
+            nativeEventListeners[0]!({
+                kind: 'session:delegate-run',
+                data: JSON.stringify({
+                    requestId: 'resume-req-1',
+                    sessionId,
+                    text: '',
+                    action: 'resume',
+                }),
+            })
+        })
+
+        await waitFor(() => {
+            expect(ackMock).toHaveBeenCalledWith('resume-req-1')
+        })
+        expect(service.streamChatCalls).toHaveLength(1)
+        expect(service.streamChatCalls[0]?.sessionId).toBe(sessionId)
+        expect(service.streamChatCalls[0]?.entries).toHaveLength(1)
+        expect(service.streamChatCalls[0]?.entries[0]?.id).toBe('u1')
+        expect(broadcastRunStatusMock).toHaveBeenCalledWith(sessionId, 'running', expect.any(String), '')
+        expect(broadcastRunStatusMock).toHaveBeenCalledWith(sessionId, 'idle', expect.any(String), '')
+    })
+
+    it('delegated resume request for a completed session is skipped and reports idle', async () => {
+        const sessionId = 'sess-delegated-resume-done'
+        useSessionStore.setState({
+            sessions: [
+                {
+                    id: sessionId,
+                    title: 'Completed Session',
+                    pinned: false,
+                    createdAt: Date.now(),
+                    updatedAt: Date.now(),
+                },
+            ],
+        })
+        useMessageStore.getState().replaceSessionEntries(sessionId, [
+            {
+                id: 'u1',
+                sessionId,
+                createdAt: 1000,
+                kind: 'user',
+                version: 1,
+                content: [{ type: 'text', text: 'Done task' }],
+            },
+            {
+                id: 'a1',
+                sessionId,
+                createdAt: 1100,
+                completedAt: 1500,
+                kind: 'assistant',
+                version: 1,
+                status: 'done',
+                stopReason: 'stop',
+                content: [{ type: 'text', text: 'Completed answer' }],
+            },
+        ])
+        const ackMock = vi.fn().mockResolvedValue(undefined)
+        setHostBridge({
+            SessionBroadcastRunStatus: broadcastRunStatusMock,
+            SessionBroadcastStreamEvent: broadcastStreamEventMock,
+            SessionAbortRun: abortRunMock,
+            SessionDelegateRun: delegateRunMock,
+            SessionClaimPendingDelegateRuns: vi.fn().mockResolvedValue([]),
+            SessionAckDelegateRun: ackMock,
+            onNativeEvent: vi.fn((cb: (event: any) => void) => {
+                nativeEventListeners.push(cb)
+                return () => {
+                    const idx = nativeEventListeners.indexOf(cb)
+                    if (idx >= 0) nativeEventListeners.splice(idx, 1)
+                }
+            }),
+        } as any)
+
+        renderHook(() => useAgentStream(), {
+            wrapper: createWrapper(service),
+        })
+
+        await act(async () => {
+            nativeEventListeners[0]!({
+                kind: 'session:delegate-run',
+                data: JSON.stringify({
+                    requestId: 'resume-req-done',
+                    sessionId,
+                    text: '',
+                    action: 'resume',
+                }),
+            })
+        })
+
+        await waitFor(() => {
+            expect(ackMock).toHaveBeenCalledWith('resume-req-done')
+        })
+        expect(service.streamChatCalls).toHaveLength(0)
+        expect(broadcastRunStatusMock).toHaveBeenCalledWith(sessionId, 'idle', '', '')
+        expect(broadcastRunStatusMock).not.toHaveBeenCalledWith(sessionId, 'running', expect.any(String), '')
+    })
+
+    it('cancels delegated resume when abort-run arrives while loading subagent session', async () => {
+        const sessionId = 'sess-delegated-resume-abort-race'
+        const childSessionId = 'subagent-child-session-1'
+        useSessionStore.setState({
+            sessions: [
+                {
+                    id: sessionId,
+                    title: 'Resume Abort Race',
+                    pinned: false,
+                    createdAt: Date.now(),
+                    updatedAt: Date.now(),
+                },
+            ],
+        })
+        useMessageStore.getState().replaceSessionEntries(sessionId, [
+            {
+                id: 'u1',
+                sessionId,
+                createdAt: 1000,
+                kind: 'user',
+                version: 1,
+                content: [{ type: 'text', text: 'Continue task' }],
+            },
+            {
+                id: 'a1',
+                sessionId,
+                createdAt: 1100,
+                completedAt: 1500,
+                kind: 'assistant',
+                version: 1,
+                status: 'aborted',
+                stopReason: 'aborted',
+                content: [{ type: 'text', text: 'Partial' }],
+            },
+        ])
+        useSubAgentStore.getState().replaceAll([
+            {
+                id: 'sa-1',
+                name: 'Worker',
+                parentSessionId: sessionId,
+                sessionId: childSessionId,
+                modelId: 'gpt-5',
+                status: 'aborted',
+                createdAt: 1000,
+                updatedAt: 1200,
+            },
+        ])
+        let markChildGetStarted!: () => void
+        const childGetStarted = new Promise<void>((resolve) => {
+            markChildGetStarted = resolve
+        })
+        let releaseChildGet!: () => void
+        const childGetHold = new Promise<void>((resolve) => {
+            releaseChildGet = resolve
+        })
+        const ackMock = vi.fn().mockResolvedValue(undefined)
+        setHostBridge({
+            SessionGet: vi.fn(async (id: string) => {
+                if (id === childSessionId) {
+                    markChildGetStarted()
+                    await childGetHold
+                    return JSON.stringify({ id: childSessionId, entries: [] })
+                }
+                return ''
+            }),
+            SessionBroadcastRunStatus: broadcastRunStatusMock,
+            SessionBroadcastStreamEvent: broadcastStreamEventMock,
+            SessionAbortRun: abortRunMock,
+            SessionDelegateRun: delegateRunMock,
+            SessionClaimPendingDelegateRuns: vi.fn().mockResolvedValue([]),
+            SessionAckDelegateRun: ackMock,
+            onNativeEvent: vi.fn((cb: (event: any) => void) => {
+                nativeEventListeners.push(cb)
+                return () => {
+                    const idx = nativeEventListeners.indexOf(cb)
+                    if (idx >= 0) nativeEventListeners.splice(idx, 1)
+                }
+            }),
+        } as any)
+
+        renderHook(() => useAgentStream(), {
+            wrapper: createWrapper(service),
+        })
+
+        act(() => {
+            nativeEventListeners[0]!({
+                kind: 'session:delegate-run',
+                data: JSON.stringify({
+                    requestId: 'resume-req-race',
+                    sessionId,
+                    text: '',
+                    action: 'resume',
+                }),
+            })
+        })
+
+        await childGetStarted
+
+        await act(async () => {
+            nativeEventListeners[0]!({
+                kind: 'session:abort-run',
+                data: JSON.stringify({ sessionId }),
+            })
+            releaseChildGet()
+        })
+
+        await waitFor(() => {
+            expect(ackMock).toHaveBeenCalledWith('resume-req-race')
+        })
+        expect(service.streamChatCalls).toHaveLength(0)
+        useSubAgentStore.getState().replaceAll([])
+    })
+
     it('pendingTakeoverAborts auto-expires after 3000ms safety timeout', async () => {
         const remoteSessionId = 'mirror-takeover-expire'
         const oldRemoteRunId = 'remote-run-old-expire'
