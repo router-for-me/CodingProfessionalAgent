@@ -1,3 +1,4 @@
+import * as crypto from 'node:crypto'
 import * as fs from 'node:fs/promises'
 import * as fsSync from 'node:fs'
 import * as path from 'node:path'
@@ -13,7 +14,7 @@ import {
     normalizePluginSourceConfig,
     type PluginSourceConfig,
 } from '../../../../src/main/plugins/config/pluginSourceConfig.js'
-import { getAppConfigDirName } from '@cpa/plugin-api'
+import { getAppConfigDirName, isValidTunnelUuid } from '@cpa/plugin-api'
 
 export interface KVStoreServiceOptions {
     customPath?: string
@@ -778,6 +779,84 @@ export class KVStoreService {
         this.saveSync()
     }
 
+    private getExistingTunnelUuid(): string | undefined {
+        const appState = this.data['app-state']
+        if (!appState || typeof appState !== 'object' || Array.isArray(appState)) {
+            return undefined
+        }
+        const settings = (appState as Record<string, unknown>).settings
+        if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+            return undefined
+        }
+        const cliProxyApi = (settings as Record<string, unknown>).cliProxyApi
+        if (!cliProxyApi || typeof cliProxyApi !== 'object' || Array.isArray(cliProxyApi)) {
+            return undefined
+        }
+        const uuid = (cliProxyApi as Record<string, unknown>).tunnelUuid
+        const trimmed = typeof uuid === 'string' ? uuid.trim() : ''
+        return isValidTunnelUuid(trimmed) ? trimmed : undefined
+    }
+
+    private preserveTunnelUuidInSettings(settingsObj: Record<string, unknown>): void {
+        const existingUuid = this.getExistingTunnelUuid()
+        if (!existingUuid) return
+
+        const rawCli = settingsObj.cliProxyApi
+        if (!rawCli || typeof rawCli !== 'object' || Array.isArray(rawCli)) {
+            settingsObj.cliProxyApi = {
+                baseUrl: '',
+                apiKey: '',
+                tunnelUuid: existingUuid,
+            }
+            return
+        }
+        const cliObj = { ...(rawCli as Record<string, unknown>) }
+        const incoming = typeof cliObj.tunnelUuid === 'string' ? cliObj.tunnelUuid.trim() : ''
+        if (!isValidTunnelUuid(incoming)) {
+            cliObj.tunnelUuid = existingUuid
+            settingsObj.cliProxyApi = cliObj
+        }
+    }
+
+    async ensureTunnelUuid(candidate?: string): Promise<string> {
+        await this.ensureLoaded()
+        const trimmedCandidate = typeof candidate === 'string' ? candidate.trim() : ''
+        const existingUuid = this.getExistingTunnelUuid()
+        const resolved = isValidTunnelUuid(trimmedCandidate)
+            ? trimmedCandidate
+            : existingUuid ?? crypto.randomUUID()
+
+        if (existingUuid !== resolved) {
+            const currentState =
+                this.data['app-state'] &&
+                typeof this.data['app-state'] === 'object' &&
+                !Array.isArray(this.data['app-state'])
+                    ? { ...(this.data['app-state'] as Record<string, unknown>) }
+                    : {}
+            const currentSettings =
+                currentState.settings &&
+                typeof currentState.settings === 'object' &&
+                !Array.isArray(currentState.settings)
+                    ? { ...(currentState.settings as Record<string, unknown>) }
+                    : {}
+            const currentCli: Record<string, unknown> =
+                currentSettings.cliProxyApi &&
+                typeof currentSettings.cliProxyApi === 'object' &&
+                !Array.isArray(currentSettings.cliProxyApi)
+                    ? { ...(currentSettings.cliProxyApi as Record<string, unknown>) }
+                    : { baseUrl: '', apiKey: '' }
+
+            currentCli.tunnelUuid = resolved
+            currentSettings.cliProxyApi = currentCli
+            currentState.settings = currentSettings
+            this.data['app-state'] = currentState
+            this.dirtySettings = true
+            await this.save()
+        }
+
+        return resolved
+    }
+
     async set(key: string, value: unknown): Promise<void> {
         await this.ensureLoaded()
         if (key === 'ui') {
@@ -858,6 +937,7 @@ export class KVStoreService {
                     this.dirtyShortcuts = true
                     delete settingsObj.shortcuts
                 }
+                this.preserveTunnelUuidInSettings(settingsObj)
                 stateObj.settings = settingsObj
             }
             if (this.extractAndMigrateUiFields(stateObj)) {
@@ -953,6 +1033,7 @@ export class KVStoreService {
                     this.dirtyShortcuts = true
                     delete settingsObj.shortcuts
                 }
+                this.preserveTunnelUuidInSettings(settingsObj)
                 stateObj.settings = settingsObj
             }
             if (this.extractAndMigrateUiFields(stateObj)) {

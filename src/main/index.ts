@@ -457,15 +457,41 @@ async function bootstrap(): Promise<void> {
     })
     lifecycleService.applyInitialPlatformState()
 
-    // Subscribe to live settings updates to keep lifecycle closeAction cache synchronized in real-time
-    services.kvStoreService?.subscribe?.('app-state', (appState: any) => {
+    let unsubAppState: (() => void) | null = null
+    const syncAppStateToMainServices = (appState: any) => {
+      if (!services) return
       if (appState?.settings?.headlessCloseAction) {
         lifecycleService?.setCachedCloseAction(appState.settings.headlessCloseAction)
       }
       if (typeof appState?.settings?.showInMenuBar === 'boolean') {
         lifecycleService?.setCachedShowInMenuBar(appState.settings.showInMenuBar)
       }
-    })
+      const webPassword =
+        typeof appState?.settings?.webServer?.password === 'string'
+          ? appState.settings.webServer.password
+          : ''
+      services.webServerService.configure({ password: webPassword })
+
+      const cliCfg = appState?.settings?.cliProxyApi
+      void services.cliProxyTunnelService.syncConfig({
+        enabled: Boolean(cliCfg?.tunnelEnabled),
+        baseUrl: typeof cliCfg?.baseUrl === 'string' ? cliCfg.baseUrl : '',
+        apiKey: typeof cliCfg?.apiKey === 'string' ? cliCfg.apiKey : '',
+        tunnelUuid: typeof cliCfg?.tunnelUuid === 'string' ? cliCfg.tunnelUuid : undefined,
+        webPassword,
+      }).catch((err) => {
+        console.error('[Tunnel] Failed to synchronize CLIProxyAPI tunnel config:', err)
+      })
+    }
+
+    const bindAppStateSubscription = () => {
+      const kv = services?.kvStoreService
+      if (!kv || typeof kv.subscribe !== 'function') return
+      unsubAppState?.()
+      unsubAppState = kv.subscribe('app-state', syncAppStateToMainServices)
+    }
+
+    bindAppStateSubscription()
 
     // Retry staging after host services exist. The first attempt can fail after a
     // hot update (native bridges / plugin activate) and is otherwise swallowed,
@@ -557,9 +583,11 @@ async function bootstrap(): Promise<void> {
           console.error('[WebServer] Refusing to start Web Server because settings failed to load:', loadError)
           return
         }
+        bindAppStateSubscription()
         if (appState?.settings && typeof appState.settings.preventSleep === 'boolean') {
           services.powerSaveService.setPreventSleepEnabled(appState.settings.preventSleep, true)
         }
+        syncAppStateToMainServices(appState)
         const plan = resolveWebServerStartupPlan(appState, isDev, {
           isHeadless: lifecycleService?.isHeadless(),
           cliPort: cliArgs.port,

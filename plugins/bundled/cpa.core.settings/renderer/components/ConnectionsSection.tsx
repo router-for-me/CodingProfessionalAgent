@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
     Check,
@@ -18,14 +18,20 @@ import {
 import {
     GatewayDiscoveryServiceToken,
     SettingsServiceToken,
+    TunnelServiceToken,
     UiServiceToken,
     WebServerServiceToken,
     type CliProxyApiSettings,
+    type CliProxyTunnelService,
+    type CliProxyTunnelStatus,
     type DiscoveredGateway,
+    type TunnelSyncConfig,
+    type WebServerService,
     type WebServerSettings,
     type WebServerStatus,
 } from '@cpa/plugin-api'
 import { isBrowserEnvironment } from '../utils/platform.js'
+import { getSettingsCapabilityClient } from '../utils/capability.js'
 import {
     SettingsCard,
     SettingsPasswordInput,
@@ -47,7 +53,63 @@ export function ConnectionsSection() {
     const { t } = useTranslation()
     const uiService = useHostService(UiServiceToken)
     const settingsService = useHostService(SettingsServiceToken)
-    const webServerService = useHostService(WebServerServiceToken)
+    const injectedWebServerService = useHostService(WebServerServiceToken)
+    const injectedTunnelService = useHostService(TunnelServiceToken)
+    const capabilityClient = getSettingsCapabilityClient()
+    const webServerService = useMemo<WebServerService | null>(() => {
+        if (injectedWebServerService) {
+            return injectedWebServerService
+        }
+        if (!capabilityClient) {
+            return null
+        }
+        return {
+            getStatus: async () =>
+                (await capabilityClient.invoke('webserver:getStatus')) as WebServerStatus,
+            configure: async (config?: Partial<WebServerSettings>) => {
+                await capabilityClient.invoke('webserver:configure', [config ?? {}])
+            },
+            start: async (config?: Partial<WebServerSettings>) =>
+                (await capabilityClient.invoke('webserver:start', [config])) as WebServerStatus,
+            stop: async () =>
+                (await capabilityClient.invoke('webserver:stop')) as WebServerStatus,
+        }
+    }, [capabilityClient, injectedWebServerService])
+    const tunnelService = useMemo<CliProxyTunnelService | null>(() => {
+        if (injectedTunnelService) {
+            return injectedTunnelService
+        }
+        if (!capabilityClient) {
+            return null
+        }
+        return {
+            getStatus: async () =>
+                (await capabilityClient.invoke('tunnel:getStatus')) as CliProxyTunnelStatus,
+            syncConfig: async (config: TunnelSyncConfig) =>
+                (await capabilityClient.invoke('tunnel:syncConfig', [
+                    config,
+                ])) as CliProxyTunnelStatus,
+            subscribeStatus: (listener: (status: CliProxyTunnelStatus) => void) => {
+                if (typeof capabilityClient.subscribe !== 'function') {
+                    return () => {}
+                }
+                return capabilityClient.subscribe('tunnel:status-changed', (raw: unknown) => {
+                    try {
+                        const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
+                        if (
+                            parsed &&
+                            typeof parsed === 'object' &&
+                            typeof (parsed as CliProxyTunnelStatus).phase === 'string'
+                        ) {
+                            listener(parsed as CliProxyTunnelStatus)
+                        }
+                    } catch {
+                        // Ignore malformed status event payloads
+                    }
+                })
+            },
+        }
+    }, [capabilityClient, injectedTunnelService])
     const settings = useSettings()
 
     const pushToast = (msg: string) => uiService?.pushToast(msg)
@@ -61,6 +123,108 @@ export function ConnectionsSection() {
         settingsService?.setWebServer?.(partial)
 
     const isBrowser = isBrowserEnvironment()
+
+    const [tunnelStatus, setTunnelStatus] = useState<CliProxyTunnelStatus | null>(null)
+    const cliProxyApiRef = useRef(cliProxyApi)
+    cliProxyApiRef.current = cliProxyApi
+
+    const applyIncomingTunnelStatus = useCallback(
+        (status: CliProxyTunnelStatus | null | undefined) => {
+            if (!status) return
+            setTunnelStatus(status)
+            if (status.serverUuid && !cliProxyApiRef.current.tunnelUuid) {
+                settingsService?.setCliProxyApi?.({ tunnelUuid: status.serverUuid })
+            }
+        },
+        [settingsService],
+    )
+
+    useEffect(() => {
+        if (!tunnelService) return
+        let active = true
+        let unsub = () => {}
+        try {
+            unsub =
+                tunnelService.subscribeStatus?.((status) => {
+                    if (active) {
+                        applyIncomingTunnelStatus(status)
+                    }
+                }) ?? (() => {})
+        } catch {
+            // Ignore synchronous subscription rejection when no capability handle is active
+        }
+        tunnelService
+            .getStatus()
+            .then((status) => {
+                if (active) {
+                    applyIncomingTunnelStatus(status)
+                }
+            })
+            .catch(() => {
+                // Ignore initial status query failures
+            })
+        return () => {
+            active = false
+            unsub()
+        }
+    }, [applyIncomingTunnelStatus, tunnelService])
+
+    const syncTunnelConfig = useCallback(
+        (
+            overrides?: Partial<{
+                enabled: boolean
+                baseUrl: string
+                apiKey: string
+                tunnelUuid?: string
+            }>,
+        ) => {
+            if (!tunnelService) return
+            const currentCli = cliProxyApiRef.current
+            void tunnelService
+                .syncConfig({
+                    enabled: overrides?.enabled ?? Boolean(currentCli.tunnelEnabled),
+                    baseUrl: overrides?.baseUrl ?? currentCli.baseUrl,
+                    apiKey: overrides?.apiKey ?? currentCli.apiKey,
+                    tunnelUuid: overrides?.tunnelUuid ?? currentCli.tunnelUuid,
+                })
+                .then((status) => {
+                    applyIncomingTunnelStatus(status)
+                })
+                .catch((err: unknown) => {
+                    setTunnelStatus((prev) => ({
+                        enabled: overrides?.enabled ?? Boolean(currentCli.tunnelEnabled),
+                        phase: 'error',
+                        serverUuid: prev?.serverUuid ?? currentCli.tunnelUuid ?? '',
+                        serverName: prev?.serverName ?? '',
+                        tunnelUrl: prev?.tunnelUrl ?? '',
+                        connectedClients: 0,
+                        retryAttempt: 0,
+                        error: (err as Error)?.message || String(err),
+                    }))
+                })
+        },
+        [applyIncomingTunnelStatus, tunnelService],
+    )
+
+    const resolveTunnelErrorText = (status: CliProxyTunnelStatus): string => {
+        switch (status.errorCode) {
+            case 'missing_config':
+                return t('settings.connections.tunnel.error.missingConfig')
+            case 'invalid_url':
+            case 'bad_request':
+                return t('settings.connections.tunnel.error.invalidUrl')
+            case 'unauthorized':
+            case 'forbidden':
+            case 'api_key_revoked':
+            case 'auth_failed':
+                return t('settings.connections.tunnel.error.authFailed')
+            case 'uuid_conflict':
+            case 'conflict':
+                return t('settings.connections.tunnel.error.conflict')
+            default:
+                return status.error || t('settings.connections.tunnel.status.error')
+        }
+    }
 
     const gatewayDiscoveryService = useHostService(GatewayDiscoveryServiceToken)
     const [isDiscovering, setIsDiscovering] = useState(false)
@@ -113,9 +277,12 @@ export function ConnectionsSection() {
             const nextUrl =
                 gw.baseUrl || `http://${gw.primaryAddress || gw.host}:${gw.port}`
             setCliProxyApi({ baseUrl: nextUrl })
+            if (cliProxyApiRef.current.tunnelEnabled) {
+                syncTunnelConfig({ baseUrl: nextUrl })
+            }
             closeMenu(true)
         },
-        [closeMenu, setCliProxyApi],
+        [closeMenu, setCliProxyApi, syncTunnelConfig],
     )
 
     const updateMenuPosition = useCallback(() => {
@@ -420,6 +587,12 @@ export function ConnectionsSection() {
     const handlePasswordChange = (password: string) => {
         if (password === webServer.password) return
         void handleWebServerFieldChange({ password })
+        void webServerService?.configure?.({ password })
+    }
+
+    const handleToggleTunnel = (enabled: boolean) => {
+        setCliProxyApi({ tunnelEnabled: enabled })
+        syncTunnelConfig({ enabled })
     }
 
     const handleOpenInBrowser = () => {
@@ -468,7 +641,12 @@ export function ConnectionsSection() {
                                     placeholder={t('settings.connections.baseUrl.placeholder')}
                                     autoComplete="url"
                                     value={cliProxyApi.baseUrl}
-                                    onChange={(baseUrl) => setCliProxyApi({ baseUrl })}
+                                    onChange={(baseUrl) => {
+                                        setCliProxyApi({ baseUrl })
+                                        if (cliProxyApi.tunnelEnabled) {
+                                            syncTunnelConfig({ baseUrl })
+                                        }
+                                    }}
                                 />
                                 <button
                                     ref={discoverButtonRef}
@@ -606,7 +784,80 @@ export function ConnectionsSection() {
                                 placeholder={t('settings.connections.apiKey.placeholder')}
                                 autoComplete="current-password"
                                 value={cliProxyApi.apiKey}
-                                onChange={(apiKey) => setCliProxyApi({ apiKey })}
+                                onChange={(apiKey) => {
+                                    setCliProxyApi({ apiKey })
+                                    if (cliProxyApi.tunnelEnabled) {
+                                        syncTunnelConfig({ apiKey })
+                                    }
+                                }}
+                            />
+                        }
+                    />
+                    <SettingsRow
+                        title={t('settings.connections.tunnel.enable')}
+                        description={
+                            <div className="space-y-1">
+                                <div>{t('settings.connections.tunnel.enable.desc')}</div>
+                                {tunnelStatus && tunnelStatus.phase === 'connected' ? (
+                                    <div
+                                        className="flex items-center gap-2 pt-0.5"
+                                        data-testid="tunnel-status-indicator"
+                                    >
+                                        <span className="inline-block size-2 rounded-full bg-[var(--accent-green)] ring-2 ring-[var(--accent-green)]/20" />
+                                        <span className="font-medium text-[var(--accent-green)]">
+                                            {t('settings.connections.tunnel.status.connected')}
+                                        </span>
+                                        {tunnelStatus.serverName ? (
+                                            <span className="font-mono text-[11px] text-[var(--text-secondary)]">
+                                                {tunnelStatus.serverName}
+                                            </span>
+                                        ) : null}
+                                    </div>
+                                ) : tunnelStatus && tunnelStatus.phase === 'connecting' ? (
+                                    <div
+                                        className="flex items-center gap-2 pt-0.5"
+                                        data-testid="tunnel-status-indicator"
+                                    >
+                                        <Loader2 className="size-3 animate-spin text-[var(--accent-blue)]" />
+                                        <span className="text-[var(--text-secondary)]">
+                                            {t('settings.connections.tunnel.status.connecting')}
+                                        </span>
+                                    </div>
+                                ) : tunnelStatus && tunnelStatus.phase === 'reconnecting' ? (
+                                    <div
+                                        className="flex items-center gap-2 pt-0.5"
+                                        data-testid="tunnel-status-indicator"
+                                    >
+                                        <Loader2 className="size-3 animate-spin text-[var(--accent-orange)]" />
+                                        <span className="text-[var(--accent-orange)]">
+                                            {t('settings.connections.tunnel.status.reconnecting', {
+                                                count: Math.max(1, tunnelStatus.retryAttempt),
+                                            })}
+                                        </span>
+                                        {tunnelStatus.errorCode === 'uuid_conflict' ? (
+                                            <span className="text-[11px] text-[var(--accent-orange)]/80">
+                                                {t('settings.connections.tunnel.error.conflict')}
+                                            </span>
+                                        ) : null}
+                                    </div>
+                                ) : tunnelStatus && tunnelStatus.phase === 'error' ? (
+                                    <div
+                                        className="flex items-center gap-2 pt-0.5"
+                                        data-testid="tunnel-status-indicator"
+                                    >
+                                        <span className="inline-block size-2 rounded-full bg-[var(--accent-red)] ring-2 ring-[var(--accent-red)]/20" />
+                                        <span className="text-[11px] font-medium text-[var(--accent-red)]">
+                                            {resolveTunnelErrorText(tunnelStatus)}
+                                        </span>
+                                    </div>
+                                ) : null}
+                            </div>
+                        }
+                        control={
+                            <ToggleSwitch
+                                checked={Boolean(cliProxyApi.tunnelEnabled)}
+                                onChange={handleToggleTunnel}
+                                label={t('settings.connections.tunnel.enable')}
                             />
                         }
                         last

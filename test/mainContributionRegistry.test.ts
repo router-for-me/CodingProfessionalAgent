@@ -53,6 +53,7 @@ export const existingIpcChannelSnapshot = [
     'notification:clearBadge',
     'power:setPreventSleep',
     'power:getPreventSleep',
+    'webserver:configure',
     'webserver:start',
     'webserver:stop',
     'webserver:getStatus',
@@ -76,6 +77,8 @@ export const existingIpcChannelSnapshot = [
     'update:apply',
     'update:getState',
     'gateway:discover',
+    'tunnel:getStatus',
+    'tunnel:syncConfig',
 ]
 
 export const existingRpcMethodSnapshot = [
@@ -162,6 +165,8 @@ export const existingRpcMethodSnapshot = [
     'SetPreventSleep',
     'power:getPreventSleep',
     'GetPreventSleep',
+    'webserver:configure',
+    'WebServerConfigure',
     'webserver:start',
     'WebServerStart',
     'webserver:stop',
@@ -213,6 +218,10 @@ export const existingRpcMethodSnapshot = [
     'UpdateGetState',
     'gateway:discover',
     'GatewayDiscover',
+    'tunnel:getStatus',
+    'TunnelGetStatus',
+    'tunnel:syncConfig',
+    'TunnelSyncConfig',
 ]
 
 describe('MainContributionRegistry & Descriptors', () => {

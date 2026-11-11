@@ -1,14 +1,27 @@
 import {
     type CapabilityHandle,
+    type CliProxyTunnelService,
+    type CliProxyTunnelStatus,
     type HostServices,
+    type PluginCapabilityClient,
     type PluginEntryDefinition,
     type PluginEntryKind,
     type PluginManifest,
     type PluginSummary,
     type ResolvedPluginGraphDTO,
     type ResolvedPluginPackage,
+    type TunnelSyncConfig,
+    type WebServerService,
+    type WebServerSettings,
+    type WebServerStatus,
     HOST_SERVICE_TOKENS,
     PluginCapabilityError,
+    TUNNEL_MANAGE_CAPABILITY,
+    TUNNEL_READ_CAPABILITY,
+    TunnelServiceToken,
+    WEBSERVER_MANAGE_CAPABILITY,
+    WEBSERVER_READ_CAPABILITY,
+    WebServerServiceToken,
 } from '@cpa/plugin-api'
 import { getDefaultHostServices } from '@cpa/plugin-ui'
 import {
@@ -63,6 +76,103 @@ export interface PeerPluginRuntimeHost {
     getPluginSummary?(pluginId: string): PluginSummary
     isPluginActive(pluginId: string): boolean
     subscribe?(listener: () => void): () => void
+}
+
+function createPluginScopedWebServerService(
+    capabilityClient: PluginCapabilityClient,
+    pluginId?: string,
+): WebServerService {
+    return {
+        getStatus: async () => {
+            if (!capabilityClient.has(WEBSERVER_READ_CAPABILITY)) {
+                throw new PluginCapabilityError(
+                    `Plugin "${pluginId ?? 'unknown'}" does not declare required capability "${WEBSERVER_READ_CAPABILITY}"`,
+                    { pluginId },
+                )
+            }
+            return (await capabilityClient.invoke('webserver:getStatus')) as WebServerStatus
+        },
+        configure: async (config?: Partial<WebServerSettings>) => {
+            if (!capabilityClient.has(WEBSERVER_MANAGE_CAPABILITY)) {
+                throw new PluginCapabilityError(
+                    `Plugin "${pluginId ?? 'unknown'}" does not declare required capability "${WEBSERVER_MANAGE_CAPABILITY}"`,
+                    { pluginId },
+                )
+            }
+            await capabilityClient.invoke('webserver:configure', [config ?? {}])
+        },
+        start: async (config?: Partial<WebServerSettings>) => {
+            if (!capabilityClient.has(WEBSERVER_MANAGE_CAPABILITY)) {
+                throw new PluginCapabilityError(
+                    `Plugin "${pluginId ?? 'unknown'}" does not declare required capability "${WEBSERVER_MANAGE_CAPABILITY}"`,
+                    { pluginId },
+                )
+            }
+            return (await capabilityClient.invoke('webserver:start', [config])) as WebServerStatus
+        },
+        stop: async () => {
+            if (!capabilityClient.has(WEBSERVER_MANAGE_CAPABILITY)) {
+                throw new PluginCapabilityError(
+                    `Plugin "${pluginId ?? 'unknown'}" does not declare required capability "${WEBSERVER_MANAGE_CAPABILITY}"`,
+                    { pluginId },
+                )
+            }
+            return (await capabilityClient.invoke('webserver:stop')) as WebServerStatus
+        },
+    }
+}
+
+function createPluginScopedTunnelService(
+    capabilityClient: PluginCapabilityClient,
+    pluginId?: string,
+): CliProxyTunnelService {
+    return {
+        getStatus: async () => {
+            if (!capabilityClient.has(TUNNEL_READ_CAPABILITY)) {
+                throw new PluginCapabilityError(
+                    `Plugin "${pluginId ?? 'unknown'}" does not declare required capability "${TUNNEL_READ_CAPABILITY}"`,
+                    { pluginId },
+                )
+            }
+            return (await capabilityClient.invoke('tunnel:getStatus')) as CliProxyTunnelStatus
+        },
+        syncConfig: async (config: TunnelSyncConfig) => {
+            if (!capabilityClient.has(TUNNEL_MANAGE_CAPABILITY)) {
+                throw new PluginCapabilityError(
+                    `Plugin "${pluginId ?? 'unknown'}" does not declare required capability "${TUNNEL_MANAGE_CAPABILITY}"`,
+                    { pluginId },
+                )
+            }
+            return (await capabilityClient.invoke('tunnel:syncConfig', [
+                config,
+            ])) as CliProxyTunnelStatus
+        },
+        subscribeStatus: (listener: (status: CliProxyTunnelStatus) => void) => {
+            if (!capabilityClient.has(TUNNEL_READ_CAPABILITY)) {
+                throw new PluginCapabilityError(
+                    `Plugin "${pluginId ?? 'unknown'}" does not declare required capability "${TUNNEL_READ_CAPABILITY}"`,
+                    { pluginId },
+                )
+            }
+            if (typeof capabilityClient.subscribe !== 'function') {
+                return () => {}
+            }
+            return capabilityClient.subscribe('tunnel:status-changed', (raw: unknown) => {
+                try {
+                    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
+                    if (
+                        parsed &&
+                        typeof parsed === 'object' &&
+                        typeof (parsed as CliProxyTunnelStatus).phase === 'string'
+                    ) {
+                        listener(parsed as CliProxyTunnelStatus)
+                    }
+                } catch {
+                    // Ignore malformed status event payloads
+                }
+            })
+        },
+    }
 }
 
 /**
@@ -563,7 +673,21 @@ export class RendererPluginRuntimeHost {
                         },
                     })
                 },
-                serviceResolver: (serviceId) => {
+                serviceResolver: (serviceId, caller) => {
+                    if (caller?.capabilityClient) {
+                        if (serviceId === TunnelServiceToken.id || serviceId === 'tunnel') {
+                            return createPluginScopedTunnelService(
+                                caller.capabilityClient,
+                                caller.manifest?.id,
+                            ) as any
+                        }
+                        if (serviceId === WebServerServiceToken.id || serviceId === 'webServer') {
+                            return createPluginScopedWebServerService(
+                                caller.capabilityClient,
+                                caller.manifest?.id,
+                            ) as any
+                        }
+                    }
                     const defaultServices = getDefaultHostServices()
                     if (defaultServices) {
                         const match = Object.entries(HOST_SERVICE_TOKENS).find(

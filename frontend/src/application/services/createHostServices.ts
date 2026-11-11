@@ -47,6 +47,9 @@ import type {
     SubAgentService,
     GatewayDiscoveryService,
     DiscoveredGateway,
+    CliProxyTunnelService,
+    CliProxyTunnelStatus,
+    TunnelSyncConfig,
 } from '@cpa/plugin-api'
 import {
     PluginManagementUnavailableError,
@@ -145,6 +148,7 @@ function isUnknownRpcError(err: unknown): boolean {
 
 export interface CapabilityClientLike {
     invoke: (method: string, args?: unknown[]) => Promise<unknown>
+    subscribe?: (event: string, listener: (payload: unknown) => void) => () => void
 }
 
 export interface RouterLike {
@@ -160,6 +164,7 @@ export interface CreateHostServicesOptions {
     router?: RouterLike
     notifier?: NotifierLike
     webServer?: WebServerService
+    tunnel?: CliProxyTunnelService
     fileSystem?: FileSystemService
     personalization?: PersonalizationService
     pluginManagement?: PluginManagementService
@@ -1321,56 +1326,44 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
         },
     }
 
-    const webServer: WebServerService = options.webServer ?? {
-        async getStatus(): Promise<WebServerStatus> {
-            if (capabilityClient) {
-                const res = await capabilityClient.invoke('webserver:getStatus')
-                if (res) return res as WebServerStatus
-            }
-            const bridge = getHostBridge()
-            if (bridge?.WebServerGetStatus) {
-                return bridge.WebServerGetStatus()
-            }
-            return {
-                running: false,
-                host: useSettingsStore.getState().settings.webServer?.host || '127.0.0.1',
-                port: useSettingsStore.getState().settings.webServer?.port || 18080,
-                url: '',
-            }
-        },
-        async start(config?: Partial<WebServerSettings>): Promise<WebServerStatus> {
-            if (capabilityClient) {
-                const res = await capabilityClient.invoke('webserver:start', [config])
-                if (res) return res as WebServerStatus
-            }
-            const bridge = getHostBridge()
-            if (bridge?.WebServerStart) {
-                return bridge.WebServerStart(config as any)
-            }
-            return {
-                running: true,
-                host: config?.host || '127.0.0.1',
-                port: config?.port || 18080,
-                url: `http://${config?.host || '127.0.0.1'}:${config?.port || 18080}`,
-            }
-        },
-        async stop(): Promise<WebServerStatus> {
-            if (capabilityClient) {
-                const res = await capabilityClient.invoke('webserver:stop')
-                if (res) return res as WebServerStatus
-            }
-            const bridge = getHostBridge()
-            if (bridge?.WebServerStop) {
-                return bridge.WebServerStop()
-            }
-            return {
-                running: false,
-                host: useSettingsStore.getState().settings.webServer?.host || '127.0.0.1',
-                port: useSettingsStore.getState().settings.webServer?.port || 18080,
-                url: '',
-            }
-        },
-    }
+    const webServer: WebServerService | undefined =
+        options.webServer ??
+        (capabilityClient
+            ? {
+                  async getStatus(): Promise<WebServerStatus> {
+                      const res = await capabilityClient.invoke('webserver:getStatus')
+                      return (res ?? {
+                          running: false,
+                          host:
+                              useSettingsStore.getState().settings.webServer?.host || '127.0.0.1',
+                          port: useSettingsStore.getState().settings.webServer?.port || 18080,
+                          url: '',
+                      }) as WebServerStatus
+                  },
+                  async configure(config?: Partial<WebServerSettings>): Promise<void> {
+                      await capabilityClient.invoke('webserver:configure', [config ?? {}])
+                  },
+                  async start(config?: Partial<WebServerSettings>): Promise<WebServerStatus> {
+                      const res = await capabilityClient.invoke('webserver:start', [config])
+                      return (res ?? {
+                          running: true,
+                          host: config?.host || '127.0.0.1',
+                          port: config?.port || 18080,
+                          url: `http://${config?.host || '127.0.0.1'}:${config?.port || 18080}`,
+                      }) as WebServerStatus
+                  },
+                  async stop(): Promise<WebServerStatus> {
+                      const res = await capabilityClient.invoke('webserver:stop')
+                      return (res ?? {
+                          running: false,
+                          host:
+                              useSettingsStore.getState().settings.webServer?.host || '127.0.0.1',
+                          port: useSettingsStore.getState().settings.webServer?.port || 18080,
+                          url: '',
+                      }) as WebServerStatus
+                  },
+              }
+            : undefined)
 
     const fileSystem: FileSystemService = options.fileSystem ?? {
         async readFile(path: string): Promise<{ dataBase64: string }> {
@@ -2355,6 +2348,56 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
         },
     }
 
+    const defaultTunnelStatus = (): CliProxyTunnelStatus => ({
+        enabled: false,
+        phase: 'stopped',
+        serverUuid: '',
+        serverName: '',
+        tunnelUrl: '',
+        connectedClients: 0,
+        retryAttempt: 0,
+    })
+
+    const tunnelService: CliProxyTunnelService | undefined =
+        options.tunnel ??
+        (capabilityClient
+            ? {
+                  async getStatus(): Promise<CliProxyTunnelStatus> {
+                      const res = await capabilityClient.invoke('tunnel:getStatus')
+                      return (res && typeof res === 'object'
+                          ? res
+                          : defaultTunnelStatus()) as CliProxyTunnelStatus
+                  },
+
+                  async syncConfig(config: TunnelSyncConfig): Promise<CliProxyTunnelStatus> {
+                      const res = await capabilityClient.invoke('tunnel:syncConfig', [config])
+                      return (res && typeof res === 'object'
+                          ? res
+                          : defaultTunnelStatus()) as CliProxyTunnelStatus
+                  },
+
+                  subscribeStatus(listener: (status: CliProxyTunnelStatus) => void): () => void {
+                      if (typeof capabilityClient.subscribe !== 'function') {
+                          return () => {}
+                      }
+                      return capabilityClient.subscribe('tunnel:status-changed', (raw: unknown) => {
+                          try {
+                              const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
+                              if (
+                                  parsed &&
+                                  typeof parsed === 'object' &&
+                                  typeof (parsed as CliProxyTunnelStatus).phase === 'string'
+                              ) {
+                                  listener(parsed as CliProxyTunnelStatus)
+                              }
+                          } catch {
+                              // Ignore malformed status event payloads
+                          }
+                      })
+                  },
+              }
+            : undefined)
+
     const hostServices: HostServices = {
         sessions,
         projects,
@@ -2392,14 +2435,32 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
         rendererContributions,
         subAgents,
         gatewayDiscovery: gatewayDiscoveryService,
+        tunnel: tunnelService,
     }
 
-    setDefaultHostServices(hostServices)
+    // Scoped instances belong strictly to their caller and must NEVER overwrite global defaultHostServices.
+    if (!capabilityClient) {
+        setDefaultHostServices(sanitizePublicDefaultHostServices(hostServices))
+    }
 
     return hostServices
 }
 
 const EMPTY_PROMPTS_LIST: readonly any[] = Object.freeze([])
+
+function sanitizePublicDefaultHostServices(services: HostServices): HostServices {
+    // Unconditionally strip privileged tunnel and webServer handles from shared defaultHostServices;
+    // plugins must always resolve them through their own scoped PluginContext capabilityClient.
+    return {
+        ...services,
+        webServer: undefined,
+        tunnel: undefined,
+    }
+}
+
+export function getSanitizedHostServices(): HostServices {
+    return sanitizePublicDefaultHostServices(getHostServices())
+}
 
 let defaultHostServices: HostServices | null = null
 let defaultHostRouter: RouterLike | null = null
@@ -2451,14 +2512,14 @@ export function setHostRouter(router: RouterLike | null): void {
 export function getHostServices(): HostServices {
     if (!defaultHostServices) {
         defaultHostServices = createHostServices()
-        setDefaultHostServices(defaultHostServices)
+        setDefaultHostServices(sanitizePublicDefaultHostServices(defaultHostServices))
     }
     return defaultHostServices
 }
 
 export function setHostServices(services: HostServices): void {
     defaultHostServices = services
-    setDefaultHostServices(services)
+    setDefaultHostServices(sanitizePublicDefaultHostServices(services))
 }
 
 // Eagerly initialize default host services for global access

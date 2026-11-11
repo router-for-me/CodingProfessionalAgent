@@ -154,7 +154,14 @@ export interface PluginRuntimeOptions {
         runtime: PluginEntryKind,
         generation: number,
     ) => PluginCapabilityClient
-    serviceResolver?: <T>(serviceId: string) => T | undefined
+    serviceResolver?: <T>(
+        serviceId: string,
+        caller?: {
+            manifest: PluginManifest
+            generation: number
+            capabilityClient: PluginCapabilityClient
+        },
+    ) => T | undefined
 }
 
 /**
@@ -173,7 +180,14 @@ export class PluginRuntime {
         generation: number,
     ) => PluginCapabilityClient
     readonly leaseManager = new GenerationLeaseManager()
-    readonly serviceResolver?: <T>(serviceId: string) => T | undefined
+    readonly serviceResolver?: <T>(
+        serviceId: string,
+        caller?: {
+            manifest: PluginManifest
+            generation: number
+            capabilityClient: PluginCapabilityClient
+        },
+    ) => T | undefined
 
     private readonly activateTimeoutMs?: number
     private readonly deactivateTimeoutMs?: number
@@ -356,7 +370,11 @@ export class PluginRuntime {
                                 return inStaged as T
                             }
                         }
-                        const resolved = this.serviceResolver?.(serviceId)
+                        const resolved = this.serviceResolver?.(serviceId, {
+                            manifest: pkg.manifest,
+                            generation: nextGeneration,
+                            capabilityClient,
+                        })
                         if (resolved !== undefined) {
                             return resolved as T
                         }
@@ -950,7 +968,11 @@ export class PluginRuntime {
                 if (service !== undefined) {
                     return service
                 }
-                const resolved = this.serviceResolver?.(serviceId)
+                const resolved = this.serviceResolver?.(serviceId, {
+                    manifest: pkg.manifest,
+                    generation: nextGeneration,
+                    capabilityClient,
+                })
                 if (resolved !== undefined) {
                     return resolved as T
                 }

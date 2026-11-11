@@ -1213,4 +1213,135 @@ describe('WebServerService', () => {
       expect(data.error).toContain('Failed to start')
     })
   })
+
+  describe('Internal Loopback Listener for Tunnel Proxy', () => {
+    it('acquires and ref-counts an internal 127.0.0.1 loopback endpoint while keeping public getStatus().running false', async () => {
+      const [ep1, ep2] = await Promise.all([
+        service.acquireLoopbackEndpoint(),
+        service.acquireLoopbackEndpoint(),
+      ])
+
+      expect(ep1).toEqual(ep2)
+      expect(ep1.host).toBe('127.0.0.1')
+      expect(ep1.port).toBeGreaterThan(0)
+      expect(ep1.origin).toBe(`http://127.0.0.1:${ep1.port}`)
+      expect(service.getLoopbackEndpoint()).toEqual(ep1)
+      expect(service.getStatus().running).toBe(false)
+
+      const healthRes = await fetch(`${ep1.origin}/api/health`)
+      expect(healthRes.status).toBe(200)
+
+      const ws = new WebSocket(`ws://127.0.0.1:${ep1.port}/api/ws`)
+      const messages: any[] = []
+      await new Promise<void>((resolve, reject) => {
+        ws.on('message', (raw) => {
+          const parsed = JSON.parse(raw.toString())
+          messages.push(parsed)
+          if (parsed.type === 'hello') {
+            resolve()
+          }
+        })
+        ws.once('error', reject)
+      })
+
+      const clientId = messages[0].clientId
+      expect(typeof clientId).toBe('string')
+
+      const eventReceived = new Promise<any>((resolve) => {
+        ws.on('message', (raw) => {
+          const parsed = JSON.parse(raw.toString())
+          if (parsed.type === 'event') {
+            resolve(parsed.event)
+          }
+        })
+      })
+
+      service.broadcastEvent({
+        operationId: 'op-loopback',
+        sequence: 1,
+        kind: 'session:updated',
+      })
+
+      const receivedEvt = await eventReceived
+      expect(receivedEvt.operationId).toBe('op-loopback')
+      expect(service.sendToClient(clientId, { type: 'capability_event', subscriptionId: 's1', payload: { ok: true } })).toBe(true)
+
+      ws.close()
+
+      await service.releaseLoopbackEndpoint()
+      expect(service.getLoopbackEndpoint()).toEqual(ep1)
+      const healthStillUp = await fetch(`${ep1.origin}/api/health`)
+      expect(healthStillUp.status).toBe(200)
+
+      await service.releaseLoopbackEndpoint()
+      expect(service.getLoopbackEndpoint()).toBeNull()
+      await expect(fetch(`${ep1.origin}/api/health`)).rejects.toThrow()
+    })
+
+    it('stopping public web server preserves active loopback server, loopback WS clients, and auth sessions', async () => {
+      const pubStatus = await service.start({ host: '127.0.0.1', port: 0, password: 'secret' })
+      expect(pubStatus.running).toBe(true)
+
+      const ep = await service.acquireLoopbackEndpoint()
+      const cookie = await login(ep.port, 'secret')
+
+      const ws = new WebSocket(`ws://127.0.0.1:${ep.port}/api/ws`, {
+        headers: {
+          ...authenticatedHeaders(cookie),
+          Origin: ep.origin,
+        },
+      })
+      await new Promise<void>((resolve, reject) => {
+        ws.on('message', (raw) => {
+          const parsed = JSON.parse(raw.toString())
+          if (parsed.type === 'hello') resolve()
+        })
+        ws.once('error', reject)
+      })
+
+      await service.stop()
+      expect(service.getStatus().running).toBe(false)
+      expect(ws.readyState).toBe(WebSocket.OPEN)
+
+      const statusRes = await fetch(`${ep.origin}/api/status`, {
+        headers: {
+          ...authenticatedHeaders(cookie),
+          Origin: ep.origin,
+        },
+      })
+      expect(statusRes.status).toBe(200)
+
+      ws.close()
+      await service.releaseLoopbackEndpoint()
+    })
+
+    it('changing password via configure() while public server is stopped immediately closes loopback WS clients with 4401', async () => {
+      const ep = await service.acquireLoopbackEndpoint()
+      service.configure({ password: 'p1' })
+
+      const cookie = await login(ep.port, 'p1')
+      const ws = new WebSocket(`ws://127.0.0.1:${ep.port}/api/ws`, {
+        headers: {
+          ...authenticatedHeaders(cookie),
+          Origin: ep.origin,
+        },
+      })
+      await new Promise<void>((resolve, reject) => {
+        ws.on('message', (raw) => {
+          if (JSON.parse(raw.toString()).type === 'hello') resolve()
+        })
+        ws.once('error', reject)
+      })
+
+      const closePromise = new Promise<number>((resolve) => {
+        ws.once('close', (code) => resolve(code))
+      })
+
+      service.configure({ password: 'p2' })
+      const closeCode = await closePromise
+      expect(closeCode).toBe(4401)
+
+      await service.releaseLoopbackEndpoint()
+    })
+  })
 })

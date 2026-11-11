@@ -19,6 +19,7 @@
         "filesystem.*",
         "native.*",
         "webserver.*",
+        "tunnel.*",
         "plugins.read",
         "plugins.manage",
         "plugins.install",

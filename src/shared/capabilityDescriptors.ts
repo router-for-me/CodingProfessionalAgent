@@ -112,6 +112,7 @@ export const RENDERER_CAPABILITY_DESCRIPTORS: readonly RendererCapabilityDescrip
 
     // Web Server
     { name: 'WebServerStart', method: 'webserver:start', capability: 'webserver.manage' },
+    { name: 'WebServerConfigure', method: 'webserver:configure', capability: 'webserver.manage' },
     { name: 'WebServerStop', method: 'webserver:stop', capability: 'webserver.manage' },
     { name: 'WebServerGetStatus', method: 'webserver:getStatus', capability: 'webserver.read' },
 
@@ -140,6 +141,10 @@ export const RENDERER_CAPABILITY_DESCRIPTORS: readonly RendererCapabilityDescrip
 
     // Gateway Discovery
     { name: 'GatewayDiscover', method: 'gateway:discover', capability: 'gateway.discover' },
+
+    // CLIProxyAPI WebSocket Tunnel
+    { name: 'TunnelGetStatus', method: 'tunnel:getStatus', capability: 'tunnel.read' },
+    { name: 'TunnelSyncConfig', method: 'tunnel:syncConfig', capability: 'tunnel.manage' },
 ])
 
 export const rendererFacingDescriptorNames: readonly string[] = Object.freeze(

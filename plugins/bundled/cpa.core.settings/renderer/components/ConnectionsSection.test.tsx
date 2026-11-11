@@ -31,6 +31,7 @@ describe('ConnectionsSection', () => {
     const originalInnerHeight = window.innerHeight
     let mockWebServer: {
         getStatus: ReturnType<typeof vi.fn>
+        configure: ReturnType<typeof vi.fn>
         start: ReturnType<typeof vi.fn>
         stop: ReturnType<typeof vi.fn>
     }
@@ -55,6 +56,7 @@ describe('ConnectionsSection', () => {
                 port: 18080,
                 url: '',
             }),
+            configure: vi.fn().mockResolvedValue(undefined),
             start: vi.fn().mockImplementation(async (cfg) => ({
                 running: true,
                 host: cfg?.host || '127.0.0.1',
@@ -1296,6 +1298,177 @@ describe('ConnectionsSection', () => {
 
             act(() => {
                 resolvePending([])
+            })
+        })
+    })
+
+    describe('CLIProxyAPI Tunnel toggle & live status', () => {
+        let statusListeners: Set<(st: any) => void>
+        let mockTunnel: {
+            getStatus: ReturnType<typeof vi.fn>
+            syncConfig: ReturnType<typeof vi.fn>
+            subscribeStatus: ReturnType<typeof vi.fn>
+        }
+
+        beforeEach(() => {
+            statusListeners = new Set()
+            mockTunnel = {
+                getStatus: vi.fn().mockResolvedValue({
+                    enabled: false,
+                    phase: 'stopped',
+                    serverUuid: 'persisted-uuid-001',
+                    serverName: 'MacBook-Pro',
+                    tunnelUrl: '',
+                    connectedClients: 0,
+                    retryAttempt: 0,
+                }),
+                syncConfig: vi.fn().mockImplementation(async (cfg) => ({
+                    enabled: Boolean(cfg.enabled),
+                    phase: cfg.enabled ? 'connecting' : 'stopped',
+                    serverUuid: 'persisted-uuid-001',
+                    serverName: 'MacBook-Pro',
+                    tunnelUrl: '',
+                    connectedClients: 0,
+                    retryAttempt: 0,
+                })),
+                subscribeStatus: vi.fn((listener: (st: any) => void) => {
+                    statusListeners.add(listener)
+                    return () => {
+                        statusListeners.delete(listener)
+                    }
+                }),
+            }
+            hostServices.tunnel = mockTunnel as any
+        })
+
+        it('renders Enable CLIProxyAPI Tunnel switch below API key in English and Simplified Chinese ("开启CLIProxyAPI Tunnel")', async () => {
+            const { unmount } = renderWithServices()
+
+            const enSwitch = await screen.findByRole('switch', {
+                name: 'Enable CLIProxyAPI Tunnel',
+            })
+            expect(enSwitch).toHaveAttribute('aria-checked', 'false')
+
+            const apiKeyInput = screen.getByLabelText('API key')
+            expect(
+                apiKeyInput.compareDocumentPosition(enSwitch) &
+                    Node.DOCUMENT_POSITION_FOLLOWING,
+            ).toBeTruthy()
+
+            unmount()
+
+            await act(async () => {
+                await i18n.changeLanguage('zh-CN')
+            })
+            renderWithServices()
+
+            const zhSwitch = await screen.findByRole('switch', {
+                name: '开启CLIProxyAPI Tunnel',
+            })
+            expect(zhSwitch).toBeInTheDocument()
+            expect(screen.getByText('开启CLIProxyAPI Tunnel')).toBeInTheDocument()
+        })
+
+        it('toggles tunnelEnabled, invokes tunnel.syncConfig immediately, and updates inline status from subscribeStatus', async () => {
+            useSettingsStore.getState().setCliProxyApi({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'sk-tunnel-123',
+            })
+
+            renderWithServices()
+
+            const tunnelSwitch = await screen.findByRole('switch', {
+                name: 'Enable CLIProxyAPI Tunnel',
+            })
+
+            await act(async () => {
+                fireEvent.click(tunnelSwitch)
+            })
+
+            expect(useSettingsStore.getState().settings.cliProxyApi.tunnelEnabled).toBe(true)
+            expect(mockTunnel.syncConfig).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    enabled: true,
+                    baseUrl: 'http://127.0.0.1:8317',
+                    apiKey: 'sk-tunnel-123',
+                }),
+            )
+
+            // Emit connected status
+            await act(async () => {
+                for (const fn of statusListeners) {
+                    fn({
+                        enabled: true,
+                        phase: 'connected',
+                        serverUuid: 'persisted-uuid-001',
+                        serverName: 'MacBook-Pro',
+                        tunnelUrl: 'ws://127.0.0.1:8317/v1/tunnel',
+                        connectedClients: 2,
+                        retryAttempt: 0,
+                    })
+                }
+            })
+            expect(screen.getByText('Connected')).toBeInTheDocument()
+            expect(screen.getByText('MacBook-Pro')).toBeInTheDocument()
+
+            // Emit reconnecting status with real server uuid_conflict errorCode
+            await act(async () => {
+                for (const fn of statusListeners) {
+                    fn({
+                        enabled: true,
+                        phase: 'reconnecting',
+                        serverUuid: 'persisted-uuid-001',
+                        serverName: 'MacBook-Pro',
+                        tunnelUrl: 'ws://127.0.0.1:8317/v1/tunnel',
+                        connectedClients: 0,
+                        retryAttempt: 3,
+                        errorCode: 'uuid_conflict',
+                    })
+                }
+            })
+            expect(screen.getByText(/Reconnecting \(attempt 3\)/)).toBeInTheDocument()
+            expect(screen.getByText(/Tunnel node identifier conflict/)).toBeInTheDocument()
+
+            // Emit real server unauthorized error status (401)
+            await act(async () => {
+                for (const fn of statusListeners) {
+                    fn({
+                        enabled: true,
+                        phase: 'error',
+                        serverUuid: 'persisted-uuid-001',
+                        serverName: 'MacBook-Pro',
+                        tunnelUrl: '',
+                        connectedClients: 0,
+                        retryAttempt: 0,
+                        errorCode: 'unauthorized',
+                    })
+                }
+            })
+            expect(screen.getByText(/Authentication rejected/)).toBeInTheDocument()
+        })
+
+        it('syncs updated Web access password via webServer.configure immediately even when Web Server is disabled', async () => {
+            useSettingsStore.getState().setCliProxyApi({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'sk-tunnel-123',
+                tunnelEnabled: true,
+            })
+            useSettingsStore.getState().setWebServer({
+                enabled: false,
+                host: '127.0.0.1',
+                port: 18080,
+                password: '',
+            })
+
+            renderWithServices()
+
+            const passwordInput = await screen.findByLabelText('Web access password')
+            await act(async () => {
+                fireEvent.change(passwordInput, { target: { value: 'new-tunnel-pass' } })
+            })
+
+            expect(mockWebServer.configure).toHaveBeenCalledWith({
+                password: 'new-tunnel-pass',
             })
         })
     })

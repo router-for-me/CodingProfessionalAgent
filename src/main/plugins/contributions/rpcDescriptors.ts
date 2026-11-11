@@ -4,6 +4,7 @@ import type {
     NativeEvent,
     ProcessStartRequest,
     PtyStartRequest,
+    TunnelSyncConfig,
     WebServerSettings,
     WebSocketOpenRequest,
 } from '../../../shared/types.js'
@@ -22,6 +23,7 @@ import type { EnvironmentWatcherService } from '../../services/environmentWatche
 import type { ProfilingService } from '../../services/profilingService.js'
 import type { UpdateService } from '../../services/update/updateService.js'
 import type { GatewayDiscoveryService } from '../../services/gatewayDiscoveryService.js'
+import type { CliProxyTunnelServerService } from '../../services/cliProxyTunnelService.js'
 import { getRequiredCapabilityForMethod } from '../../../shared/capabilityDescriptors.js'
 
 export interface PlatformRpcDescriptorOptions {
@@ -486,6 +488,16 @@ export function createPlatformRpcDescriptors(
 
         // WebServer
         {
+            method: 'webserver:configure',
+            aliases: ['WebServerConfigure'],
+            ipcChannel: 'webserver:configure',
+            capability: cap('webserver:configure', 'webserver.manage'),
+            invoke: async (context, args) => {
+                const cfg = (args[0] ?? {}) as Partial<WebServerSettings>
+                getService<WebServerService>('webServerService', context).configure(cfg)
+            },
+        },
+        {
             method: 'webserver:start',
             aliases: ['WebServerStart'],
             ipcChannel: 'webserver:start',
@@ -826,6 +838,36 @@ export function createPlatformRpcDescriptors(
                     'gatewayDiscoveryService',
                     context,
                 ).discover(timeoutMs)
+            },
+        },
+
+        // CLIProxyAPI WebSocket Tunnel
+        {
+            method: 'tunnel:getStatus',
+            aliases: ['TunnelGetStatus'],
+            ipcChannel: 'tunnel:getStatus',
+            capability: cap('tunnel:getStatus', 'tunnel.read'),
+            invoke: async (context) =>
+                getService<CliProxyTunnelServerService>('cliProxyTunnelService', context).getStatus(),
+        },
+        {
+            method: 'tunnel:syncConfig',
+            aliases: ['TunnelSyncConfig'],
+            ipcChannel: 'tunnel:syncConfig',
+            capability: cap('tunnel:syncConfig', 'tunnel.manage'),
+            invoke: async (context, args) => {
+                const raw = (args[0] ?? {}) as TunnelSyncConfig
+                // Strip webPassword over RPC so tunnel.manage cannot mutate WebServer password
+                const sanitized: TunnelSyncConfig = {
+                    enabled: Boolean(raw.enabled),
+                    baseUrl: typeof raw.baseUrl === 'string' ? raw.baseUrl : '',
+                    apiKey: typeof raw.apiKey === 'string' ? raw.apiKey : '',
+                    ...(typeof raw.tunnelUuid === 'string' ? { tunnelUuid: raw.tunnelUuid } : {}),
+                }
+                return getService<CliProxyTunnelServerService>(
+                    'cliProxyTunnelService',
+                    context,
+                ).syncConfig(sanitized)
             },
         },
     ]

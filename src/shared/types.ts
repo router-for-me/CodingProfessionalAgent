@@ -4,6 +4,10 @@ import type {
   CacheWarmingMode,
   CacheWarmingSettings,
   CliProxyApiSettings,
+  CliProxyTunnelPhase,
+  CliProxyTunnelService,
+  CliProxyTunnelStatus,
+  TunnelSyncConfig,
   CommandHookHandlerConfig,
   GitMergeMethod,
   GitReviewPresentation,
@@ -67,6 +71,10 @@ export type {
   CacheWarmingMode,
   CacheWarmingSettings,
   CliProxyApiSettings,
+  CliProxyTunnelPhase,
+  CliProxyTunnelService,
+  CliProxyTunnelStatus,
+  TunnelSyncConfig,
   CommandHookHandlerConfig,
   GitMergeMethod,
   GitReviewPresentation,
@@ -706,6 +714,7 @@ export interface ElectronBridgeApi {
   GetPreventSleep(): Promise<boolean>
 
   // Web Server
+  WebServerConfigure?(config?: Partial<WebServerSettings>): Promise<void>
   WebServerStart(config?: {
     host?: string
     port?: number
@@ -741,6 +750,10 @@ export interface ElectronBridgeApi {
 
   // AI Gateway Discovery
   GatewayDiscover(timeoutMs?: number): Promise<DiscoveredGateway[]>
+
+  // CLIProxyAPI WebSocket Tunnel
+  TunnelGetStatus(): Promise<CliProxyTunnelStatus>
+  TunnelSyncConfig(config: TunnelSyncConfig): Promise<CliProxyTunnelStatus>
 
   // Event stream subscription
   onNativeEvent(callback: (event: NativeEvent) => void): () => void

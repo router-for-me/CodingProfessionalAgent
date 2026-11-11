@@ -46,6 +46,12 @@ const MIME_TYPES: Record<string, string> = {
 
 export type { RpcDispatcher }
 
+export interface LoopbackEndpoint {
+    host: string
+    port: number
+    origin: string
+}
+
 export interface WebServerServiceOptions {
     distDir?: string
     isDebug?: boolean
@@ -65,6 +71,12 @@ export class WebServerService {
     private server: http.Server | null = null
     private wss: WebSocketServer | null = null
     private clients: Set<WebSocket> = new Set()
+    private loopbackServer: http.Server | null = null
+    private loopbackWss: WebSocketServer | null = null
+    private loopbackClients: Set<WebSocket> = new Set()
+    private loopbackPort = 0
+    private loopbackRefCount = 0
+    private loopbackTransition: Promise<void> = Promise.resolve()
     private clientIds: Map<WebSocket, string> = new Map()
     private running = false
     private currentHost = '127.0.0.1'
@@ -99,11 +111,20 @@ export class WebServerService {
         this.registerCoreRoutes()
     }
 
+    private hasAnyListenerRunning(): boolean {
+        return this.running || this.loopbackServer !== null
+    }
+
+    private *iterateAllClients(): IterableIterator<WebSocket> {
+        yield* this.clients
+        yield* this.loopbackClients
+    }
+
     private applyPasswordConfig(config?: Partial<WebServerSettings>): WebAuthPasswordChange {
         if (typeof config?.password !== 'string') return 'unchanged'
         const change = this.auth.setPassword(config.password)
-        if ((change === 'enabled' || change === 'changed') && this.running) {
-            for (const client of this.clients) {
+        if ((change === 'enabled' || change === 'changed') && this.hasAnyListenerRunning()) {
+            for (const client of this.iterateAllClients()) {
                 try {
                     client.close(4401, 'Web authentication required')
                 } catch {
@@ -869,11 +890,11 @@ export class WebServerService {
     }
 
     broadcastEvent(event: NativeEvent, excludeClientId?: string): void {
-        if (!this.running || this.clients.size === 0) {
+        if (!this.hasAnyListenerRunning() || (this.clients.size === 0 && this.loopbackClients.size === 0)) {
             return
         }
         const payload = JSON.stringify({ type: 'event', event })
-        for (const client of this.clients) {
+        for (const client of this.iterateAllClients()) {
             if (excludeClientId && this.clientIds.get(client) === excludeClientId) {
                 continue
             }
@@ -888,12 +909,16 @@ export class WebServerService {
     }
 
     sendToClient(clientId: string, message: unknown): boolean {
-        if (!this.running || !clientId || this.clients.size === 0) {
+        if (
+            !this.hasAnyListenerRunning() ||
+            !clientId ||
+            (this.clients.size === 0 && this.loopbackClients.size === 0)
+        ) {
             return false
         }
         const payload = JSON.stringify(message)
         let sent = false
-        for (const client of this.clients) {
+        for (const client of this.iterateAllClients()) {
             if (this.clientIds.get(client) !== clientId) {
                 continue
             }
@@ -930,6 +955,314 @@ export class WebServerService {
         }
 
         return null
+    }
+
+    private createHttpServerInstance(targetClients: Set<WebSocket>): {
+        server: http.Server
+        wss: WebSocketServer
+    } {
+        const server = http.createServer(async (req, res) => {
+            // Apply authentication mode CORS headers
+            if (!this.auth.isRequired()) {
+                res.setHeader('Access-Control-Allow-Origin', '*')
+                res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, HEAD')
+                res.setHeader('Access-Control-Allow-Headers', '*')
+            } else {
+                const origin = req.headers.origin
+                if (origin && this.auth.isSameOrigin(req)) {
+                    res.setHeader('Access-Control-Allow-Origin', Array.isArray(origin) ? origin[0] : origin)
+                }
+                res.setHeader('Vary', 'Origin')
+                res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, HEAD')
+                res.setHeader('Access-Control-Allow-Headers', '*')
+            }
+
+            const reqUrl = req.url || '/'
+            const parsedUrl = new URL(reqUrl, `http://${req.headers.host || 'localhost'}`)
+            const pathname = parsedUrl.pathname
+
+            // Dynamic route detection for protection and cache headers
+            const isDynamicRoute =
+                pathname === '/api' ||
+                pathname === '/debug' ||
+                pathname.startsWith('/api/') ||
+                pathname.startsWith('/debug/')
+
+            if (isDynamicRoute) {
+                res.setHeader('Cache-Control', 'no-store')
+            }
+
+            const method = req.method || 'GET'
+            const route = this.routeRegistry.match(method, pathname)
+
+            // Protected API and debug routes
+            const isProtected = route !== undefined ? route.authenticate : isDynamicRoute
+            if (isProtected && this.auth.isRequired()) {
+                if (!this.auth.isSameOrigin(req)) {
+                    this.writeJson(res, 403, { error: 'Forbidden' })
+                    return
+                }
+                if (!this.auth.isAuthenticated(req)) {
+                    this.writeJson(res, 401, { error: 'Unauthorized' })
+                    return
+                }
+            }
+
+            if (method === 'OPTIONS') {
+                res.writeHead(204)
+                res.end()
+                return
+            }
+
+            if (!route) {
+                this.writeJson(res, 404, { error: 'Not Found' })
+                return
+            }
+
+            let bodyBuffer: Uint8Array | undefined
+            try {
+                bodyBuffer = await this.readRequestBody(req)
+            } catch (err) {
+                const isTooLarge = err instanceof RangeError
+                const status = isTooLarge ? 413 : 400
+                this.writeJson(res, status, {
+                    error: isTooLarge ? 'Request body too large' : 'Invalid request body',
+                })
+                return
+            }
+
+            const webReq: WebRouteRequest = {
+                method,
+                url: reqUrl,
+                headers: req.headers,
+                body: bodyBuffer,
+            }
+
+            const routeContext = this.identityAdapter.createRouteContext(webReq)
+            ;(routeContext as any).rawRequest = req
+
+            try {
+                const response = await route.handle(routeContext)
+                if (res.writableEnded || res.destroyed) return
+
+                if (response) {
+                    res.writeHead(response.status, response.headers as any)
+                    if (response.body !== undefined) {
+                        res.end(response.body)
+                    } else {
+                        res.end()
+                    }
+                }
+            } catch (err: unknown) {
+                if (res.writableEnded || res.destroyed) return
+                const message = (err as Error)?.message || String(err)
+                this.writeJson(res, 500, { ok: false, error: message })
+            }
+        })
+
+        // WebSocket server setup
+        const wss = new WebSocketServer({ noServer: true })
+
+        server.on('upgrade', (request, socket, head) => {
+            const parsedUrl = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`)
+            const pathname = parsedUrl.pathname
+            // Handle WebSocket upgrade on /api/ws, /ws, or /
+            if (pathname === '/api/ws' || pathname === '/ws' || pathname === '/') {
+                if (this.auth.isRequired()) {
+                    const sameOrigin = this.auth.isSameOrigin(request)
+                    const authenticated = this.auth.isAuthenticated(request)
+                    if (!sameOrigin || !authenticated) {
+                        const status = sameOrigin ? 401 : 403
+                        const reason = sameOrigin ? 'Unauthorized' : 'Forbidden'
+                        const body = JSON.stringify({ error: reason })
+                        const response =
+                            `HTTP/1.1 ${status} ${reason}\r\n` +
+                            'Connection: close\r\n' +
+                            'Content-Type: application/json\r\n' +
+                            'Cache-Control: no-store\r\n' +
+                            `Content-Length: ${Buffer.byteLength(body)}\r\n` +
+                            '\r\n' +
+                            body
+                        socket.end(response)
+                        return
+                    }
+                }
+                wss.handleUpgrade(request, socket, head, (ws) => {
+                    wss.emit('connection', ws, request)
+                })
+            } else {
+                const body = JSON.stringify({ error: 'Not Found' })
+                const response =
+                    'HTTP/1.1 404 Not Found\r\n' +
+                    'Connection: close\r\n' +
+                    'Content-Type: application/json\r\n' +
+                    'Cache-Control: no-store\r\n' +
+                    `Content-Length: ${Buffer.byteLength(body)}\r\n` +
+                    '\r\n' +
+                    body
+                socket.end(response)
+            }
+        })
+
+        wss.on('connection', (ws) => {
+            const clientId = this.identityAdapter.generateWsClientId()
+            targetClients.add(ws)
+            this.clientIds.set(ws, clientId)
+
+            // Send hello immediately on connection
+            try {
+                ws.send(JSON.stringify({ type: 'hello', clientId }))
+            } catch {
+                // Ignore send error for closing connection
+            }
+
+            let disconnected = false
+            const handleDisconnect = () => {
+                if (disconnected) return
+                disconnected = true
+                targetClients.delete(ws)
+                this.clientIds.delete(ws)
+                this.onClientDisconnectCallback?.(clientId)
+            }
+
+            ws.on('message', async (data) => {
+                try {
+                    const rawMsg = data.toString()
+                    const res = await this.rpcTransport.handleWsMessage(rawMsg, { clientId })
+                    if (res.response && ws.readyState === 1) { // WebSocket.OPEN
+                        ws.send(JSON.stringify(res.response))
+                    }
+                } catch (err) {
+                    console.error('Error handling WebSocket message:', err)
+                }
+            })
+
+            ws.on('close', () => {
+                handleDisconnect()
+            })
+
+            ws.on('error', () => {
+                handleDisconnect()
+            })
+        })
+
+        return { server, wss }
+    }
+
+    getLoopbackEndpoint(): LoopbackEndpoint | null {
+        if (!this.loopbackServer || this.loopbackPort <= 0) {
+            return null
+        }
+        return {
+            host: '127.0.0.1',
+            port: this.loopbackPort,
+            origin: `http://127.0.0.1:${this.loopbackPort}`,
+        }
+    }
+
+    async acquireLoopbackEndpoint(): Promise<LoopbackEndpoint> {
+        let resultEndpoint: LoopbackEndpoint | null = null
+        let startError: unknown = null
+
+        const run = this.loopbackTransition.then(async () => {
+            this.loopbackRefCount += 1
+            if (this.loopbackServer && this.loopbackPort > 0) {
+                resultEndpoint = this.getLoopbackEndpoint()
+                return
+            }
+
+            const { server, wss } = this.createHttpServerInstance(this.loopbackClients)
+            try {
+                await new Promise<void>((resolve, reject) => {
+                    server.once('error', (err) => reject(err))
+                    server.listen(0, '127.0.0.1', () => resolve())
+                })
+                const addr = server.address()
+                const boundPort = typeof addr === 'object' && addr ? addr.port : 0
+                if (!boundPort) {
+                    server.close()
+                    throw new Error('Failed to bind ephemeral loopback port')
+                }
+                this.loopbackServer = server
+                this.loopbackWss = wss
+                this.loopbackPort = boundPort
+                resultEndpoint = this.getLoopbackEndpoint()
+            } catch (err) {
+                this.loopbackRefCount = Math.max(0, this.loopbackRefCount - 1)
+                startError = err
+            }
+        })
+
+        this.loopbackTransition = run.catch(() => {})
+        await run
+
+        if (startError) {
+            throw startError
+        }
+        if (!resultEndpoint) {
+            throw new Error('Loopback endpoint unavailable')
+        }
+        return resultEndpoint
+    }
+
+    private async closeClientSet(targetClients: Set<WebSocket>, authRequired: boolean): Promise<void> {
+        for (const client of Array.from(targetClients)) {
+            try {
+                if (authRequired) {
+                    client.close(4401, 'Web authentication required')
+                } else {
+                    client.close()
+                }
+            } catch {
+                // Ignore close errors
+            }
+            this.clientIds.delete(client)
+        }
+        targetClients.clear()
+    }
+
+    private async stopLoopbackInternal(): Promise<void> {
+        if (!this.loopbackServer && !this.loopbackWss) {
+            this.loopbackPort = 0
+            return
+        }
+
+        await this.closeClientSet(this.loopbackClients, this.auth.isRequired())
+
+        if (this.loopbackWss) {
+            try {
+                this.loopbackWss.close()
+            } catch {
+                // Ignore close errors
+            }
+            this.loopbackWss = null
+        }
+
+        if (this.loopbackServer) {
+            const srv = this.loopbackServer
+            this.loopbackServer = null
+            await new Promise<void>((resolve) => {
+                srv.close(() => resolve())
+            })
+        }
+
+        this.loopbackPort = 0
+        if (!this.running) {
+            this.auth.clearSessions()
+        }
+    }
+
+    async releaseLoopbackEndpoint(): Promise<void> {
+        const run = this.loopbackTransition.then(async () => {
+            if (this.loopbackRefCount > 0) {
+                this.loopbackRefCount -= 1
+            }
+            if (this.loopbackRefCount === 0) {
+                await this.stopLoopbackInternal()
+            }
+        })
+        this.loopbackTransition = run.catch(() => {})
+        await run
     }
 
     async start(config?: Partial<WebServerSettings>): Promise<WebServerStatus> {
@@ -978,213 +1311,30 @@ export class WebServerService {
             this.lastError = undefined
 
             return new Promise<WebServerStatus>((resolve) => {
-                const server = http.createServer(async (req, res) => {
-                // Apply authentication mode CORS headers
-                if (!this.auth.isRequired()) {
-                    res.setHeader('Access-Control-Allow-Origin', '*')
-                    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, HEAD')
-                    res.setHeader('Access-Control-Allow-Headers', '*')
-                } else {
-                    const origin = req.headers.origin
-                    if (origin && this.auth.isSameOrigin(req)) {
-                        res.setHeader('Access-Control-Allow-Origin', Array.isArray(origin) ? origin[0] : origin)
-                    }
-                    res.setHeader('Vary', 'Origin')
-                    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, HEAD')
-                    res.setHeader('Access-Control-Allow-Headers', '*')
-                }
+                const { server, wss } = this.createHttpServerInstance(this.clients)
 
-                const reqUrl = req.url || '/'
-                const parsedUrl = new URL(reqUrl, `http://${req.headers.host || 'localhost'}`)
-                const pathname = parsedUrl.pathname
-
-                // Dynamic route detection for protection and cache headers
-                const isDynamicRoute =
-                    pathname === '/api' ||
-                    pathname === '/debug' ||
-                    pathname.startsWith('/api/') ||
-                    pathname.startsWith('/debug/')
-
-                if (isDynamicRoute) {
-                    res.setHeader('Cache-Control', 'no-store')
-                }
-
-                const method = req.method || 'GET'
-                const route = this.routeRegistry.match(method, pathname)
-
-                // Protected API and debug routes
-                const isProtected = route !== undefined ? route.authenticate : isDynamicRoute
-                if (isProtected && this.auth.isRequired()) {
-                    if (!this.auth.isSameOrigin(req)) {
-                        this.writeJson(res, 403, { error: 'Forbidden' })
-                        return
-                    }
-                    if (!this.auth.isAuthenticated(req)) {
-                        this.writeJson(res, 401, { error: 'Unauthorized' })
-                        return
-                    }
-                }
-
-                if (method === 'OPTIONS') {
-                    res.writeHead(204)
-                    res.end()
-                    return
-                }
-
-                if (!route) {
-                    this.writeJson(res, 404, { error: 'Not Found' })
-                    return
-                }
-
-                let bodyBuffer: Uint8Array | undefined
-                try {
-                    bodyBuffer = await this.readRequestBody(req)
-                } catch (err) {
-                    const isTooLarge = err instanceof RangeError
-                    const status = isTooLarge ? 413 : 400
-                    this.writeJson(res, status, {
-                        error: isTooLarge ? 'Request body too large' : 'Invalid request body',
-                    })
-                    return
-                }
-
-                const webReq: WebRouteRequest = {
-                    method,
-                    url: reqUrl,
-                    headers: req.headers,
-                    body: bodyBuffer,
-                }
-
-                const routeContext = this.identityAdapter.createRouteContext(webReq)
-                ;(routeContext as any).rawRequest = req
-
-                try {
-                    const response = await route.handle(routeContext)
-                    if (res.writableEnded || res.destroyed) return
-
-                    if (response) {
-                        res.writeHead(response.status, response.headers as any)
-                        if (response.body !== undefined) {
-                            res.end(response.body)
-                        } else {
-                            res.end()
-                        }
-                    }
-                } catch (err: unknown) {
-                    if (res.writableEnded || res.destroyed) return
-                    const message = (err as Error)?.message || String(err)
-                    this.writeJson(res, 500, { ok: false, error: message })
-                }
-            })
-
-            // WebSocket server setup
-            const wss = new WebSocketServer({ noServer: true })
-
-            server.on('upgrade', (request, socket, head) => {
-                const parsedUrl = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`)
-                const pathname = parsedUrl.pathname
-                // Handle WebSocket upgrade on /api/ws, /ws, or /
-                if (pathname === '/api/ws' || pathname === '/ws' || pathname === '/') {
-                    if (this.auth.isRequired()) {
-                        const sameOrigin = this.auth.isSameOrigin(request)
-                        const authenticated = this.auth.isAuthenticated(request)
-                        if (!sameOrigin || !authenticated) {
-                            const status = sameOrigin ? 401 : 403
-                            const reason = sameOrigin ? 'Unauthorized' : 'Forbidden'
-                            const body = JSON.stringify({ error: reason })
-                            const response =
-                                `HTTP/1.1 ${status} ${reason}\r\n` +
-                                'Connection: close\r\n' +
-                                'Content-Type: application/json\r\n' +
-                                'Cache-Control: no-store\r\n' +
-                                `Content-Length: ${Buffer.byteLength(body)}\r\n` +
-                                '\r\n' +
-                                body
-                            socket.end(response)
-                            return
-                        }
-                    }
-                    wss.handleUpgrade(request, socket, head, (ws) => {
-                        wss.emit('connection', ws, request)
-                    })
-                } else {
-                    const body = JSON.stringify({ error: 'Not Found' })
-                    const response =
-                        'HTTP/1.1 404 Not Found\r\n' +
-                        'Connection: close\r\n' +
-                        'Content-Type: application/json\r\n' +
-                        'Cache-Control: no-store\r\n' +
-                        `Content-Length: ${Buffer.byteLength(body)}\r\n` +
-                        '\r\n' +
-                        body
-                    socket.end(response)
-                }
-            })
-
-            wss.on('connection', (ws) => {
-                const clientId = this.identityAdapter.generateWsClientId()
-                this.clients.add(ws)
-                this.clientIds.set(ws, clientId)
-
-                // Send hello immediately on connection
-                try {
-                    ws.send(JSON.stringify({ type: 'hello', clientId }))
-                } catch {
-                    // Ignore send error for closing connection
-                }
-
-                let disconnected = false
-                const handleDisconnect = () => {
-                    if (disconnected) return
-                    disconnected = true
-                    this.clients.delete(ws)
-                    this.clientIds.delete(ws)
-                    this.onClientDisconnectCallback?.(clientId)
-                }
-
-                ws.on('message', async (data) => {
-                    try {
-                        const rawMsg = data.toString()
-                        const res = await this.rpcTransport.handleWsMessage(rawMsg, { clientId })
-                        if (res.response && ws.readyState === 1) { // WebSocket.OPEN
-                            ws.send(JSON.stringify(res.response))
-                        }
-                    } catch (err) {
-                        console.error('Error handling WebSocket message:', err)
-                    }
+                server.once('error', (err: NodeJS.ErrnoException) => {
+                    this.running = false
+                    this.server = null
+                    this.wss = null
+                    this.lastError = err.code === 'EADDRINUSE'
+                        ? `Port ${port} is already in use`
+                        : err.message || 'Failed to start Web Server'
+                    resolve(this.getStatus())
                 })
 
-                ws.on('close', () => {
-                    handleDisconnect()
+                server.listen(port, host, () => {
+                    this.running = true
+                    this.server = server
+                    this.wss = wss
+                    const addr = server.address()
+                    if (typeof addr === 'object' && addr && addr.port) {
+                        this.currentPort = addr.port
+                    }
+                    this.lastError = undefined
+                    resolve(this.getStatus())
                 })
-
-                ws.on('error', () => {
-                    handleDisconnect()
-                })
             })
-
-            server.once('error', (err: NodeJS.ErrnoException) => {
-                this.running = false
-                this.server = null
-                this.wss = null
-                this.lastError = err.code === 'EADDRINUSE'
-                    ? `Port ${port} is already in use`
-                    : err.message || 'Failed to start Web Server'
-                resolve(this.getStatus())
-            })
-
-            server.listen(port, host, () => {
-                this.running = true
-                this.server = server
-                this.wss = wss
-                const addr = server.address()
-                if (typeof addr === 'object' && addr && addr.port) {
-                    this.currentPort = addr.port
-                }
-                this.lastError = undefined
-                resolve(this.getStatus())
-            })
-        })
         })().finally(() => {
             this.startInFlight = null
             this.startInFlightConfig = undefined
@@ -1195,26 +1345,16 @@ export class WebServerService {
 
     async stop(): Promise<WebServerStatus> {
         if (!this.running && !this.server) {
-            this.auth.clearSessions()
+            if (!this.loopbackServer) {
+                this.auth.clearSessions()
+            }
             return this.getStatus()
         }
 
         const authRequired = this.auth.isRequired()
 
-        // Close all active client WebSockets
-        for (const client of this.clients) {
-            try {
-                if (authRequired) {
-                    client.close(4401, 'Web authentication required')
-                } else {
-                    client.close()
-                }
-            } catch {
-                // Ignore close errors
-            }
-        }
-        this.clients.clear()
-        this.clientIds.clear()
+        // Close active public client WebSockets only (preserve internal loopback clients)
+        await this.closeClientSet(this.clients, authRequired)
 
         if (this.wss) {
             try {
@@ -1226,21 +1366,29 @@ export class WebServerService {
         }
 
         if (this.server) {
+            const srv = this.server
+            this.server = null
             await new Promise<void>((resolve) => {
-                this.server?.close(() => {
+                srv.close(() => {
                     resolve()
                 })
             })
-            this.server = null
         }
 
         this.running = false
         this.lastError = undefined
-        this.auth.clearSessions()
+        if (!this.loopbackServer) {
+            this.auth.clearSessions()
+        }
         return this.getStatus()
     }
 
     dispose(): void {
+        this.loopbackRefCount = 0
         void this.stop()
+        const run = this.loopbackTransition.then(async () => {
+            await this.stopLoopbackInternal()
+        })
+        this.loopbackTransition = run.catch(() => {})
     }
 }

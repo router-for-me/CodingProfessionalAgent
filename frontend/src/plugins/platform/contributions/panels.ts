@@ -5,7 +5,7 @@ import type {
     PanelContribution,
     PanelOpenContext,
 } from '@cpa/plugin-api'
-import { getHostServices } from '@/application/services/createHostServices'
+import { getSanitizedHostServices } from '@/application/services/createHostServices'
 import { rendererRegistry, RendererRegistry } from '../rendererRegistry'
 
 export type {
@@ -20,7 +20,7 @@ export type {
  */
 export function createPanelContext(activeSessionId?: string): PanelContext {
     return {
-        services: getHostServices(),
+        services: getSanitizedHostServices(),
         activeSessionId,
     }
 }

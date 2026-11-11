@@ -1099,6 +1099,28 @@ describe('persist pure helpers', () => {
     })
   })
 
+  it('preserves cliProxyApi.tunnelEnabled and tunnelUuid across serialize and hydrate', () => {
+    expect(Boolean(useSettingsStore.getState().settings.cliProxyApi.tunnelEnabled)).toBe(false)
+
+    useSettingsStore.getState().setCliProxyApi({
+      baseUrl: 'http://127.0.0.1:8317',
+      apiKey: 'secret-key',
+      tunnelEnabled: true,
+      tunnelUuid: 'tunnel-uuid-9876',
+    })
+    const snapshot = serializeAppState()
+
+    resetAllStores()
+    applyPersistedState(snapshot)
+
+    expect(useSettingsStore.getState().settings.cliProxyApi).toEqual({
+      baseUrl: 'http://127.0.0.1:8317',
+      apiKey: 'secret-key',
+      tunnelEnabled: true,
+      tunnelUuid: 'tunnel-uuid-9876',
+    })
+  })
+
   it('fills CLIProxyAPI defaults for legacy snapshots', () => {
     const legacyState = {
       version: 1,

@@ -224,6 +224,7 @@ export const bundledManifests: Readonly<Record<string, PluginManifest>> = Object
                 "filesystem.*",
                 "native.*",
                 "webserver.*",
+                "tunnel.*",
                 "plugins.read",
                 "plugins.manage",
                 "plugins.install",

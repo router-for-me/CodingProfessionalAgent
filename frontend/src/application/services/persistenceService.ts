@@ -647,6 +647,12 @@ function normalizeSettings(
       rawCliProxyApi && typeof rawCliProxyApi.apiKey === 'string'
         ? rawCliProxyApi.apiKey
         : '',
+    ...(typeof rawCliProxyApi?.tunnelEnabled === 'boolean'
+      ? { tunnelEnabled: rawCliProxyApi.tunnelEnabled }
+      : {}),
+    ...(typeof rawCliProxyApi?.tunnelUuid === 'string' && rawCliProxyApi.tunnelUuid.trim()
+      ? { tunnelUuid: rawCliProxyApi.tunnelUuid.trim() }
+      : {}),
   }
   const reasoningLevel =
     typeof next.reasoningLevel === 'string' && next.reasoningLevel.trim()

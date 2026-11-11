@@ -19,9 +19,12 @@ import {
     type HookConfiguration,
     PluginManagementUnavailableError,
     GatewayDiscoveryServiceToken,
+    TunnelServiceToken,
+    WebServerServiceToken,
+    type CliProxyTunnelStatus,
     type DiscoveredGateway,
 } from '@cpa/plugin-api'
-import { useHostService } from '@cpa/plugin-ui'
+import { HostServicesProvider, getDefaultHostServices, useHostService } from '@cpa/plugin-ui'
 import { renderHook } from '@testing-library/react'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
@@ -843,5 +846,227 @@ describe('createHostServices', () => {
         // Verify GatewayDiscoveryServiceToken resolution via HostServices
         const { result: hookResult } = renderHook(() => useHostService(GatewayDiscoveryServiceToken))
         expect(hookResult.current).toBe(services.gatewayDiscovery)
+    })
+
+    it('exposes TunnelServiceToken via scoped capabilityClient HostServices and forwards tunnel:status-changed events', async () => {
+        let statusListener: ((payload: unknown) => void) | null = null
+        const initialStatus: CliProxyTunnelStatus = {
+            enabled: false,
+            phase: 'stopped',
+            serverUuid: 'uuid-test-1',
+            serverName: 'CPA-Host',
+            tunnelUrl: '',
+            connectedClients: 0,
+            retryAttempt: 0,
+        }
+        const connectedStatus: CliProxyTunnelStatus = {
+            enabled: true,
+            phase: 'connected',
+            serverUuid: 'uuid-test-1',
+            serverName: 'CPA-Host',
+            tunnelUrl: 'ws://127.0.0.1:8317/v1/tunnel',
+            connectedClients: 1,
+            retryAttempt: 0,
+        }
+        const scopedClient = {
+            invoke: vi.fn(async (method: string) => {
+                if (method === 'tunnel:getStatus') return initialStatus
+                if (method === 'tunnel:syncConfig') return connectedStatus
+                return undefined
+            }),
+            subscribe: vi.fn((event: string, cb: (payload: unknown) => void) => {
+                if (event === 'tunnel:status-changed') {
+                    statusListener = cb
+                }
+                return () => {
+                    statusListener = null
+                }
+            }),
+        }
+
+        const services = createHostServices({ capabilityClient: scopedClient })
+        expect(services.tunnel).toBeDefined()
+
+        const React = await import('react')
+        const { result: hookResult } = renderHook(() => useHostService(TunnelServiceToken), {
+            wrapper: ({ children }) =>
+                React.createElement(HostServicesProvider, { services, children }),
+        })
+        expect(hookResult.current).toBe(services.tunnel)
+
+        expect(await services.tunnel!.getStatus()).toEqual(initialStatus)
+        expect(scopedClient.invoke).toHaveBeenCalledWith('tunnel:getStatus')
+
+        const received: CliProxyTunnelStatus[] = []
+        const unsub = services.tunnel!.subscribeStatus!((st) => received.push(st))
+
+        const syncRes = await services.tunnel!.syncConfig({
+            enabled: true,
+            baseUrl: 'http://127.0.0.1:8317',
+            apiKey: 'sk-tunnel',
+        })
+        expect(syncRes).toEqual(connectedStatus)
+        expect(scopedClient.invoke).toHaveBeenCalledWith('tunnel:syncConfig', [
+            {
+                enabled: true,
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'sk-tunnel',
+            },
+        ])
+
+        expect(statusListener).not.toBeNull()
+        statusListener!(JSON.stringify(connectedStatus))
+        expect(received).toEqual([connectedStatus])
+
+        unsub()
+    })
+
+    it('enforces scoped plugin capabilities on TunnelServiceToken and WebServerServiceToken across real getHostServices/setHostServices startup paths', async () => {
+        const hostTunnelSync = vi.fn().mockResolvedValue({
+            enabled: true,
+            phase: 'connected',
+            serverUuid: 'u1',
+            serverName: 'Host',
+            tunnelUrl: 'ws://127.0.0.1:8317/v1/tunnel',
+            connectedClients: 0,
+            retryAttempt: 0,
+        })
+        const hostWebConfigure = vi.fn().mockResolvedValue(undefined)
+        setHostBridge({
+            TunnelSyncConfig: hostTunnelSync,
+            WebServerConfigure: hostWebConfigure,
+        } as any)
+
+        // 1. Direct createHostServices with rejecting capabilityClient must NOT fall back to host bridge
+        const deniedCapClient = {
+            invoke: vi.fn().mockRejectedValue(new Error('Capability denied')),
+        }
+        const scopedServices = createHostServices({ capabilityClient: deniedCapClient })
+        await expect(
+            scopedServices.tunnel!.syncConfig({
+                enabled: true,
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'sk-1',
+            }),
+        ).rejects.toThrow(/denied/)
+        await expect(scopedServices.webServer!.configure!({ password: '' })).rejects.toThrow(
+            /denied/,
+        )
+        expect(hostTunnelSync).not.toHaveBeenCalled()
+        expect(hostWebConfigure).not.toHaveBeenCalled()
+
+        // 2. Real startup publication paths + PanelContext + cross-plugin isolation:
+        //    even after creating a scoped instance for Plugin A, shared defaultHostServices and PanelContext must never expose Plugin A's tunnel/webServer
+        setHostServices(createHostServices())
+        const booted = getHostServices()
+        setHostServices(booted)
+        const pluginAClient = {
+            invoke: vi.fn().mockResolvedValue(undefined),
+        }
+        const pluginAServices = createHostServices({ capabilityClient: pluginAClient })
+        expect(pluginAServices.tunnel).toBeDefined()
+        expect(pluginAServices.webServer).toBeDefined()
+
+        expect(booted.tunnel).toBeUndefined()
+        expect(booted.webServer).toBeUndefined()
+        expect(getDefaultHostServices()?.tunnel).toBeUndefined()
+        expect(getDefaultHostServices()?.webServer).toBeUndefined()
+
+        const { createPanelContext } = await import('@/plugins/platform/contributions/panels')
+        const panelContext = createPanelContext('s-1')
+        expect(panelContext.services.tunnel).toBeUndefined()
+        expect(panelContext.services.webServer).toBeUndefined()
+        expect(pluginAClient.invoke).not.toHaveBeenCalled()
+
+        // 3. End-to-end RendererPluginRuntimeHost: untrusted plugin without tunnel.manage / webserver.manage is rejected via both context.getService and useHostService
+        const { createRendererRuntimeHost } = await import(
+            '@/plugins/platform/RendererPluginRuntimeHost'
+        )
+        const { definePluginEntry } = await import('@cpa/plugin-sdk')
+        const React = await import('react')
+        const { render } = await import('@testing-library/react')
+
+        let capturedContextTunnel: any = null
+        let capturedContextWebServer: any = null
+        let capturedHookTunnel: any = null
+        let capturedHookWebServer: any = null
+
+        const untrustedManifest = {
+            id: 'cpa.test.untrusted',
+            name: 'Untrusted Plugin',
+            version: '1.0.0',
+            apiVersion: '1.0.0',
+            engines: { cpa: '>=1.0.0' },
+            entries: { renderer: './renderer/index.tsx' },
+            dependencies: {},
+            capabilities: ['sessions.read'],
+            contributes: {
+                settings: ['untrusted-sec'],
+            },
+        }
+
+        const host = createRendererRuntimeHost({
+            bundledPackages: [
+                {
+                    manifest: untrustedManifest as any,
+                    sourceRoot: '/plugins/cpa.test.untrusted',
+                    entries: { renderer: './renderer/index.tsx' },
+                    source: { kind: 'bundled', spec: 'cpa.test.untrusted' },
+                },
+            ],
+            defaultDefinitions: {
+                'cpa.test.untrusted': definePluginEntry({
+                    runtime: 'renderer',
+                    activate(ctx) {
+                        capturedContextTunnel = ctx.getService(TunnelServiceToken)
+                        capturedContextWebServer = ctx.getService(WebServerServiceToken)
+                        ctx.register({
+                            kind: 'settings',
+                            id: 'untrusted-sec',
+                            value: {
+                                id: 'untrusted-sec',
+                                labelKey: 'Untrusted',
+                                component: () => {
+                                    capturedHookTunnel = useHostService(TunnelServiceToken)
+                                    capturedHookWebServer = useHostService(WebServerServiceToken)
+                                    return React.createElement('div', null, 'untrusted')
+                                },
+                            },
+                        })
+                    },
+                }),
+            },
+        })
+        host.setPluginHandle('cpa.test.untrusted', 1, 'handle-untrusted' as any)
+        await host.activateAll()
+
+        expect(capturedContextTunnel).toBeDefined()
+        await expect(
+            capturedContextTunnel.syncConfig({
+                enabled: true,
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'sk-evil',
+            }),
+        ).rejects.toThrow(/tunnel.manage/i)
+
+        expect(capturedContextWebServer).toBeDefined()
+        await expect(capturedContextWebServer.configure({ password: '' })).rejects.toThrow(
+            /webserver.manage/i,
+        )
+
+        const contributedSection = host.registry.getSettingsSections().find(
+            (s) => s.id === 'untrusted-sec',
+        )
+        expect(contributedSection).toBeDefined()
+        const RenderedComp = contributedSection!.component
+        render(React.createElement(RenderedComp))
+
+        // Global defaultHostServices does NOT expose unscoped tunnel or webServer services to arbitrary plugin components
+        expect(capturedHookTunnel).toBeNull()
+        expect(capturedHookWebServer).toBeNull()
+        expect(hostTunnelSync).not.toHaveBeenCalled()
+        expect(hostWebConfigure).not.toHaveBeenCalled()
+
+        await host.reset()
     })
 })

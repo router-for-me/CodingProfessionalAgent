@@ -377,4 +377,64 @@ describe('KVStoreService', () => {
     expect(corruptService.getLoadError()).toBeDefined()
     corruptService.dispose()
   })
+
+  it('preserves existing settings.cliProxyApi.tunnelUuid when incoming app-state omits tunnelUuid', async () => {
+    const generatedUuid = await service.ensureTunnelUuid()
+    expect(typeof generatedUuid).toBe('string')
+    expect(generatedUuid.length).toBeGreaterThanOrEqual(8)
+
+    // Subsequent call returns the exact same persisted UUID
+    expect(await service.ensureTunnelUuid()).toBe(generatedUuid)
+
+    // Simulate frontend saving app-state without tunnelUuid
+    await service.set('app-state', {
+      settings: {
+        cliProxyApi: {
+          baseUrl: 'http://127.0.0.1:8317',
+          apiKey: 'sk-1',
+          tunnelEnabled: true,
+        },
+      },
+    })
+
+    const savedState = (await service.get('app-state')) as any
+    expect(savedState.settings.cliProxyApi.tunnelUuid).toBe(generatedUuid)
+    expect(savedState.settings.cliProxyApi.tunnelEnabled).toBe(true)
+
+    // Also verify setSync preserves existing tunnelUuid
+    service.setSync('app-state', {
+      settings: {
+        cliProxyApi: {
+          baseUrl: 'http://127.0.0.1:8317',
+          apiKey: 'sk-2',
+          tunnelEnabled: false,
+        },
+      },
+    })
+
+    const reloaded = new KVStoreService(storeFile)
+    const reloadedState = (await reloaded.get('app-state')) as any
+    expect(reloadedState.settings.cliProxyApi.tunnelUuid).toBe(generatedUuid)
+    expect(reloadedState.settings.cliProxyApi.apiKey).toBe('sk-2')
+    reloaded.dispose()
+
+    // M2: Verify set & setSync preserve existing tunnelUuid even when cliProxyApi object is omitted entirely
+    await service.set('app-state', {
+      settings: {
+        theme: 'light',
+      },
+    })
+    expect(((await service.get('app-state')) as any).settings.cliProxyApi.tunnelUuid).toBe(
+      generatedUuid,
+    )
+
+    service.setSync('app-state', {
+      settings: {
+        theme: 'dark',
+      },
+    })
+    expect(((await service.get('app-state')) as any).settings.cliProxyApi.tunnelUuid).toBe(
+      generatedUuid,
+    )
+  })
 })

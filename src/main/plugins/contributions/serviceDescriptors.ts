@@ -18,6 +18,7 @@ import { PowerSaveService } from '../../services/powerSaveService.js'
 import { UpdateService } from '../../services/update/updateService.js'
 import { NotificationBadgeService } from '../../services/notificationBadgeService.js'
 import { GatewayDiscoveryService } from '../../services/gatewayDiscoveryService.js'
+import { CliProxyTunnelServerService } from '../../services/cliProxyTunnelService.js'
 import { PluginResourceService } from '../resources/PluginResourceService.js'
 import { PluginGraphManagementService } from '../management/PluginGraphManagementService.js'
 import { getAppVersion } from '../../utils/version.js'
@@ -43,6 +44,7 @@ export interface PlatformServiceDescriptorOptions {
     updateService?: UpdateService
     notificationBadgeService?: NotificationBadgeService
     gatewayDiscoveryService?: GatewayDiscoveryService
+    cliProxyTunnelService?: CliProxyTunnelServerService
     trayService?: TrayService
     isHeadless?: () => boolean
     onShowWindow?: () => void
@@ -249,6 +251,34 @@ export function createPlatformServiceDescriptors(
             id: 'gatewayDiscoveryService',
             dependencies: [],
             create: () => options.gatewayDiscoveryService ?? new GatewayDiscoveryService(),
+        },
+        {
+            id: 'cliProxyTunnelService',
+            dependencies: ['webServerService'],
+            create: (ctx) => {
+                if (options.cliProxyTunnelService) {
+                    return options.cliProxyTunnelService
+                }
+                const webServerService = ctx.get<WebServerService>('webServerService')
+                return new CliProxyTunnelServerService({
+                    webServerService,
+                    emitEvent,
+                    ensureServerUuid: async (candidate) => {
+                        try {
+                            const kv = ctx.get<any>('kvStoreService')
+                            if (kv && typeof kv.ensureTunnelUuid === 'function') {
+                                return await kv.ensureTunnelUuid(candidate)
+                            }
+                        } catch {
+                            // kvStoreService may not be committed during early bootstrap
+                        }
+                        return candidate ?? ''
+                    },
+                })
+            },
+            dispose: (service: CliProxyTunnelServerService) => {
+                void service.dispose()
+            },
         },
         {
             id: 'powerSaveService',

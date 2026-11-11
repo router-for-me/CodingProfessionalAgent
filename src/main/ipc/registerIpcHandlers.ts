@@ -24,6 +24,7 @@ import { PowerSaveService } from '../services/powerSaveService.js'
 import { UpdateService } from '../services/update/updateService.js'
 import { NotificationBadgeService } from '../services/notificationBadgeService.js'
 import { GatewayDiscoveryService } from '../services/gatewayDiscoveryService.js'
+import { CliProxyTunnelServerService } from '../services/cliProxyTunnelService.js'
 import { PluginResourceService } from '../plugins/resources/PluginResourceService.js'
 import { MainContributionRegistry } from '../plugins/contributions/MainContributionRegistry.js'
 import { createPlatformServiceDescriptors } from '../plugins/contributions/serviceDescriptors.js'
@@ -53,6 +54,7 @@ export interface CreateServicesOptions {
   updateService?: UpdateService
   notificationBadgeService?: NotificationBadgeService
   gatewayDiscoveryService?: GatewayDiscoveryService
+  cliProxyTunnelService?: CliProxyTunnelServerService
   trayService?: TrayService
   isHeadless?: () => boolean
   onShowWindow?: () => void
@@ -79,6 +81,7 @@ export interface AppServices {
   powerSaveService: PowerSaveService
   updateService: UpdateService
   gatewayDiscoveryService: GatewayDiscoveryService
+  cliProxyTunnelService: CliProxyTunnelServerService
   registry: MainContributionRegistry
   pluginRuntimeHost?: MainPluginRuntimeHost
   pluginActivationCoordinator?: MainPluginActivationCoordinator
@@ -144,6 +147,14 @@ export function createServices(
         options?.pluginRuntimeHost?.capabilityBroker?.emit('update:status-changed', payload)
       } catch {
         options?.pluginRuntimeHost?.capabilityBroker?.emit('update:status-changed', event.data)
+      }
+    }
+    if (event.kind === 'tunnel:status-changed') {
+      try {
+        const payload = typeof event.data === 'string' ? JSON.parse(event.data) : event.data
+        options?.pluginRuntimeHost?.capabilityBroker?.emit('tunnel:status-changed', payload)
+      } catch {
+        options?.pluginRuntimeHost?.capabilityBroker?.emit('tunnel:status-changed', event.data)
       }
     }
     if (registry.hasService('webServerService')) {
@@ -220,6 +231,7 @@ export function createServices(
     updateService: options?.updateService,
     notificationBadgeService: options?.notificationBadgeService,
     gatewayDiscoveryService: options?.gatewayDiscoveryService,
+    cliProxyTunnelService: options?.cliProxyTunnelService,
     trayService: options?.trayService,
     isHeadless: options?.isHeadless,
     onShowWindow: options?.onShowWindow,
@@ -478,6 +490,7 @@ export function createServices(
     powerSaveService: registry.getService<PowerSaveService>('powerSaveService'),
     updateService: registry.getService<UpdateService>('updateService'),
     gatewayDiscoveryService: registry.getService<GatewayDiscoveryService>('gatewayDiscoveryService'),
+    cliProxyTunnelService: registry.getService<CliProxyTunnelServerService>('cliProxyTunnelService'),
     registry,
     pluginRuntimeHost: options?.pluginRuntimeHost,
     pluginActivationCoordinator: options?.pluginActivationCoordinator,

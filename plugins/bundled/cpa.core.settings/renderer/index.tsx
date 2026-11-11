@@ -363,6 +363,12 @@ export const settingsRendererEntry = definePluginEntry({
                         keywords: ['api key'],
                     },
                     {
+                        id: 'cliProxyApiTunnel',
+                        labelKey: 'settings.connections.tunnel.enable',
+                        descriptionKey: 'settings.connections.tunnel.enable.desc',
+                        keywords: ['tunnel', 'remote', 'websocket', 'cliproxyapi'],
+                    },
+                    {
                         id: 'webServer',
                         labelKey: 'settings.connections.webServer.title',
                         descriptionKey: 'settings.connections.webServer.desc',

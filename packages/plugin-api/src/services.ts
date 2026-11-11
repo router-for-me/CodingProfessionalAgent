@@ -205,6 +205,8 @@ export interface SessionItem {
 export interface CliProxyApiSettings {
   baseUrl: string
   apiKey: string
+  tunnelEnabled?: boolean
+  tunnelUuid?: string
 }
 
 export interface WebServerSettings {
@@ -748,8 +750,42 @@ export interface WebServerStatus {
 
 export interface WebServerService {
     getStatus(): Promise<WebServerStatus>
+    configure?(config: Partial<WebServerSettings>): Promise<void>
     start(config?: Partial<WebServerSettings>): Promise<WebServerStatus>
     stop(): Promise<WebServerStatus>
+}
+
+export type CliProxyTunnelPhase =
+    | 'stopped'
+    | 'connecting'
+    | 'connected'
+    | 'reconnecting'
+    | 'error'
+
+export interface CliProxyTunnelStatus {
+    enabled: boolean
+    phase: CliProxyTunnelPhase
+    serverUuid: string
+    serverName: string
+    tunnelUrl: string
+    connectedClients: number
+    retryAttempt: number
+    error?: string
+    errorCode?: string
+}
+
+export interface TunnelSyncConfig {
+    enabled: boolean
+    baseUrl: string
+    apiKey: string
+    tunnelUuid?: string
+    webPassword?: string
+}
+
+export interface CliProxyTunnelService {
+    getStatus(): Promise<CliProxyTunnelStatus>
+    syncConfig(config: TunnelSyncConfig): Promise<CliProxyTunnelStatus>
+    subscribeStatus?(listener: (status: CliProxyTunnelStatus) => void): () => void
 }
 
 export interface FileSystemService {
@@ -1074,6 +1110,7 @@ export const SubAgentServiceToken = createServiceToken<SubAgentService>('host.se
 export const ModelCatalogServiceToken = createServiceToken<ModelCatalogService>('host.services.modelCatalog')
 export const RendererContributionsServiceToken = createServiceToken<RendererContributionsService>('host.services.rendererContributions')
 export const GatewayDiscoveryServiceToken = createServiceToken<GatewayDiscoveryService>('cpa.service.gateway-discovery')
+export const TunnelServiceToken = createServiceToken<CliProxyTunnelService>('host.services.tunnel')
 
 export const HOST_SERVICE_TOKENS = {
     sessions: SessionServiceToken,
@@ -1101,6 +1138,7 @@ export const HOST_SERVICE_TOKENS = {
     subAgents: SubAgentServiceToken,
     rendererContributions: RendererContributionsServiceToken,
     gatewayDiscovery: GatewayDiscoveryServiceToken,
+    tunnel: TunnelServiceToken,
 } as const
 
 export interface HostServices {
@@ -1127,4 +1165,5 @@ export interface HostServices {
     rendererContributions?: RendererContributionsService
     subAgents?: SubAgentService
     gatewayDiscovery?: GatewayDiscoveryService
+    tunnel?: CliProxyTunnelService
 }

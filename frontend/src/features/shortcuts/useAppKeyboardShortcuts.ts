@@ -2,7 +2,7 @@ import { useCallback, useEffect } from 'react'
 import { createHashRouteUrl, getHashRoutePathname } from '@cpa/plugin-ui'
 import { matchShortcut, matchesShortcutId, normalizeShortcutBinding } from '@cpa/plugin-api'
 import { actionRegistry } from '@/application/actions/actionRegistry'
-import { getHostServices } from '@/application/services/createHostServices'
+import { getSanitizedHostServices } from '@/application/services/createHostServices'
 import type { ActionContribution, ActionExecutionContext } from '@cpa/plugin-api'
 import { useSettingsStore } from '@/stores/settingsStore'
 import {
@@ -93,7 +93,7 @@ export function useAppKeyboardShortcuts(navigate?: NavigateFn) {
         async (actionId: string) => {
             const context: ActionExecutionContext = {
                 services: {
-                    ...getHostServices(),
+                    ...getSanitizedHostServices(),
                     navigation: {
                         navigate: async (to: string) => {
                             if (navigate) {

@@ -5,6 +5,31 @@ export type CapabilityId = string & {}
 /** Standard capability for AI Gateway network discovery via mDNS/DNS-SD */
 export const GATEWAY_DISCOVER_CAPABILITY = 'gateway.discover'
 
+/** Standard capabilities for Web Server status and management */
+export const WEBSERVER_READ_CAPABILITY = 'webserver.read'
+export const WEBSERVER_MANAGE_CAPABILITY = 'webserver.manage'
+
+/** Standard capabilities for CLIProxyAPI WebSocket Tunnel status and management */
+export const TUNNEL_READ_CAPABILITY = 'tunnel.read'
+export const TUNNEL_MANAGE_CAPABILITY = 'tunnel.manage'
+
+/**
+ * Validates whether a value is a legal CLIProxyAPI tunnel device UUID:
+ * 1..128 printable non-whitespace ASCII characters (0x21..0x7E).
+ */
+export function isValidTunnelUuid(value: unknown): value is string {
+    if (typeof value !== 'string' || value.length < 1 || value.length > 128) {
+        return false
+    }
+    for (let i = 0; i < value.length; i++) {
+        const code = value.charCodeAt(i)
+        if (code < 0x21 || code > 0x7e) {
+            return false
+        }
+    }
+    return true
+}
+
 export type CapabilityHandle = string & { readonly __capabilityHandle: unique symbol }
 
 export interface CapabilityInvocationContext {

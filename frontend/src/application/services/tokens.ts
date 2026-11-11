@@ -38,6 +38,9 @@ export {
     type ComposerAttachmentKind,
     type GatewayDiscoveryService,
     type DiscoveredGateway,
+    type CliProxyTunnelService,
+    type CliProxyTunnelStatus,
+    type TunnelSyncConfig,
     SessionServiceToken,
     ProjectServiceToken,
     SettingsServiceToken,
@@ -61,5 +64,6 @@ export {
     AgentRuntimeServiceToken,
     SubAgentServiceToken,
     GatewayDiscoveryServiceToken,
+    TunnelServiceToken,
     HOST_SERVICE_TOKENS,
 } from '@cpa/plugin-api'
