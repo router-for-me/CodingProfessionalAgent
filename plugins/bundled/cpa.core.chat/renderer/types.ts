@@ -25,6 +25,12 @@ export interface ToolCardImage {
   alt?: string
 }
 
+/** Image sent with a user prompt (base64 data without a data-url prefix). */
+export interface DisplayMessageImage {
+  mimeType: string
+  data: string
+}
+
 export interface ToolCardDetails {
   diff?: string
   patch?: string
@@ -72,6 +78,8 @@ export interface DisplayChatMessage {
   role: 'user' | 'assistant'
   content: string
   parts?: DisplayMessagePart[]
+  /** Images of a user prompt, in prompt order. */
+  images?: readonly DisplayMessageImage[]
   status?: 'streaming' | 'done' | 'error' | 'aborted'
   createdAt: number
   completedAt?: number

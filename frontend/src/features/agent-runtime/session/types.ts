@@ -53,6 +53,12 @@ export interface DisplayToolResultImage {
     mimeType: string
 }
 
+/** Canonical image block attached to a user prompt (base64 data without a data-url prefix). */
+export interface DisplayMessageImage {
+    data: string
+    mimeType: string
+}
+
 export type DisplayMessagePart =
     | { type: 'text'; text: string }
     | { type: 'thinking'; thinking: string }
@@ -76,6 +82,8 @@ export interface DisplayChatMessage {
     role: 'user' | 'assistant'
     content: string
     skillReferences?: { start: number; name: string }[]
+    /** Images sent with a user prompt, in prompt order. */
+    images?: DisplayMessageImage[]
     parts?: DisplayMessagePart[]
     status?: EntryStatus
     pendingStatus?: UserPendingStatus

@@ -72,6 +72,7 @@ import { ToolActivityStack } from './ToolActivityStack.js'
 import { ToolCard } from './ToolCard.js'
 import { TurnHeader } from './TurnHeader.js'
 import { MemoryCitationsView } from './MemoryCitationsView.js'
+import { previewableUserImages, UserMessageImages } from './UserMessageImages.js'
 import { extractMemoryCitations, stripMemoryCitations } from '@cpa/plugin-sdk'
 import type { MemoryCitation, SkillTrigger } from '@cpa/plugin-api'
 
@@ -465,6 +466,9 @@ export const UserMessageRenderer = memo(function UserMessageRenderer(
             ]
             : null
     const copyText = copyParts ? formatSkillDraftForClipboard(copyParts, trigger) : text
+    const images = useMemo(() => previewableUserImages(message.images), [message.images])
+    // An image-only prompt shows just its images, without an empty bubble.
+    const showBubble = images.length === 0 || hasInlineSkills || Boolean(wholeSkill) || text.trim().length > 0
 
     return (
         <div
@@ -476,6 +480,15 @@ export const UserMessageRenderer = memo(function UserMessageRenderer(
         >
             <ExtensionSlot name="chat.message.before" props={{ message }} />
             <div className="flex w-full max-w-[85%] min-w-0 flex-col items-end overflow-visible">
+                {images.length > 0 ? (
+                    <UserMessageImages
+                        images={images}
+                        className={cn(
+                            (isEditing || showBubble) && 'mb-1.5',
+                            isPending && 'opacity-80',
+                        )}
+                    />
+                ) : null}
                 {isEditing ? (
                     <div className="relative w-full">
                         <div
@@ -597,7 +610,7 @@ export const UserMessageRenderer = memo(function UserMessageRenderer(
                             />
                         ) : null}
                     </div>
-                ) : (
+                ) : showBubble ? (
                     <div
                         tabIndex={0}
                         className={cn(
@@ -649,7 +662,7 @@ export const UserMessageRenderer = memo(function UserMessageRenderer(
                             </div>
                         )}
                     </div>
-                )}
+                ) : null}
                 {!isEditing ? (
                     <div
                         className={cn(
@@ -679,21 +692,23 @@ export const UserMessageRenderer = memo(function UserMessageRenderer(
                             </button>
                         ) : (
                             <>
-                                <button
-                                    type="button"
-                                    title={t('message.copy')}
-                                    aria-label={t('message.copy')}
-                                    onClick={() => {
-                                        void copyUserText(copyText, copyParts)
-                                    }}
-                                    className={cn(
-                                        'rounded p-1 text-[var(--text-muted)] transition-colors',
-                                        'hover:bg-[var(--bg-sidebar-hover)] hover:text-[var(--text-primary)]',
-                                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-blue)]/40',
-                                    )}
-                                >
-                                    <Copy className="size-3.5" />
-                                </button>
+                                {showBubble ? (
+                                    <button
+                                        type="button"
+                                        title={t('message.copy')}
+                                        aria-label={t('message.copy')}
+                                        onClick={() => {
+                                            void copyUserText(copyText, copyParts)
+                                        }}
+                                        className={cn(
+                                            'rounded p-1 text-[var(--text-muted)] transition-colors',
+                                            'hover:bg-[var(--bg-sidebar-hover)] hover:text-[var(--text-primary)]',
+                                            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-blue)]/40',
+                                        )}
+                                    >
+                                        <Copy className="size-3.5" />
+                                    </button>
+                                ) : null}
                                 {onEditMessage ? (
                                     <button
                                         type="button"

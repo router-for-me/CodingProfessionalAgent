@@ -1938,6 +1938,8 @@ describe('useAgentStreamSync', () => {
                 sessionId: childSessionId,
                 modelId: 'gpt-5',
                 status: 'aborted',
+                icon: 'sparkle',
+                color: '#7c3aed',
                 createdAt: 1000,
                 updatedAt: 1200,
             },

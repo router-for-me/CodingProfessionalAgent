@@ -518,6 +518,109 @@ describe('MessageItem user actions', () => {
       expect(pushToast).toHaveBeenCalled()
     })
   })
+
+  it('renders prompt images above the text bubble and opens a closable preview', () => {
+    const withImages: DisplayChatMessage = {
+      ...message,
+      images: [
+        { data: 'aW1nMQ==', mimeType: 'image/png' },
+        { data: 'aW1nMg==', mimeType: 'image/jpeg' },
+        { data: 'PHN2Zz4=', mimeType: 'text/html' },
+        { data: '', mimeType: 'image/png' },
+        { data: 'data:text/html;base64,PHN2Zz4=', mimeType: 'image/png' },
+      ],
+    }
+
+    render(
+      <MessageItem
+        message={withImages}
+        onApproveTool={() => undefined}
+        onRejectTool={() => undefined}
+      />,
+    )
+
+    const thumbnails = screen.getAllByTestId('user-message-image')
+    expect(thumbnails).toHaveLength(2)
+    expect(screen.getByAltText('Image 1')).toHaveAttribute('src', 'data:image/png;base64,aW1nMQ==')
+    expect(screen.getByAltText('Image 2')).toHaveAttribute('src', 'data:image/jpeg;base64,aW1nMg==')
+    expect(screen.getByTestId('user-message-bubble')).toHaveTextContent('Original content')
+
+    thumbnails[1].focus()
+    fireEvent.click(thumbnails[1])
+    const preview = screen.getByTestId('user-image-preview')
+    expect(preview.parentElement).toBe(document.body)
+    expect(preview.querySelector('img')).toHaveAttribute('src', 'data:image/jpeg;base64,aW1nMg==')
+    const closeButton = screen.getByRole('button', { name: 'Close preview' })
+    expect(closeButton).toHaveFocus()
+
+    // Tab and Shift+Tab stay on the preview instead of reaching the UI behind it.
+    thumbnails[0].focus()
+    fireEvent.keyDown(window, { key: 'Tab' })
+    expect(closeButton).toHaveFocus()
+    fireEvent.keyDown(window, { key: 'Tab', shiftKey: true })
+    expect(closeButton).toHaveFocus()
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByTestId('user-image-preview')).not.toBeInTheDocument()
+    expect(thumbnails[1]).toHaveFocus()
+
+    fireEvent.click(thumbnails[0])
+    fireEvent.click(screen.getByRole('button', { name: 'Close preview' }))
+    expect(screen.queryByTestId('user-image-preview')).not.toBeInTheDocument()
+
+    fireEvent.click(thumbnails[0])
+    fireEvent.mouseDown(screen.getByTestId('user-image-preview'))
+    expect(screen.queryByTestId('user-image-preview')).not.toBeInTheDocument()
+  })
+
+  it('shows an image-only prompt without an empty bubble or copy action', () => {
+    const imageOnly: DisplayChatMessage = {
+      ...message,
+      content: '',
+      parts: [{ type: 'text', text: '' }],
+      images: [{ data: 'aW1nMQ==', mimeType: 'image/png' }],
+    }
+
+    render(
+      <MessageItem
+        message={imageOnly}
+        onApproveTool={() => undefined}
+        onRejectTool={() => undefined}
+        onEditMessage={() => undefined}
+      />,
+    )
+
+    expect(screen.getAllByTestId('user-message-image')).toHaveLength(1)
+    expect(screen.queryByTestId('user-message-bubble')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Copy/i })).not.toBeInTheDocument()
+
+    // Editing keeps the images, so they stay above the editor.
+    fireEvent.click(screen.getByRole('button', { name: /^Edit$/i }))
+    expect(screen.getByTestId('message-edit-input')).toBeInTheDocument()
+    expect(screen.getAllByTestId('user-message-image')).toHaveLength(1)
+  })
+
+  it('keeps the images of a queued prompt and removes the preview on unmount', () => {
+    const queued: DisplayChatMessage = {
+      ...message,
+      pendingStatus: 'queue',
+      images: [{ data: 'aW1nMQ==', mimeType: 'image/png' }],
+    }
+
+    const { unmount } = render(
+      <MessageItem
+        message={queued}
+        onApproveTool={() => undefined}
+        onRejectTool={() => undefined}
+      />,
+    )
+
+    expect(screen.getByTestId('user-message-images')).toHaveClass('opacity-80')
+    fireEvent.click(screen.getByTestId('user-message-image'))
+    expect(screen.getByTestId('user-image-preview')).toBeInTheDocument()
+    unmount()
+    expect(document.querySelector('[data-testid="user-image-preview"]')).toBeNull()
+  })
 })
 
 describe('MessageItem assistant actions', () => {

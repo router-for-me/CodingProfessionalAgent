@@ -7,6 +7,7 @@ import type {
     DisplayChatMessage,
     DisplayCompaction,
     DisplayMessage,
+    DisplayMessageImage,
     DisplayMessagePart,
     DisplayToolStatus,
     ToolResultEntry,
@@ -64,6 +65,7 @@ export function projectConversation(
 function projectUser(entry: UserEntry): DisplayChatMessage {
     const text = joinTextBlocks(entry.content)
     const parts = contentToDisplayParts(entry.content, new Map())
+    const images = extractUserImages(entry)
     const pausedMs =
         typeof entry.pausedMs === 'number' && Number.isFinite(entry.pausedMs) && entry.pausedMs > 0
             ? entry.pausedMs
@@ -75,6 +77,7 @@ function projectUser(entry: UserEntry): DisplayChatMessage {
         role: 'user',
         content: text,
         ...(entry.skillReferences ? { skillReferences: entry.skillReferences } : {}),
+        ...(images ? { images } : {}),
         parts: parts.length > 0 ? parts : [{ type: 'text', text }],
         createdAt: entry.createdAt,
         ...(entry.pendingStatus ? { pendingStatus: entry.pendingStatus } : {}),
@@ -257,6 +260,19 @@ function extractToolResultImages(
             continue
         }
         // Defensive copy so UI mutation cannot touch store image buffers.
+        images.push({ data: block.data, mimeType: block.mimeType })
+    }
+    return images.length > 0 ? images : undefined
+}
+
+function extractUserImages(entry: UserEntry): DisplayMessageImage[] | undefined {
+    const images: DisplayMessageImage[] = []
+    for (const block of entry.content) {
+        if (block.type !== 'image') continue
+        if (typeof block.data !== 'string' || typeof block.mimeType !== 'string') {
+            continue
+        }
+        // Fresh objects so UI mutation cannot touch store entries.
         images.push({ data: block.data, mimeType: block.mimeType })
     }
     return images.length > 0 ? images : undefined

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { projectConversation } from './projection'
-import type { AssistantEntry, ConversationEntry } from './types'
+import type { AssistantEntry, ConversationEntry, DisplayChatMessage } from './types'
 
 describe('projectConversation', () => {
     it('projects user and assistant text into UI-consumable messages', () => {
@@ -55,6 +55,40 @@ describe('projectConversation', () => {
         expect(projectConversation(entries)[0]).toMatchObject({
             content: '$demo $demo', skillReferences: [{ start: 6, name: 'demo' }],
         })
+    })
+
+    it('projects user image blocks onto message.images in prompt order', () => {
+        const first = { type: 'image' as const, data: 'aW1nMQ==', mimeType: 'image/png' }
+        const second = { type: 'image' as const, data: 'aW1nMg==', mimeType: 'image/jpeg' }
+        const entries: ConversationEntry[] = [
+            {
+                id: 'u1', sessionId: 's1', createdAt: 1, kind: 'user',
+                content: [{ type: 'text', text: 'look' }, first, second],
+            },
+            {
+                id: 'u2', sessionId: 's1', createdAt: 2, kind: 'user',
+                content: [first],
+            },
+            {
+                id: 'u3', sessionId: 's1', createdAt: 3, kind: 'user',
+                content: [{ type: 'text', text: 'plain' }],
+            },
+        ]
+
+        const projected = projectConversation(entries) as DisplayChatMessage[]
+        expect(projected[0]).toMatchObject({
+            content: 'look',
+            images: [
+                { data: 'aW1nMQ==', mimeType: 'image/png' },
+                { data: 'aW1nMg==', mimeType: 'image/jpeg' },
+            ],
+        })
+        expect(projected[1]).toMatchObject({
+            content: '',
+            images: [{ data: 'aW1nMQ==', mimeType: 'image/png' }],
+        })
+        expect(projected[1].images?.[0]).not.toBe(first)
+        expect(projected[2]).not.toHaveProperty('images')
     })
 
     it('associates adjacent tool results onto tool call cards', () => {
