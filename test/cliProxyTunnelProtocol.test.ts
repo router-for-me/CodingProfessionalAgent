@@ -2,11 +2,13 @@ import { describe, it, expect } from 'vitest'
 import {
     TUNNEL_PROTOCOL_VERSION,
     CPA_TUNNEL_MUX_PAYLOAD_TYPE,
+    CPA_TUNNEL_SERVER_TYPE,
     MAX_TUNNEL_RAW_PAYLOAD_BYTES,
     MAX_MUX_META_BYTES,
     MAX_HTTP_RESPONSE_BODY_BYTES,
     isValidTunnelUuid,
     resolveTunnelServerName,
+    resolveTunnelServerType,
     resolveTunnelWebSocketUrl,
     encodeTunnelFrame,
     decodeTunnelFrame,
@@ -99,18 +101,22 @@ describe('CLIProxyAPI Tunnel Protocol and Loopback Safety Helpers', () => {
         expect(() => decodeMuxFrame(new Uint8Array([0, 0, 0, 2, 0x5b, 0x5d]))).toThrow(/meta/i)
     })
 
-    it('normalizes baseUrl variants to ws(s) /v1/tunnel with role=server query', () => {
+    it('normalizes baseUrl variants to ws(s) /v1/tunnel with role=server and type=CodingProfessionalAgent query', () => {
+        expect(CPA_TUNNEL_SERVER_TYPE).toBe('CodingProfessionalAgent')
         expect(resolveTunnelWebSocketUrl('http://127.0.0.1:8317', 'u1', 'Mac')).toBe(
-            'ws://127.0.0.1:8317/v1/tunnel?role=server&uuid=u1&name=Mac',
+            'ws://127.0.0.1:8317/v1/tunnel?role=server&uuid=u1&name=Mac&type=CodingProfessionalAgent',
         )
         expect(resolveTunnelWebSocketUrl('https://proxy.example.com/v1/', 'u1', 'Mac')).toBe(
-            'wss://proxy.example.com/v1/tunnel?role=server&uuid=u1&name=Mac',
+            'wss://proxy.example.com/v1/tunnel?role=server&uuid=u1&name=Mac&type=CodingProfessionalAgent',
         )
         expect(resolveTunnelWebSocketUrl('https://proxy.example.com/gateway/v1/tunnel', 'u1', 'Mac')).toBe(
-            'wss://proxy.example.com/gateway/v1/tunnel?role=server&uuid=u1&name=Mac',
+            'wss://proxy.example.com/gateway/v1/tunnel?role=server&uuid=u1&name=Mac&type=CodingProfessionalAgent',
         )
         expect(resolveTunnelWebSocketUrl('ws://10.0.0.2:8317/subpath', 'u1', 'Mac Studio')).toBe(
-            'ws://10.0.0.2:8317/subpath/v1/tunnel?role=server&uuid=u1&name=Mac+Studio',
+            'ws://10.0.0.2:8317/subpath/v1/tunnel?role=server&uuid=u1&name=Mac+Studio&type=CodingProfessionalAgent',
+        )
+        expect(resolveTunnelWebSocketUrl('http://127.0.0.1:8317', 'u1', 'Mac', '   ')).toBe(
+            'ws://127.0.0.1:8317/v1/tunnel?role=server&uuid=u1&name=Mac&type=CodingProfessionalAgent',
         )
 
         expect(() => resolveTunnelWebSocketUrl('', 'u1', 'Mac')).toThrow(/empty/i)
@@ -120,9 +126,9 @@ describe('CLIProxyAPI Tunnel Protocol and Loopback Safety Helpers', () => {
         expect(() => resolveTunnelWebSocketUrl('http://127.0.0.1:8317#frag', 'u1', 'Mac')).toThrow(/hash/i)
     })
 
-    it('sanitizes server name within 256 UTF-8 bytes without splitting multi-byte code points', () => {
+    it('sanitizes server name and server type within 256 UTF-8 bytes without splitting multi-byte code points', () => {
         expect(resolveTunnelServerName('  MacBook\x00-Pro\x1f\x7f\n  ')).toBe('MacBook-Pro')
-        expect(resolveTunnelServerName('   \x00\t\r\n   ')).toBe('CPA-Server')
+        expect(resolveTunnelServerName('   \x00\t\r\n\u0085   ')).toBe('CPA-Server')
 
         const hundredHan = '机'.repeat(100) // 300 UTF-8 bytes
         const sanitized = resolveTunnelServerName(hundredHan)
@@ -131,6 +137,21 @@ describe('CLIProxyAPI Tunnel Protocol and Loopback Safety Helpers', () => {
         expect(encoded.byteLength).toBe(255)
         expect(sanitized).toBe('机'.repeat(85))
         expect(sanitized.includes('\uFFFD')).toBe(false)
+
+        expect(resolveTunnelServerType()).toBe('CodingProfessionalAgent')
+        expect(resolveTunnelServerType('')).toBe('CodingProfessionalAgent')
+        expect(resolveTunnelServerType('   \x00\t\r\n\x7f\u0085   ')).toBe('CodingProfessionalAgent')
+        expect(resolveTunnelServerType('  CodingProfessionalAgent\x00\x7f  ')).toBe(
+            'CodingProfessionalAgent',
+        )
+
+        const hundredTypeHan = '型'.repeat(100) // 300 UTF-8 bytes
+        const sanitizedType = resolveTunnelServerType(hundredTypeHan)
+        const encodedType = new TextEncoder().encode(sanitizedType)
+        expect(encodedType.byteLength).toBeLessThanOrEqual(256)
+        expect(encodedType.byteLength).toBe(255)
+        expect(sanitizedType).toBe('型'.repeat(85))
+        expect(sanitizedType.includes('\uFFFD')).toBe(false)
     })
 
     it('blocks SSRF paths and strips hop-by-hop headers while injecting loopback Host/Origin and preserving Cookie', () => {

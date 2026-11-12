@@ -9,6 +9,7 @@ import { WebServerService } from '../src/main/services/webServerService.js'
 import { CliProxyTunnelServerService } from '../src/main/services/cliProxyTunnelService.js'
 import {
     CPA_TUNNEL_MUX_PAYLOAD_TYPE,
+    CPA_TUNNEL_SERVER_TYPE,
     decodeMuxFrame,
     decodeTunnelFrame,
     encodeMuxFrame,
@@ -22,7 +23,16 @@ interface MockHubPeer {
     role: 'client' | 'server'
     uuid: string
     name: string
+    type?: string
     ws: WebSocket
+}
+
+function isValidHubLabel(raw: string): boolean {
+    if (!raw || /[\x00-\x1f\x7f]/.test(raw)) {
+        return false
+    }
+    const byteLen = Buffer.byteLength(raw, 'utf8')
+    return byteLen >= 1 && byteLen <= 256
 }
 
 class MockCliProxyTunnelHub {
@@ -80,10 +90,16 @@ class MockCliProxyTunnelHub {
                 return
             }
 
-            const roleRaw = (url.searchParams.get('role') || '').trim().toLowerCase()
-            const uuid = (url.searchParams.get('uuid') || '').trim()
-            const name = (url.searchParams.get('name') || '').trim()
-            if ((roleRaw !== 'client' && roleRaw !== 'server') || !uuid || !name) {
+            const headerValue = (headerName: string): string => {
+                const raw = req.headers[headerName]
+                return (Array.isArray(raw) ? raw[0] || '' : raw || '').trim()
+            }
+            const roleRaw = (url.searchParams.get('role') || '').trim() || headerValue('x-tunnel-role')
+            const role = roleRaw.toLowerCase()
+            const uuid = (url.searchParams.get('uuid') || '').trim() || headerValue('x-tunnel-uuid')
+            const nameRaw = url.searchParams.get('name') ?? ''
+            const name = nameRaw.trim() || headerValue('x-tunnel-name')
+            if ((role !== 'client' && role !== 'server') || !uuid || !isValidHubLabel(name)) {
                 const payload = JSON.stringify({ error: 'invalid role, uuid, or name' })
                 socket.end(
                     'HTTP/1.1 400 Bad Request\r\n' +
@@ -93,6 +109,24 @@ class MockCliProxyTunnelHub {
                         payload,
                 )
                 return
+            }
+
+            let serverType: string | undefined
+            if (role === 'server') {
+                const queryType = (url.searchParams.get('type') ?? '').trim()
+                const resolvedType = queryType || headerValue('x-tunnel-type')
+                if (!isValidHubLabel(resolvedType)) {
+                    const payload = JSON.stringify({ error: 'invalid or missing type' })
+                    socket.end(
+                        'HTTP/1.1 400 Bad Request\r\n' +
+                            'Connection: close\r\n' +
+                            'Content-Type: application/json\r\n' +
+                            `Content-Length: ${Buffer.byteLength(payload)}\r\n\r\n` +
+                            payload,
+                    )
+                    return
+                }
+                serverType = resolvedType
             }
 
             if (this.peers.has(uuid)) {
@@ -109,9 +143,10 @@ class MockCliProxyTunnelHub {
 
             wss.handleUpgrade(req, socket, head, (ws) => {
                 const peer: MockHubPeer = {
-                    role: roleRaw as 'client' | 'server',
+                    role: role as 'client' | 'server',
                     uuid,
                     name,
+                    ...(serverType ? { type: serverType } : {}),
                     ws,
                 }
                 this.peers.set(uuid, peer)
@@ -119,7 +154,7 @@ class MockCliProxyTunnelHub {
                 if (peer.role === 'client') {
                     const servers = Array.from(this.peers.values())
                         .filter((p) => p.role === 'server')
-                        .map((p) => ({ uuid: p.uuid, name: p.name }))
+                        .map((p) => ({ uuid: p.uuid, name: p.name, type: p.type }))
                     ws.send(JSON.stringify({ type: 'server_list', servers }))
                 } else {
                     for (const p of this.peers.values()) {
@@ -127,7 +162,7 @@ class MockCliProxyTunnelHub {
                             p.ws.send(
                                 JSON.stringify({
                                     type: 'server_online',
-                                    server: { uuid: peer.uuid, name: peer.name },
+                                    server: { uuid: peer.uuid, name: peer.name, type: peer.type },
                                 }),
                             )
                         }
@@ -170,6 +205,22 @@ class MockCliProxyTunnelHub {
                 const cleanup = () => {
                     if (this.peers.get(uuid) === peer) {
                         this.peers.delete(uuid)
+                        if (peer.role === 'server') {
+                            for (const p of this.peers.values()) {
+                                if (p.role === 'client' && p.ws.readyState === WebSocket.OPEN) {
+                                    p.ws.send(
+                                        JSON.stringify({
+                                            type: 'server_offline',
+                                            server: {
+                                                uuid: peer.uuid,
+                                                name: peer.name,
+                                                type: peer.type,
+                                            },
+                                        }),
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
                 ws.on('close', cleanup)
@@ -185,6 +236,10 @@ class MockCliProxyTunnelHub {
         this.server = server
         this.wss = wss
         return `http://127.0.0.1:${this.port}`
+    }
+
+    getPeer(uuid: string): MockHubPeer | undefined {
+        return this.peers.get(uuid)
     }
 
     sendControlToPeer(uuid: string, frame: Record<string, unknown>): void {
@@ -223,6 +278,11 @@ async function connectTestTunnelClient(
     clientUuid: string,
 ): Promise<{
     ws: WebSocket
+    controlFrames: Array<Record<string, unknown>>
+    nextControl: (
+        predicate?: (frame: Record<string, unknown>) => boolean,
+        timeoutMs?: number,
+    ) => Promise<Record<string, unknown>>
     sendMux: (serverUuid: string, meta: TunnelMuxMeta, body?: Uint8Array) => void
     nextMux: (predicate?: (frame: DecodedMuxFrame) => boolean, timeoutMs?: number) => Promise<DecodedMuxFrame>
     close: () => void
@@ -232,6 +292,15 @@ async function connectTestTunnelClient(
         headers: { Authorization: `Bearer ${apiKey}` },
     })
 
+    const controlFrames: Array<Record<string, unknown>> = []
+    const controlQueue: Array<Record<string, unknown>> = []
+    const controlWaiters: Array<{
+        predicate: (frame: Record<string, unknown>) => boolean
+        resolve: (frame: Record<string, unknown>) => void
+        reject: (err: Error) => void
+        timer: NodeJS.Timeout
+    }> = []
+
     const muxQueue: DecodedMuxFrame[] = []
     const waiters: Array<{
         predicate: (frame: DecodedMuxFrame) => boolean
@@ -240,13 +309,23 @@ async function connectTestTunnelClient(
         timer: NodeJS.Timeout
     }> = []
 
-    await new Promise<void>((resolve, reject) => {
-        ws.once('open', () => resolve())
-        ws.once('error', reject)
-    })
-
     ws.on('message', (data, isBinary) => {
-        if (!isBinary) return
+        if (!isBinary) {
+            const text = Buffer.isBuffer(data)
+                ? data.toString('utf8')
+                : Buffer.from(data as ArrayBuffer).toString('utf8')
+            const parsed = JSON.parse(text) as Record<string, unknown>
+            controlFrames.push(parsed)
+            const cIdx = controlWaiters.findIndex((w) => w.predicate(parsed))
+            if (cIdx >= 0) {
+                const [waiter] = controlWaiters.splice(cIdx, 1)
+                clearTimeout(waiter!.timer)
+                waiter!.resolve(parsed)
+            } else {
+                controlQueue.push(parsed)
+            }
+            return
+        }
         const bytes = Buffer.isBuffer(data)
             ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
             : new Uint8Array(data as ArrayBuffer)
@@ -262,8 +341,29 @@ async function connectTestTunnelClient(
         }
     })
 
+    await new Promise<void>((resolve, reject) => {
+        ws.once('open', () => resolve())
+        ws.once('error', reject)
+    })
+
     return {
         ws,
+        controlFrames,
+        nextControl(predicate = () => true, timeoutMs = 4000) {
+            const queuedIdx = controlQueue.findIndex(predicate)
+            if (queuedIdx >= 0) {
+                const [found] = controlQueue.splice(queuedIdx, 1)
+                return Promise.resolve(found!)
+            }
+            return new Promise<Record<string, unknown>>((resolve, reject) => {
+                const timer = setTimeout(() => {
+                    const i = controlWaiters.findIndex((w) => w.resolve === resolve)
+                    if (i >= 0) controlWaiters.splice(i, 1)
+                    reject(new Error('Timed out waiting for tunnel control frame'))
+                }, timeoutMs)
+                controlWaiters.push({ predicate, resolve, reject, timer })
+            })
+        },
         sendMux(serverUuid, meta, body) {
             const mux = encodeMuxFrame(meta, body)
             const frame = encodeTunnelFrame(CPA_TUNNEL_MUX_PAYLOAD_TYPE, clientUuid, serverUuid, mux)
@@ -395,7 +495,11 @@ describe('CliProxyTunnelServerService', () => {
         expect(JSON.stringify(emittedStatuses)).not.toContain('sk-top-secret-token')
     })
 
-    it('connects as role=server and proxies HTTP GET/POST and binary static assets to internal loopback while public WebServer remains stopped', async () => {
+    it('connects as role=server with type=CodingProfessionalAgent and proxies HTTP GET/POST and binary static assets to internal loopback while public WebServer remains stopped', async () => {
+        const earlyClient = await connectTestTunnelClient(hubBaseUrl, 'sk-valid-key', 'cli-early-01')
+        const initialList = await earlyClient.nextControl((f) => f.type === 'server_list')
+        expect(initialList.servers).toEqual([])
+
         await tunnelService.syncConfig({
             enabled: true,
             baseUrl: hubBaseUrl,
@@ -404,9 +508,33 @@ describe('CliProxyTunnelServerService', () => {
         const connected = await waitForStatus(emittedStatuses, tunnelService, (s) => s.phase === 'connected')
         expect(connected.serverUuid).toBe('srv-uuid-001')
         expect(connected.serverName).toBe('MacBook-Pro-Server')
+        expect(new URL(connected.tunnelUrl).searchParams.get('type')).toBe(CPA_TUNNEL_SERVER_TYPE)
+        expect(hub.getPeer('srv-uuid-001')?.type).toBe('CodingProfessionalAgent')
         expect(webServer.getStatus().running).toBe(false)
 
+        const onlineEvt = await earlyClient.nextControl((f) => f.type === 'server_online')
+        expect(onlineEvt).toEqual({
+            type: 'server_online',
+            server: {
+                uuid: 'srv-uuid-001',
+                name: 'MacBook-Pro-Server',
+                type: 'CodingProfessionalAgent',
+            },
+        })
+        earlyClient.close()
+
         const client = await connectTestTunnelClient(hubBaseUrl, 'sk-valid-key', 'cli-uuid-01')
+        const serverListEvt = await client.nextControl((f) => f.type === 'server_list')
+        expect(serverListEvt).toEqual({
+            type: 'server_list',
+            servers: [
+                {
+                    uuid: 'srv-uuid-001',
+                    name: 'MacBook-Pro-Server',
+                    type: 'CodingProfessionalAgent',
+                },
+            ],
+        })
 
         // 1. HTTP GET /api/health
         client.sendMux('srv-uuid-001', {
@@ -911,5 +1039,74 @@ describe('CliProxyTunnelServerService', () => {
         } finally {
             stalledServer.close()
         }
+    })
+
+    it('enforces server type handshake on hub, stops retrying on HTTP 400 bad_request, and broadcasts server_offline with type=CodingProfessionalAgent', async () => {
+        // 1. Raw server dial without type is rejected with HTTP 400 without reserving srv-uuid-001
+        const missingTypeUrl =
+            hubBaseUrl.replace(/^http/, 'ws') +
+            '/v1/tunnel?role=server&uuid=srv-uuid-001&name=NoTypeServer'
+        const rawRejectCode = await new Promise<number>((resolve, reject) => {
+            const rawWs = new WebSocket(missingTypeUrl, {
+                headers: { Authorization: 'Bearer sk-valid-key' },
+            })
+            rawWs.on('error', () => {})
+            rawWs.once('unexpected-response', (_req, res) => {
+                const status = res.statusCode ?? 0
+                res.resume()
+                rawWs.terminate()
+                resolve(status)
+            })
+            rawWs.once('open', () => {
+                rawWs.close()
+                reject(new Error('Expected missing type handshake to be rejected with HTTP 400'))
+            })
+        })
+        expect(rawRejectCode).toBe(400)
+
+        // 2. HTTP 400 from hub puts service into terminal bad_request error without retrying
+        hub.nextOverrideStatus = {
+            status: 400,
+            body: { error: 'invalid or missing type' },
+        }
+        await tunnelService.syncConfig({
+            enabled: true,
+            baseUrl: hubBaseUrl,
+            apiKey: 'sk-valid-key',
+        })
+        const badReqStatus = await waitForStatus(
+            emittedStatuses,
+            tunnelService,
+            (s) => s.phase === 'error' && s.errorCode === 'bad_request',
+        )
+        expect(badReqStatus.error).toBe('invalid or missing type')
+        const handshakesAfter400 = hub.handshakeCount
+        await new Promise((r) => setTimeout(r, 150))
+        expect(hub.handshakeCount).toBe(handshakesAfter400)
+
+        // 3. Re-enabling connects with type=CodingProfessionalAgent using same srv-uuid-001, and stop() triggers server_offline with type
+        await tunnelService.stop()
+        emittedStatuses.length = 0
+        await tunnelService.syncConfig({
+            enabled: true,
+            baseUrl: hubBaseUrl,
+            apiKey: 'sk-valid-key',
+        })
+        await waitForStatus(emittedStatuses, tunnelService, (s) => s.phase === 'connected')
+
+        const client = await connectTestTunnelClient(hubBaseUrl, 'sk-valid-key', 'cli-watch-offline')
+        await client.nextControl((f) => f.type === 'server_list')
+
+        await tunnelService.stop()
+        const offlineEvt = await client.nextControl((f) => f.type === 'server_offline')
+        expect(offlineEvt).toEqual({
+            type: 'server_offline',
+            server: {
+                uuid: 'srv-uuid-001',
+                name: 'MacBook-Pro-Server',
+                type: 'CodingProfessionalAgent',
+            },
+        })
+        client.close()
     })
 })

@@ -1,10 +1,12 @@
 export const TUNNEL_PROTOCOL_VERSION = 0x01
 export const CPA_TUNNEL_MUX_PAYLOAD_TYPE = 0x02
+export const CPA_TUNNEL_SERVER_TYPE = 'CodingProfessionalAgent'
 export const MAX_TUNNEL_RAW_PAYLOAD_BYTES = 67_108_864 // 64 MiB exact limit per CLIProxyAPI spec
 export const MAX_MUX_META_BYTES = 65_536 // 64 KiB metadata ceiling
 export const MAX_HTTP_RESPONSE_BODY_BYTES = MAX_TUNNEL_RAW_PAYLOAD_BYTES - MAX_MUX_META_BYTES
 
 const textEncoder = new TextEncoder()
+const nonFatalUtf8Decoder = new TextDecoder('utf-8')
 const strictUtf8Decoder = new TextDecoder('utf-8', { fatal: true })
 
 export interface DecodedTunnelFrame {
@@ -155,20 +157,37 @@ function truncateUtf8ByCodePoints(input: string, maxBytes: number): string {
     return input.slice(0, endIndex)
 }
 
+function trimTunnelWhitespace(value: string): string {
+    return value.replace(/^[\s\u0085]+|[\s\u0085]+$/g, '')
+}
+
+function sanitizeTunnelIdentityLabel(rawValue: unknown, fallback: string): string {
+    const wellFormed = nonFatalUtf8Decoder.decode(textEncoder.encode(String(rawValue ?? '')))
+    const cleaned = trimTunnelWhitespace(wellFormed.replace(/[\x00-\x1f\x7f]+/g, ''))
+    if (!cleaned) {
+        return fallback
+    }
+    const truncated = trimTunnelWhitespace(truncateUtf8ByCodePoints(cleaned, 256))
+    return truncated || fallback
+}
+
 /**
  * Sanitizes a raw OS hostname into a valid CLIProxyAPI tunnel server name:
  * removes ASCII control characters (0x00..0x1F, 0x7F), trims whitespace,
  * truncates cleanly at UTF-8 code-point boundaries to <= 256 bytes, and falls back to 'CPA-Server'.
  */
 export function resolveTunnelServerName(rawHostname: string): string {
-    const cleaned = String(rawHostname ?? '')
-        .replace(/[\x00-\x1f\x7f]+/g, '')
-        .trim()
-    if (!cleaned) {
-        return 'CPA-Server'
-    }
-    const truncated = truncateUtf8ByCodePoints(cleaned, 256).trim()
-    return truncated || 'CPA-Server'
+    return sanitizeTunnelIdentityLabel(rawHostname, 'CPA-Server')
+}
+
+/**
+ * Sanitizes a tunnel server type into a valid CLIProxyAPI tunnel server type:
+ * removes ASCII control characters (0x00..0x1F, 0x7F), trims whitespace,
+ * truncates cleanly at UTF-8 code-point boundaries to <= 256 bytes,
+ * and falls back to CPA_TUNNEL_SERVER_TYPE ('CodingProfessionalAgent').
+ */
+export function resolveTunnelServerType(rawType?: string): string {
+    return sanitizeTunnelIdentityLabel(rawType, CPA_TUNNEL_SERVER_TYPE)
 }
 
 /**
@@ -178,6 +197,7 @@ export function resolveTunnelWebSocketUrl(
     baseUrl: string,
     serverUuid: string,
     serverName: string,
+    serverType: string = CPA_TUNNEL_SERVER_TYPE,
 ): string {
     const trimmed = String(baseUrl ?? '').trim()
     if (!trimmed) {
@@ -226,6 +246,7 @@ export function resolveTunnelWebSocketUrl(
         role: 'server',
         uuid: serverUuid,
         name: resolveTunnelServerName(serverName),
+        type: resolveTunnelServerType(serverType),
     })
 
     return `${wsProtocol}//${parsed.host}${pathname}?${params.toString()}`

@@ -11,6 +11,7 @@ import type {
 import type { LoopbackEndpoint, WebServerService } from './webServerService.js'
 import {
     CPA_TUNNEL_MUX_PAYLOAD_TYPE,
+    CPA_TUNNEL_SERVER_TYPE,
     MAX_HTTP_RESPONSE_BODY_BYTES,
     MAX_TUNNEL_RAW_PAYLOAD_BYTES,
     decodeMuxFrame,
@@ -21,6 +22,7 @@ import {
     normalizeWsCloseCode,
     redactSecret,
     resolveTunnelServerName,
+    resolveTunnelServerType,
     resolveTunnelWebSocketUrl,
     sanitizeLoopbackRequestHeaders,
     truncateWsCloseReason,
@@ -42,6 +44,7 @@ export interface CliProxyTunnelServiceOptions {
     emitEvent?: (event: NativeEvent) => void
     ensureServerUuid?: (candidate?: string) => Promise<string> | string
     getHostname?: () => string
+    serverType?: string
     randomJitter?: () => number
     initialBackoffMs?: number
     conflictBackoffMs?: number
@@ -96,6 +99,7 @@ export class CliProxyTunnelServerService {
     private readonly emitEvent?: (event: NativeEvent) => void
     private readonly ensureServerUuid?: (candidate?: string) => Promise<string> | string
     private readonly getHostname: () => string
+    private readonly serverType: string
     private readonly randomJitter: () => number
     private readonly initialBackoffMs: number
     private readonly conflictBackoffMs: number
@@ -139,6 +143,7 @@ export class CliProxyTunnelServerService {
         this.handshakeErrorBodyTimeoutMs = options.handshakeErrorBodyTimeoutMs ?? 4_000
         this.maxHttpResponseBodyBytes =
             options.maxHttpResponseBodyBytes ?? MAX_HTTP_RESPONSE_BODY_BYTES
+        this.serverType = resolveTunnelServerType(options.serverType ?? CPA_TUNNEL_SERVER_TYPE)
         this.serverName = resolveTunnelServerName(this.getHostname())
     }
 
@@ -343,7 +348,12 @@ export class CliProxyTunnelServerService {
 
             let tunnelUrl: string
             try {
-                tunnelUrl = resolveTunnelWebSocketUrl(baseUrl, this.serverUuid, this.serverName)
+                tunnelUrl = resolveTunnelWebSocketUrl(
+                    baseUrl,
+                    this.serverUuid,
+                    this.serverName,
+                    this.serverType,
+                )
             } catch (err) {
                 this.connectionEpoch += 1
                 this.closeActiveTunnelSocket()
