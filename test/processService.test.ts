@@ -168,4 +168,67 @@ describe('ProcessService', () => {
       process.env.PATH = originalPath
     }
   })
+
+  it('binds stdin to null device when stdin is omitted so child processes do not block on an open pipe', async () => {
+    const result = await service.runProcess({
+      operationId: 'op-proc-no-stdin',
+      executable: process.execPath,
+      args: [
+        '-e',
+        'const fs = require("node:fs"); const st = fs.fstatSync(0); let data = ""; process.stdin.setEncoding("utf8"); process.stdin.on("data", (c) => data += c); process.stdin.on("end", () => { console.log(JSON.stringify({ isPipeLike: st.isFIFO() || st.isSocket(), isChar: st.isCharacterDevice(), data })); }); process.stdin.resume();',
+      ],
+      cwd: '',
+      env: null,
+    })
+
+    expect(result.exitCode).toBe(0)
+    const stdout = Buffer.from(result.stdoutBase64, 'base64').toString('utf8').trim()
+    const parsed = JSON.parse(stdout) as { isPipeLike: boolean; isChar: boolean; data: string }
+    expect(parsed.isPipeLike).toBe(false)
+    expect(parsed.isChar).toBe(true)
+    expect(parsed.data).toBe('')
+
+    await fs.unlink(result.fullOutputPath).catch(() => {})
+  })
+
+  it('pipes stdin and closes it cleanly for both non-empty and empty string stdin', async () => {
+    const nonEmpty = await service.runProcess({
+      operationId: 'op-proc-with-stdin',
+      executable: process.execPath,
+      args: [
+        '-e',
+        'let data = ""; process.stdin.setEncoding("utf8"); process.stdin.on("data", (c) => data += c); process.stdin.on("end", () => { process.stdout.write(data); });',
+      ],
+      cwd: '',
+      env: null,
+      stdin: 'hello stdin',
+    })
+
+    expect(nonEmpty.exitCode).toBe(0)
+    expect(Buffer.from(nonEmpty.stdoutBase64, 'base64').toString('utf8')).toBe('hello stdin')
+    await fs.unlink(nonEmpty.fullOutputPath).catch(() => {})
+
+    const empty = await service.runProcess({
+      operationId: 'op-proc-empty-stdin',
+      executable: process.execPath,
+      args: [
+        '-e',
+        'const fs = require("node:fs"); const st = fs.fstatSync(0); let data = ""; process.stdin.setEncoding("utf8"); process.stdin.on("data", (c) => data += c); process.stdin.on("end", () => { console.log(JSON.stringify({ isPipeLike: st.isFIFO() || st.isSocket(), isChar: st.isCharacterDevice(), data })); }); process.stdin.resume();',
+      ],
+      cwd: '',
+      env: null,
+      stdin: '',
+    })
+
+    expect(empty.exitCode).toBe(0)
+    const parsedEmpty = JSON.parse(Buffer.from(empty.stdoutBase64, 'base64').toString('utf8').trim()) as {
+      isPipeLike: boolean
+      isChar: boolean
+      data: string
+    }
+    expect(parsedEmpty.isPipeLike).toBe(true)
+    expect(parsedEmpty.isChar).toBe(false)
+    expect(parsedEmpty.data).toBe('')
+    await fs.unlink(empty.fullOutputPath).catch(() => {})
+  })
 })

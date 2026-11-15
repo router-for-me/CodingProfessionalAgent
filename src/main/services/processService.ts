@@ -90,12 +90,15 @@ export class ProcessService {
       mergedEnv.PATH = enrichPath(mergedEnv.PATH)
     }
 
+    const hasStdin = typeof stdin === 'string'
     let proc: child_process.ChildProcess
     try {
+      // Bind stdin to null device ('ignore') when no stdin payload is provided so tools
+      // like ripgrep do not detect an open pipe and block waiting for EOF on stdin.
       proc = child_process.spawn(executable, args || [], {
         cwd: cwd || undefined,
         env: mergedEnv,
-        stdio: ['pipe', 'pipe', 'pipe'],
+        stdio: [hasStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
         detached: process.platform !== 'win32',
       })
     } catch (err: unknown) {
@@ -134,13 +137,15 @@ export class ProcessService {
       })
     }
 
-    if (stdin && proc.stdin) {
+    if (hasStdin && proc.stdin) {
       try {
-        proc.stdin.write(stdin, (err) => {
-          if (err && (err as NodeJS.ErrnoException).code !== 'EPIPE') {
-            // Ignore EPIPE
-          }
-        })
+        if (stdin.length > 0) {
+          proc.stdin.write(stdin, (err) => {
+            if (err && (err as NodeJS.ErrnoException).code !== 'EPIPE') {
+              // Ignore EPIPE
+            }
+          })
+        }
         proc.stdin.end()
       } catch (err: unknown) {
         if ((err as NodeJS.ErrnoException)?.code !== 'EPIPE') {
