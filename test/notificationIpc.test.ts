@@ -39,12 +39,17 @@ import { registerCapabilityTransport } from '../src/main/ipc/registerCapabilityT
 import { MainCapabilityBroker } from '../src/main/plugins/capabilities/MainCapabilityBroker.js'
 import { createPlatformRpcDescriptors } from '../src/main/plugins/contributions/rpcDescriptors.js'
 import { createPlatformServiceDescriptors } from '../src/main/plugins/contributions/serviceDescriptors.js'
+import { ApnsPushService } from '../src/main/services/apnsPushService.js'
 import { NotificationBadgeService } from '../src/main/services/notificationBadgeService.js'
 import {
   createHostCapabilityFacade,
   RENDERER_CAPABILITY_DESCRIPTORS,
   type HostTransportApi,
 } from '../src/shared/capabilityDescriptors.js'
+import type {
+  NotificationClientRegistration,
+  NotificationClientUnregistration,
+} from '../src/shared/types.js'
 
 describe('Notification IPC & RPC Wiring', () => {
   beforeEach(() => {
@@ -165,6 +170,70 @@ describe('Notification IPC & RPC Wiring', () => {
         unregister()
       }
     })
+    it('allows notification:registerClient and notification:unregisterClient when granted notification.manage and rejects when lacking permission', async () => {
+      const broker = new MainCapabilityBroker()
+      const mockApnsService = {
+        registerClient: vi.fn().mockResolvedValue(undefined),
+        unregisterClient: vi.fn().mockResolvedValue(undefined),
+      }
+
+      const mockServices = {
+        handleMethod: vi.fn(async (method: string, args: unknown[]) => {
+          if (method === 'notification:registerClient') {
+            await mockApnsService.registerClient(args[0])
+            return undefined
+          }
+          if (method === 'notification:unregisterClient') {
+            await mockApnsService.unregisterClient(args[0])
+            return undefined
+          }
+          throw new Error(`Unexpected method: ${method}`)
+        }),
+      } as unknown as AppServices
+
+      const unregister = registerCapabilityTransport({
+        broker,
+        services: mockServices,
+      })
+
+      try {
+        const sender = {
+          pluginId: 'test-plugin',
+          senderId: 1,
+          frameUrl: '',
+          transport: 'electron' as const,
+          runtime: 'renderer' as const,
+        }
+
+        const regPayload: NotificationClientRegistration = {
+          clientId: 'client-1',
+          connectionId: 'conn-1',
+          deviceToken: 'e'.repeat(64),
+          environment: 'production',
+        }
+        const unregPayload: NotificationClientUnregistration = {
+          clientId: 'client-1',
+          connectionId: 'conn-1',
+        }
+
+        const authorizedHandle = broker.grant(sender, ['notification.manage'], 1)
+        await broker.invoke(authorizedHandle, 'notification:registerClient', [regPayload], sender)
+        expect(mockApnsService.registerClient).toHaveBeenCalledWith(regPayload)
+
+        await broker.invoke(authorizedHandle, 'notification:unregisterClient', [unregPayload], sender)
+        expect(mockApnsService.unregisterClient).toHaveBeenCalledWith(unregPayload)
+
+        const unauthorizedHandle = broker.grant(sender, ['notification.show'], 1)
+        await expect(
+          broker.invoke(unauthorizedHandle, 'notification:registerClient', [regPayload], sender),
+        ).rejects.toThrow(/lacks capability notification\.manage/)
+        await expect(
+          broker.invoke(unauthorizedHandle, 'notification:unregisterClient', [unregPayload], sender),
+        ).rejects.toThrow(/lacks capability notification\.manage/)
+      } finally {
+        unregister()
+      }
+    })
   })
 
   describe('RPC descriptors in createPlatformRpcDescriptors', () => {
@@ -203,6 +272,90 @@ describe('Notification IPC & RPC Wiring', () => {
       await clearBadgeRpc!.invoke({} as any, [])
       expect(mockBadgeService.clearBadge).toHaveBeenCalled()
     })
+
+    it('declares notification:registerClient and notification:unregisterClient and dispatches taskCompleted to both badge and APNs services even when focused', async () => {
+      const mockBadgeService = {
+        notifyTaskCompleted: vi.fn(),
+        clearBadge: vi.fn(),
+      }
+      const mockApnsService = {
+        registerClient: vi.fn().mockResolvedValue(undefined),
+        unregisterClient: vi.fn().mockResolvedValue(undefined),
+        notifyTaskCompleted: vi.fn().mockResolvedValue(undefined),
+      }
+
+      const descriptors = createPlatformRpcDescriptors({
+        getService: <T>(id: string) => {
+          if (id === 'notificationBadgeService') return mockBadgeService as unknown as T
+          if (id === 'apnsPushService') return mockApnsService as unknown as T
+          throw new Error(`Unknown service: ${id}`)
+        },
+        getMainWindow: () => ({ isFocused: () => true, isDestroyed: () => false }) as any,
+      })
+
+      const registerClientRpc = descriptors.find((d) => d.method === 'notification:registerClient')
+      expect(registerClientRpc).toBeDefined()
+      expect(registerClientRpc?.aliases).toContain('NotificationRegisterClient')
+      expect(registerClientRpc?.ipcChannel).toBe('notification:registerClient')
+      expect(registerClientRpc?.capability).toBe('notification.manage')
+
+      const unregisterClientRpc = descriptors.find((d) => d.method === 'notification:unregisterClient')
+      expect(unregisterClientRpc).toBeDefined()
+      expect(unregisterClientRpc?.aliases).toContain('NotificationUnregisterClient')
+      expect(unregisterClientRpc?.ipcChannel).toBe('notification:unregisterClient')
+      expect(unregisterClientRpc?.capability).toBe('notification.manage')
+
+      const regPayload: NotificationClientRegistration = {
+        clientId: 'ios-client-1',
+        connectionId: 'conn-1',
+        deviceToken: 'a'.repeat(64),
+        environment: 'sandbox',
+        platform: 'ios',
+        deviceName: 'iPhone',
+        appVersion: '1.0.0',
+        enabled: true,
+      }
+      await expect(registerClientRpc!.invoke({} as any, [regPayload])).resolves.toEqual({ ok: true })
+      expect(mockApnsService.registerClient).toHaveBeenCalledWith(regPayload)
+
+      const unregPayload: NotificationClientUnregistration = {
+        clientId: 'ios-client-1',
+        connectionId: 'conn-1',
+      }
+      await expect(unregisterClientRpc!.invoke({} as any, [unregPayload])).resolves.toEqual({ ok: true })
+      expect(mockApnsService.unregisterClient).toHaveBeenCalledWith(unregPayload)
+
+      const taskPayload = { sessionId: 'focused-session', sessionTitle: 'Focused Task' }
+      const taskCompletedRpc = descriptors.find((d) => d.method === 'notification:taskCompleted')
+      await taskCompletedRpc!.invoke({} as any, [taskPayload])
+      expect(mockBadgeService.notifyTaskCompleted).toHaveBeenCalledWith(taskPayload)
+      expect(mockApnsService.notifyTaskCompleted).toHaveBeenCalledWith(taskPayload)
+    })
+
+    it('swallows apnsPushService rejection on notification:taskCompleted without failing the RPC', async () => {
+      const mockBadgeService = {
+        notifyTaskCompleted: vi.fn(),
+        clearBadge: vi.fn(),
+      }
+      const mockApnsService = {
+        notifyTaskCompleted: vi.fn().mockRejectedValue(new Error('APNs network error')),
+      }
+
+      const descriptors = createPlatformRpcDescriptors({
+        getService: <T>(id: string) => {
+          if (id === 'notificationBadgeService') return mockBadgeService as unknown as T
+          if (id === 'apnsPushService') return mockApnsService as unknown as T
+          throw new Error(`Unknown service: ${id}`)
+        },
+        getMainWindow: () => null,
+      })
+
+      const taskCompletedRpc = descriptors.find((d) => d.method === 'notification:taskCompleted')
+      const payload = { sessionId: 's-err', sessionTitle: 'Error Test' }
+      await expect(taskCompletedRpc!.invoke({} as any, [payload])).resolves.toBeUndefined()
+      expect(mockBadgeService.notifyTaskCompleted).toHaveBeenCalledWith(payload)
+      expect(mockApnsService.notifyTaskCompleted).toHaveBeenCalledWith(payload)
+    })
   })
 
   describe('Service descriptors in createPlatformServiceDescriptors', () => {
@@ -232,13 +385,81 @@ describe('Notification IPC & RPC Wiring', () => {
       const badgeServiceDesc = descriptors.find((d) => d.id === 'notificationBadgeService')
       expect(badgeServiceDesc?.create({} as any)).toBe(customService)
     })
+
+    it('registers apnsPushService with empty dependencies and lazy kvStoreService lookup', async () => {
+      const descriptors = createPlatformServiceDescriptors({
+        getMainWindow: () => null,
+      })
+
+      const badgeServiceDesc = descriptors.find((d) => d.id === 'notificationBadgeService')
+      expect(badgeServiceDesc?.dependencies).toEqual([])
+
+      const apnsServiceDesc = descriptors.find((d) => d.id === 'apnsPushService')
+      expect(apnsServiceDesc).toBeDefined()
+      expect(apnsServiceDesc?.dependencies).toEqual([])
+
+      let kvAvailable = false
+      const store = new Map<string, unknown>()
+      const mockKv = {
+        get: vi.fn(async (key: string) => store.get(key)),
+        set: vi.fn(async (key: string, val: unknown) => {
+          store.set(key, val)
+        }),
+        save: vi.fn(async () => {}),
+      }
+
+      const createdService = apnsServiceDesc!.create({
+        get: (id: string) => {
+          if (id === 'kvStoreService' && kvAvailable) return mockKv
+          throw new Error(`Service "${id}" not found`)
+        },
+      } as any) as ApnsPushService
+      expect(createdService).toBeInstanceOf(ApnsPushService)
+
+      // Before kvStoreService is committed, listClients resolves cleanly to []
+      expect(await createdService.listClients()).toEqual([])
+
+      // Once kvStoreService becomes available, lazy lookup resolves it
+      kvAvailable = true
+      await createdService.registerClient({
+        clientId: 'client-lazy',
+        connectionId: 'conn-lazy',
+        deviceToken: 'b'.repeat(64),
+        environment: 'production',
+      })
+      expect(mockKv.save).toHaveBeenCalledTimes(1)
+      expect(await createdService.listClients()).toHaveLength(1)
+    })
+
+    it('uses provided apnsPushService option if specified', () => {
+      const customApns = new ApnsPushService(() => null)
+      const descriptors = createPlatformServiceDescriptors({
+        apnsPushService: customApns,
+      })
+
+      const apnsServiceDesc = descriptors.find((d) => d.id === 'apnsPushService')
+      expect(apnsServiceDesc?.create({} as any)).toBe(customApns)
+    })
   })
 
   describe('createServices wiring', () => {
-    it('creates notificationBadgeService automatically in AppServices and dispatches via handleMethod', async () => {
-      const services = createServices(() => null)
+    it('creates notificationBadgeService and apnsPushService in AppServices and dispatches notification RPCs including WebSocket RPC transport', async () => {
+      const focusedWindow = {
+        isDestroyed: () => false,
+        isFocused: () => true,
+        isMinimized: () => false,
+      } as any
+      const customApns = new ApnsPushService(() => null)
+      const apnsNotifySpy = vi.spyOn(customApns, 'notifyTaskCompleted').mockResolvedValue(undefined)
+      const apnsRegisterSpy = vi.spyOn(customApns, 'registerClient').mockResolvedValue(undefined)
+      const apnsUnregisterSpy = vi.spyOn(customApns, 'unregisterClient').mockResolvedValue(undefined)
+
+      const services = createServices(() => focusedWindow, {
+        apnsPushService: customApns,
+      })
       expect(services.notificationBadgeService).toBeDefined()
       expect(services.notificationBadgeService).toBeInstanceOf(NotificationBadgeService)
+      expect(services.apnsPushService).toBe(customApns)
 
       const notifySpy = vi.spyOn(services.notificationBadgeService, 'notifyTaskCompleted')
       const clearSpy = vi.spyOn(services.notificationBadgeService, 'clearBadge')
@@ -246,14 +467,60 @@ describe('Notification IPC & RPC Wiring', () => {
       const payload = { sessionId: 's-live', sessionTitle: 'Live Task' }
       await services.handleMethod('notification:taskCompleted', [payload])
       expect(notifySpy).toHaveBeenCalledWith(payload)
+      expect(apnsNotifySpy).toHaveBeenCalledWith(payload)
 
       await services.handleMethod('notification:clearBadge', [])
       expect(clearSpy).toHaveBeenCalled()
+
+      // Verify WebSocket RPC transport dispatches notification:registerClient and notification:unregisterClient
+      const regPayload: NotificationClientRegistration = {
+        clientId: 'ws-client-1',
+        connectionId: 'conn-ws-1',
+        deviceToken: 'c'.repeat(64),
+        environment: 'production',
+      }
+      const wsRegResult = await services.webServerService.getRpcTransport().handleWsMessage(
+        JSON.stringify({
+          type: 'rpc',
+          id: 'req-1',
+          method: 'notification:registerClient',
+          args: [regPayload],
+        }),
+        { clientId: 'ws-client-1' },
+      )
+      expect(wsRegResult.response).toEqual({
+        type: 'rpc_result',
+        id: 'req-1',
+        result: { ok: true },
+      })
+      expect(apnsRegisterSpy).toHaveBeenCalledWith(regPayload)
+
+      const unregPayload: NotificationClientUnregistration = {
+        clientId: 'ws-client-1',
+        connectionId: 'conn-ws-1',
+      }
+      const wsUnregResult = await services.webServerService.getRpcTransport().handleWsMessage(
+        JSON.stringify({
+          type: 'rpc',
+          id: 'req-2',
+          method: 'notification:unregisterClient',
+          args: [unregPayload],
+        }),
+        { clientId: 'ws-client-1' },
+      )
+      expect(wsUnregResult.response).toEqual({
+        type: 'rpc_result',
+        id: 'req-2',
+        result: { ok: true },
+      })
+      expect(apnsUnregisterSpy).toHaveBeenCalledWith(unregPayload)
+
+      await services.disposeAll()
     })
   })
 
   describe('HostCapabilityFacade bridge parity', () => {
-    it('includes NotificationTaskCompleted and NotificationClearBadge in RENDERER_CAPABILITY_DESCRIPTORS', () => {
+    it('includes NotificationTaskCompleted, NotificationClearBadge, NotificationRegisterClient, and NotificationUnregisterClient in RENDERER_CAPABILITY_DESCRIPTORS', () => {
       const taskCompletedDesc = RENDERER_CAPABILITY_DESCRIPTORS.find((d) => d.name === 'NotificationTaskCompleted')
       expect(taskCompletedDesc).toBeDefined()
       expect(taskCompletedDesc?.method).toBe('notification:taskCompleted')
@@ -263,6 +530,16 @@ describe('Notification IPC & RPC Wiring', () => {
       expect(clearBadgeDesc).toBeDefined()
       expect(clearBadgeDesc?.method).toBe('notification:clearBadge')
       expect(clearBadgeDesc?.capability).toBe('notification.manage')
+
+      const registerClientDesc = RENDERER_CAPABILITY_DESCRIPTORS.find((d) => d.name === 'NotificationRegisterClient')
+      expect(registerClientDesc).toBeDefined()
+      expect(registerClientDesc?.method).toBe('notification:registerClient')
+      expect(registerClientDesc?.capability).toBe('notification.manage')
+
+      const unregisterClientDesc = RENDERER_CAPABILITY_DESCRIPTORS.find((d) => d.name === 'NotificationUnregisterClient')
+      expect(unregisterClientDesc).toBeDefined()
+      expect(unregisterClientDesc?.method).toBe('notification:unregisterClient')
+      expect(unregisterClientDesc?.capability).toBe('notification.manage')
     })
 
     it('routes facade methods through transport invoke', async () => {
@@ -280,6 +557,22 @@ describe('Notification IPC & RPC Wiring', () => {
 
       await facade.NotificationClearBadge()
       expect(invokeSpy).toHaveBeenCalledWith('desktop-main', 'notification:clearBadge', [])
+
+      const regPayload: NotificationClientRegistration = {
+        clientId: 'facade-client',
+        connectionId: 'conn-facade',
+        deviceToken: 'd'.repeat(64),
+        environment: 'sandbox',
+      }
+      await facade.NotificationRegisterClient(regPayload)
+      expect(invokeSpy).toHaveBeenCalledWith('desktop-main', 'notification:registerClient', [regPayload])
+
+      const unregPayload: NotificationClientUnregistration = {
+        clientId: 'facade-client',
+        connectionId: 'conn-facade',
+      }
+      await facade.NotificationUnregisterClient(unregPayload)
+      expect(invokeSpy).toHaveBeenCalledWith('desktop-main', 'notification:unregisterClient', [unregPayload])
     })
   })
 })

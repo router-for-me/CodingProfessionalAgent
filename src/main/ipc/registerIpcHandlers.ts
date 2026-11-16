@@ -22,6 +22,7 @@ import { EnvironmentWatcherService } from '../services/environmentWatcherService
 import { ProfilingService } from '../services/profilingService.js'
 import { PowerSaveService } from '../services/powerSaveService.js'
 import { UpdateService } from '../services/update/updateService.js'
+import { ApnsPushService } from '../services/apnsPushService.js'
 import { NotificationBadgeService } from '../services/notificationBadgeService.js'
 import { GatewayDiscoveryService } from '../services/gatewayDiscoveryService.js'
 import { CliProxyTunnelServerService } from '../services/cliProxyTunnelService.js'
@@ -53,6 +54,7 @@ export interface CreateServicesOptions {
   pluginGraphManagementService?: PluginGraphManagementService
   updateService?: UpdateService
   notificationBadgeService?: NotificationBadgeService
+  apnsPushService?: ApnsPushService
   gatewayDiscoveryService?: GatewayDiscoveryService
   cliProxyTunnelService?: CliProxyTunnelServerService
   trayService?: TrayService
@@ -72,6 +74,7 @@ export interface AppServices {
   dialogService: DialogService
   windowStateService: WindowStateService
   notificationBadgeService: NotificationBadgeService
+  apnsPushService: ApnsPushService
   trayService: TrayService
   webServerService: WebServerService
   pluginResourceService: PluginResourceService
@@ -230,6 +233,7 @@ export function createServices(
     pluginGraphManagementService: options?.pluginGraphManagementService,
     updateService: options?.updateService,
     notificationBadgeService: options?.notificationBadgeService,
+    apnsPushService: options?.apnsPushService,
     gatewayDiscoveryService: options?.gatewayDiscoveryService,
     cliProxyTunnelService: options?.cliProxyTunnelService,
     trayService: options?.trayService,
@@ -482,6 +486,7 @@ export function createServices(
     pluginResourceService: registry.getService<PluginResourceService>('pluginResourceService'),
     windowStateService: registry.getService<WindowStateService>('windowStateService'),
     notificationBadgeService: registry.getService<NotificationBadgeService>('notificationBadgeService'),
+    apnsPushService: registry.getService<ApnsPushService>('apnsPushService'),
     trayService: registry.getService<TrayService>('trayService'),
     webServerService,
     binaryService: registry.getService<BinaryService>('binaryService'),

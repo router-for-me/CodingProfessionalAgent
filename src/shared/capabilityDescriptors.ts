@@ -105,6 +105,8 @@ export const RENDERER_CAPABILITY_DESCRIPTORS: readonly RendererCapabilityDescrip
     // Notification & Badge
     { name: 'NotificationTaskCompleted', method: 'notification:taskCompleted', capability: 'notification.show' },
     { name: 'NotificationClearBadge', method: 'notification:clearBadge', capability: 'notification.manage' },
+    { name: 'NotificationRegisterClient', method: 'notification:registerClient', capability: 'notification.manage' },
+    { name: 'NotificationUnregisterClient', method: 'notification:unregisterClient', capability: 'notification.manage' },
 
     // Power / Sleep
     { name: 'SetPreventSleep', method: 'power:setPreventSleep', capability: 'power.manage' },

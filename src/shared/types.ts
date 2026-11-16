@@ -484,6 +484,37 @@ export interface SessionDelegateRunRequest {
   action?: 'compact' | 'resume'
 }
 
+export type NotificationEnvironment = 'production' | 'sandbox'
+
+export interface NotificationClientRegistration {
+  clientId: string
+  connectionId: string
+  deviceToken: string
+  environment: NotificationEnvironment
+  platform?: 'ios'
+  deviceName?: string
+  appVersion?: string
+  enabled?: boolean
+}
+
+export interface NotificationClientUnregistration {
+  clientId: string
+  connectionId: string
+}
+
+export interface RegisteredNotificationClient {
+  clientId: string
+  connectionId: string
+  deviceToken: string
+  environment: NotificationEnvironment
+  platform: 'ios'
+  deviceName?: string
+  appVersion?: string
+  enabled: boolean
+  registeredAt: number
+  updatedAt: number
+}
+
 export interface WebServerStatus {
   running: boolean
   host: string
@@ -708,6 +739,8 @@ export interface ElectronBridgeApi {
   // Notification & Badge
   NotificationTaskCompleted(payload: { sessionId: string; sessionTitle?: string }): Promise<void>
   NotificationClearBadge(): Promise<void>
+  NotificationRegisterClient(payload: NotificationClientRegistration): Promise<{ ok: true }>
+  NotificationUnregisterClient(payload: NotificationClientUnregistration): Promise<{ ok: true }>
 
   // Power / Sleep
   SetPreventSleep(enabled: boolean): Promise<void>

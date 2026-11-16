@@ -16,6 +16,7 @@ import { EnvironmentWatcherService } from '../../services/environmentWatcherServ
 import { ProfilingService } from '../../services/profilingService.js'
 import { PowerSaveService } from '../../services/powerSaveService.js'
 import { UpdateService } from '../../services/update/updateService.js'
+import { ApnsPushService } from '../../services/apnsPushService.js'
 import { NotificationBadgeService } from '../../services/notificationBadgeService.js'
 import { GatewayDiscoveryService } from '../../services/gatewayDiscoveryService.js'
 import { CliProxyTunnelServerService } from '../../services/cliProxyTunnelService.js'
@@ -43,6 +44,7 @@ export interface PlatformServiceDescriptorOptions {
     pluginResourceService?: PluginResourceService
     updateService?: UpdateService
     notificationBadgeService?: NotificationBadgeService
+    apnsPushService?: ApnsPushService
     gatewayDiscoveryService?: GatewayDiscoveryService
     cliProxyTunnelService?: CliProxyTunnelServerService
     trayService?: TrayService
@@ -218,6 +220,21 @@ export function createPlatformServiceDescriptors(
             dispose: (service: NotificationBadgeService) => {
                 service.clearBadge()
             },
+        },
+        {
+            id: 'apnsPushService',
+            dependencies: [],
+            create: (ctx) =>
+                options.apnsPushService ??
+                new ApnsPushService({
+                    kvStoreGetter: () => {
+                        try {
+                            return ctx?.get<any>('kvStoreService')
+                        } catch {
+                            return null
+                        }
+                    },
+                }),
         },
         {
             id: 'trayService',

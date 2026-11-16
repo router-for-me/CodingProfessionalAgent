@@ -2,6 +2,8 @@ import type { BrowserWindow } from 'electron'
 import type {
     HttpRequest,
     NativeEvent,
+    NotificationClientRegistration,
+    NotificationClientUnregistration,
     ProcessStartRequest,
     PtyStartRequest,
     TunnelSyncConfig,
@@ -18,6 +20,7 @@ import type { DialogService } from '../../services/dialogService.js'
 import type { TrayService, TrayLocale } from '../../services/trayService.js'
 import type { PowerSaveService } from '../../services/powerSaveService.js'
 import type { WebServerService } from '../../services/webServerService.js'
+import type { ApnsPushService } from '../../services/apnsPushService.js'
 import type { NotificationBadgeService } from '../../services/notificationBadgeService.js'
 import type { EnvironmentWatcherService } from '../../services/environmentWatcherService.js'
 import type { ProfilingService } from '../../services/profilingService.js'
@@ -453,6 +456,12 @@ export function createPlatformRpcDescriptors(
             invoke: async (context, args) => {
                 const payload = args[0] as { sessionId: string; sessionTitle?: string }
                 getService<NotificationBadgeService>('notificationBadgeService', context).notifyTaskCompleted(payload)
+                const apnsPushService = getServiceOptional<ApnsPushService>('apnsPushService', context)
+                if (apnsPushService) {
+                    void Promise.resolve(apnsPushService.notifyTaskCompleted(payload)).catch((err) => {
+                        console.warn('[rpcDescriptors] Failed to dispatch APNs push notification:', err)
+                    })
+                }
             },
         },
         {
@@ -462,6 +471,30 @@ export function createPlatformRpcDescriptors(
             capability: cap('notification:clearBadge', 'notification.manage'),
             invoke: async (context) => {
                 getService<NotificationBadgeService>('notificationBadgeService', context).clearBadge()
+            },
+        },
+        {
+            method: 'notification:registerClient',
+            aliases: ['NotificationRegisterClient'],
+            ipcChannel: 'notification:registerClient',
+            capability: cap('notification:registerClient', 'notification.manage'),
+            invoke: async (context, args) => {
+                await getService<ApnsPushService>('apnsPushService', context).registerClient(
+                    args[0] as NotificationClientRegistration,
+                )
+                return { ok: true }
+            },
+        },
+        {
+            method: 'notification:unregisterClient',
+            aliases: ['NotificationUnregisterClient'],
+            ipcChannel: 'notification:unregisterClient',
+            capability: cap('notification:unregisterClient', 'notification.manage'),
+            invoke: async (context, args) => {
+                await getService<ApnsPushService>('apnsPushService', context).unregisterClient(
+                    args[0] as NotificationClientUnregistration,
+                )
+                return { ok: true }
             },
         },
 
