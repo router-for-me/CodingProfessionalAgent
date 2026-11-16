@@ -460,8 +460,19 @@ export interface SubAgentItem {
   icon?: string | null
   lastMessage?: string | null
   errorMessage?: string | null
+  roleId?: string | null
+  roleName?: string | null
+  rolePrompt?: string | null
+  depth?: number
+  parentAgentId?: string | null
   createdAt?: number
   updatedAt?: number
+}
+
+export interface UnfinishedSessionScanResult {
+  unfinishedSessionIds: string[]
+  fallbackSessionIds: string[]
+  activeSubAgents: SubAgentItem[]
 }
 
 export interface SessionDelegateRunRequest {
@@ -727,6 +738,7 @@ export interface ElectronBridgeApi {
   SessionClaimPendingDelegateRuns(): Promise<SessionDelegateRunRequest[]>
   SessionAckDelegateRun(id: string): Promise<void>
   SessionSearch(query: string, limit?: number): Promise<SessionSearchResultItem[]>
+  SessionFindUnfinished(): Promise<UnfinishedSessionScanResult>
 
   // Metrics Analytics
   SessionQueryMetrics(options: QueryMetricsOptions): Promise<QueryMetricsResult>

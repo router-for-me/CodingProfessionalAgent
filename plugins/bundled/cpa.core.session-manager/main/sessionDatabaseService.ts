@@ -15,6 +15,7 @@ import type {
   SessionSearchResultItem,
   SessionUnreadState,
   SubAgentItem,
+  UnfinishedSessionScanResult,
   WorktreeSessionSetup,
 } from '../../../../src/shared/types.js'
 import {
@@ -2510,6 +2511,276 @@ export class SessionDatabaseService {
 
     results.push(...[...contentMatches.values()].sort((a, b) => b.updatedAt - a.updatedAt))
     return results.slice(0, limit)
+  }
+
+  /**
+   * Fast unfinished-task scan: inspects only the single trailing non-compaction
+   * entry per active main session and any active (running/queued) subagents
+   * without reading or deserializing full conversation histories.
+   */
+  async findUnfinished(): Promise<UnfinishedSessionScanResult> {
+    const unfinishedSessionIds: string[] = []
+    const fallbackSessionIds: string[] = []
+    const activeSubAgents: SubAgentItem[] = []
+
+    const sessionRows = this.getStatement(`
+      SELECT
+        s.id AS session_id,
+        s.worktree_setup_json AS worktree_setup_json,
+        e.kind AS last_kind,
+        CASE
+          WHEN e.kind IN ('user', 'toolResult') AND json_valid(e.payload_json) = 1
+            THEN json_extract(e.payload_json, '$.id')
+          ELSE NULL
+        END AS fast_entry_id,
+        CASE
+          WHEN e.kind IN ('user', 'toolResult') AND json_valid(e.payload_json) = 1
+            THEN json_extract(e.payload_json, '$.sessionId')
+          ELSE NULL
+        END AS fast_entry_session_id,
+        CASE
+          WHEN e.kind = 'toolResult' AND json_valid(e.payload_json) = 1
+            THEN json_extract(e.payload_json, '$.toolCallId')
+          ELSE NULL
+        END AS fast_tool_call_id,
+        CASE
+          WHEN e.kind IS NULL THEN NULL
+          WHEN e.kind IN ('user', 'toolResult') THEN NULL
+          WHEN e.kind = 'assistant'
+            AND json_valid(e.payload_json) = 1
+            AND typeof(json_extract(e.payload_json, '$.id')) = 'text'
+            AND json_extract(e.payload_json, '$.id') != ''
+            AND typeof(json_extract(e.payload_json, '$.sessionId')) = 'text'
+            AND json_extract(e.payload_json, '$.sessionId') != ''
+            AND json_extract(e.payload_json, '$.status') IN ('done', 'aborted', 'error')
+            AND json_extract(e.payload_json, '$.stopReason') IN ('stop', 'length', 'aborted', 'error')
+            AND json_extract(e.payload_json, '$.errorMessage') IS NULL
+            AND e.payload_json NOT LIKE '%"toolCall"%'
+            AND e.payload_json NOT LIKE '%"tool_call"%'
+          THEN NULL
+          ELSE e.payload_json
+        END AS last_payload_json
+      FROM sessions s
+      LEFT JOIN session_entries e
+        ON e.id = (
+          SELECT e2.id
+          FROM session_entries e2
+          WHERE e2.session_id = s.id AND e2.kind != 'compaction'
+          ORDER BY e2.entry_index DESC
+          LIMIT 1
+        )
+      WHERE s.is_subagent = 0
+        AND s.archived_at IS NULL
+    `).all() as Array<{
+      session_id: string
+      worktree_setup_json: string | null
+      last_kind: string | null
+      fast_entry_id: unknown
+      fast_entry_session_id: unknown
+      fast_tool_call_id: unknown
+      last_payload_json: string | null
+    }>
+
+    for (const row of sessionRows) {
+      const worktreeSetup = parseWorktreeSetup(row.worktree_setup_json)
+      if (worktreeSetup && worktreeSetup.status === 'error') {
+        continue
+      }
+
+      if (row.last_kind === null) {
+        continue
+      }
+
+      if (row.last_kind === 'user') {
+        if (
+          typeof row.fast_entry_id === 'string' &&
+          row.fast_entry_id.length > 0 &&
+          typeof row.fast_entry_session_id === 'string' &&
+          row.fast_entry_session_id.length > 0
+        ) {
+          unfinishedSessionIds.push(row.session_id)
+        } else {
+          fallbackSessionIds.push(row.session_id)
+        }
+        continue
+      }
+
+      if (row.last_kind === 'toolResult') {
+        if (
+          typeof row.fast_entry_id === 'string' &&
+          row.fast_entry_id.length > 0 &&
+          typeof row.fast_entry_session_id === 'string' &&
+          row.fast_entry_session_id.length > 0 &&
+          typeof row.fast_tool_call_id === 'string' &&
+          row.fast_tool_call_id.length > 0
+        ) {
+          unfinishedSessionIds.push(row.session_id)
+        } else {
+          fallbackSessionIds.push(row.session_id)
+        }
+        continue
+      }
+
+      if (row.last_kind === 'assistant') {
+        if (row.last_payload_json === null) {
+          continue
+        }
+        let parsed: any
+        try {
+          parsed = JSON.parse(row.last_payload_json)
+        } catch {
+          fallbackSessionIds.push(row.session_id)
+          continue
+        }
+        if (
+          !parsed ||
+          typeof parsed !== 'object' ||
+          Array.isArray(parsed) ||
+          parsed.kind !== 'assistant' ||
+          typeof parsed.id !== 'string' ||
+          parsed.id.length === 0 ||
+          typeof parsed.sessionId !== 'string' ||
+          parsed.sessionId.length === 0
+        ) {
+          fallbackSessionIds.push(row.session_id)
+          continue
+        }
+
+        const rawStatus = parsed.status
+        const status =
+          rawStatus === 'streaming' ||
+          rawStatus === 'done' ||
+          rawStatus === 'error' ||
+          rawStatus === 'aborted'
+            ? rawStatus
+            : 'done'
+        const rawStopReason = parsed.stopReason
+        const stopReason =
+          rawStopReason === 'pending' ||
+          rawStopReason === 'stop' ||
+          rawStopReason === 'length' ||
+          rawStopReason === 'toolUse' ||
+          rawStopReason === 'error' ||
+          rawStopReason === 'aborted'
+            ? rawStopReason
+            : status === 'aborted'
+              ? 'aborted'
+              : status === 'error'
+                ? 'error'
+                : status === 'streaming'
+                  ? 'pending'
+                  : 'stop'
+        const errorMessage =
+          typeof parsed.errorMessage === 'string' && parsed.errorMessage.length > 0
+            ? parsed.errorMessage
+            : undefined
+
+        if (errorMessage === 'Interrupted by session restart') {
+          unfinishedSessionIds.push(row.session_id)
+          continue
+        }
+        if (status === 'streaming' || stopReason === 'pending') {
+          unfinishedSessionIds.push(row.session_id)
+          continue
+        }
+        const content = Array.isArray(parsed.content) ? parsed.content : []
+        const hasToolCall = content.some((block: any) => {
+          if (!block || typeof block !== 'object' || Array.isArray(block)) return false
+          if (block.type !== 'toolCall' && block.type !== 'tool_call') return false
+          if (typeof block.id !== 'string' || typeof block.name !== 'string') return false
+          const normalizedId = block.id.split('|', 1)[0] ?? block.id
+          return normalizedId.length > 0
+        })
+        if (hasToolCall) {
+          unfinishedSessionIds.push(row.session_id)
+          continue
+        }
+        if (
+          status === 'aborted' ||
+          stopReason === 'aborted' ||
+          status === 'error' ||
+          stopReason === 'error'
+        ) {
+          continue
+        }
+        if (status !== 'done') {
+          unfinishedSessionIds.push(row.session_id)
+        }
+        continue
+      }
+
+      fallbackSessionIds.push(row.session_id)
+    }
+
+    const subAgentRows = this.getStatement(`
+      SELECT
+        sa.id, sa.session_id, sa.parent_session_id, sa.parent_tool_call_id,
+        sa.name, sa.model_id, sa.reasoning_effort, sa.speed, sa.status,
+        sa.color, sa.icon, sa.last_message, sa.error_message,
+        sa.role_id, sa.role_name, sa.role_prompt, sa.depth, sa.parent_agent_id,
+        sa.created_at, sa.updated_at
+      FROM subagents sa
+      LEFT JOIN sessions parent ON parent.id = sa.parent_session_id
+      WHERE sa.status IN ('running', 'queued')
+        AND (
+          sa.parent_session_id IS NULL
+          OR sa.parent_session_id = ''
+          OR (parent.is_subagent = 0 AND parent.archived_at IS NULL)
+        )
+      ORDER BY sa.created_at ASC
+    `).all() as Array<{
+      id: string
+      session_id: string
+      parent_session_id: string
+      parent_tool_call_id: string | null
+      name: string
+      model_id: string | null
+      reasoning_effort: string | null
+      speed: string | null
+      status: string
+      color: string | null
+      icon: string | null
+      last_message: string | null
+      error_message: string | null
+      role_id: string | null
+      role_name: string | null
+      role_prompt: string | null
+      depth: number | null
+      parent_agent_id: string | null
+      created_at: number
+      updated_at: number
+    }>
+
+    for (const row of subAgentRows) {
+      activeSubAgents.push({
+        id: row.id,
+        name: row.name,
+        color: row.color ?? undefined,
+        icon: row.icon ?? undefined,
+        parentSessionId: row.parent_session_id,
+        sessionId: row.session_id,
+        modelId: row.model_id ?? undefined,
+        ...(row.reasoning_effort ? { reasoningEffort: row.reasoning_effort } : {}),
+        ...(row.speed ? { speed: row.speed } : {}),
+        status: row.status,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        ...(row.parent_tool_call_id ? { parentToolCallId: row.parent_tool_call_id } : {}),
+        ...(row.last_message ? { lastMessage: row.last_message } : {}),
+        ...(row.error_message ? { errorMessage: row.error_message } : {}),
+        ...(row.role_id ? { roleId: row.role_id } : {}),
+        ...(row.role_name ? { roleName: row.role_name } : {}),
+        ...(row.role_prompt ? { rolePrompt: row.role_prompt } : {}),
+        ...(typeof row.depth === 'number' ? { depth: row.depth } : {}),
+        ...(row.parent_agent_id ? { parentAgentId: row.parent_agent_id } : {}),
+      })
+    }
+
+    return {
+      unfinishedSessionIds,
+      fallbackSessionIds,
+      activeSubAgents,
+    }
   }
 
   getPluginStorage<T>(pluginId: string, namespaceVersion: number, key: string): T | undefined {

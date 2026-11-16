@@ -3,7 +3,7 @@ import {
   SessionDatabaseService,
   type SessionDatabaseOptions,
 } from './sessionDatabaseService.js'
-import type { QueryMetricsOptions, QueryMetricsResult, SessionItem, SessionSearchResultItem, SubAgentItem, WorktreeSessionSetup } from '../../../../src/shared/types.js'
+import type { QueryMetricsOptions, QueryMetricsResult, SessionItem, SessionSearchResultItem, SubAgentItem, UnfinishedSessionScanResult, WorktreeSessionSetup } from '../../../../src/shared/types.js'
 
 export interface SessionServiceOptions extends SessionDatabaseOptions {}
 
@@ -76,6 +76,10 @@ export class SessionService {
 
   async search(query: string, limit?: number): Promise<SessionSearchResultItem[]> {
     return this.dbService.search(query, limit)
+  }
+
+  async findUnfinished(): Promise<UnfinishedSessionScanResult> {
+    return this.dbService.findUnfinished()
   }
 
   getDatabaseService(): SessionDatabaseService {

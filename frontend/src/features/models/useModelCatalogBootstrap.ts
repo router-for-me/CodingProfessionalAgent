@@ -30,6 +30,14 @@ export function useModelCatalogBootstrap(): void {
             return
         }
 
+        // On initial startup when no catalog has been fetched yet, fetch immediately
+        // instead of waiting for the settings-typing debounce window.
+        if (lastConfigRef.current === null && currentStatus === 'idle') {
+            lastConfigRef.current = { baseUrl, apiKey }
+            void refreshModelCatalog({ baseUrl, apiKey })
+            return
+        }
+
         const timer = window.setTimeout(() => {
             lastConfigRef.current = { baseUrl, apiKey }
             void refreshModelCatalog({ baseUrl, apiKey })

@@ -51,7 +51,8 @@
             "session:claimPendingDelegateRuns",
             "session:ackDelegateRun",
             "session:queryMetrics",
-            "session:search"
+            "session:search",
+            "session:findUnfinished"
         ],
         "settings-group": [
             "archived"

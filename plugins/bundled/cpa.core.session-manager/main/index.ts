@@ -327,6 +327,13 @@ export const sessionManagerMainEntry = definePluginEntry({
                         args[1] as number | undefined,
                     ),
             },
+            {
+                method: 'session:findUnfinished',
+                aliases: ['SessionFindUnfinished'],
+                ipcChannel: 'session:findUnfinished',
+                capability: 'sessions.read',
+                invoke: async () => sessionService.findUnfinished(),
+            },
         ]
 
         for (const rpc of rpcList) {

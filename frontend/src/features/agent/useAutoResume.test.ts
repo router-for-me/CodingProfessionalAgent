@@ -1162,4 +1162,118 @@ describe('useAutoResume', () => {
     // Crucial memory optimization: scanning must NOT pollute useMessageStore for background sessions
     expect(useMessageStore.getState().getEntries(sessionId)).toEqual([])
   })
+
+  it('uses SessionFindUnfinished fast scan without calling SessionGet on unhydrated finished sessions', async () => {
+    useSessionStore.setState({
+      sessions: [
+        { id: 's-finished', title: 'Finished', pinned: false, createdAt: 1000, updatedAt: 1000 },
+        { id: 's-unfinished', title: 'Unfinished', pinned: false, createdAt: 1001, updatedAt: 1001 },
+        { id: 's-inmem-done', title: 'InMem Done', pinned: false, createdAt: 1002, updatedAt: 1002 },
+      ],
+      currentSessionId: 's-inmem-done',
+    })
+
+    // In-memory entries for current session override disk status
+    useMessageStore.getState().replaceSessionEntries('s-inmem-done', [
+      { id: 'u0', sessionId: 's-inmem-done', createdAt: 1000, kind: 'user', content: [{ type: 'text', text: 'hi' }] },
+      { id: 'a0', sessionId: 's-inmem-done', createdAt: 1001, kind: 'assistant', content: [{ type: 'text', text: 'done' }], status: 'done', stopReason: 'stop' },
+    ])
+
+    const sessionGetSpy = vi.fn()
+    const findUnfinishedSpy = vi.fn().mockResolvedValue({
+      unfinishedSessionIds: ['s-unfinished', 's-inmem-done'],
+      fallbackSessionIds: [],
+      activeSubAgents: [],
+    })
+
+    setHostBridge({
+      SessionFindUnfinished: findUnfinishedSpy,
+      SessionGet: sessionGetSpy,
+      SessionGetActiveRuns: vi.fn().mockResolvedValue([]),
+    } as any)
+
+    const { scanUnfinishedTasks } = await import('./useAutoResume')
+    const result = await scanUnfinishedTasks()
+
+    expect(findUnfinishedSpy).toHaveBeenCalledTimes(1)
+    expect(sessionGetSpy).not.toHaveBeenCalled()
+    expect(result.unfinishedSessionIds).toEqual(['s-unfinished'])
+    expect(result.totalCount).toBe(1)
+  })
+
+  it('falls back to SessionGet only for fallbackSessionIds and loads activeSubAgents returned by fast scan', async () => {
+    useSessionStore.setState({
+      sessions: [
+        { id: 's-fallback', title: 'Fallback', pinned: false, createdAt: 1000, updatedAt: 1000 },
+        { id: 's-parent', title: 'Parent', pinned: false, createdAt: 1001, updatedAt: 1001 },
+      ],
+      currentSessionId: null,
+    })
+
+    const sessionGetSpy = vi.fn(async (id: string) => {
+      if (id === 's-fallback') {
+        return {
+          id: 's-fallback',
+          entries: [
+            { id: 'u-fb', sessionId: 's-fallback', createdAt: 1000, kind: 'user', content: [{ type: 'text', text: 'fb' }] },
+          ],
+        }
+      }
+      if (id === 's-parent') {
+        return {
+          id: 's-parent',
+          entries: [
+            { id: 'u-p', sessionId: 's-parent', createdAt: 1000, kind: 'user', content: [{ type: 'text', text: 'spawn' }] },
+            {
+              id: 'a-p',
+              sessionId: 's-parent',
+              createdAt: 1001,
+              kind: 'assistant',
+              content: [{ type: 'toolCall', id: 'tc-bg', name: 'spawn_agent', arguments: { name: 'Bg', prompt: 'work', model: 'gpt-4' } }],
+              status: 'done',
+              stopReason: 'toolUse',
+            },
+          ],
+        }
+      }
+      if (id === 'sa-bg-sess') {
+        return {
+          id: 'sa-bg-sess',
+          entries: [
+            { id: 'u-sa', sessionId: 'sa-bg-sess', createdAt: 1002, kind: 'user', content: [{ type: 'text', text: 'work' }] },
+          ],
+        }
+      }
+      return null
+    })
+
+    setHostBridge({
+      SessionFindUnfinished: vi.fn().mockResolvedValue({
+        unfinishedSessionIds: [],
+        fallbackSessionIds: ['s-fallback'],
+        activeSubAgents: [
+          {
+            id: 'sa-bg',
+            sessionId: 'sa-bg-sess',
+            parentSessionId: 's-parent',
+            parentToolCallId: 'tc-bg',
+            name: 'Bg',
+            status: 'running',
+            createdAt: 1002,
+            updatedAt: 1002,
+          },
+        ],
+      }),
+      SessionGet: sessionGetSpy,
+      SessionGetActiveRuns: vi.fn().mockResolvedValue([]),
+    } as any)
+
+    const { scanUnfinishedTasks } = await import('./useAutoResume')
+    const result = await scanUnfinishedTasks()
+
+    expect(result.unfinishedSessionIds).toEqual(['s-fallback'])
+    expect(result.unfinishedSubAgentIds).toEqual(['sa-bg'])
+    expect(result.totalCount).toBe(2)
+    expect(useSubAgentStore.getState().agents.some((a) => a.id === 'sa-bg')).toBe(true)
+  })
 })

@@ -4414,5 +4414,173 @@ describe('SessionDatabaseService', () => {
       expect(service.getPluginStorage('tx-plugin', 1, 'count')).toBe(10)
     })
   })
+
+  describe('findUnfinished fast scan', () => {
+    it('accurately detects unfinished sessions, skips finished/archived/worktree-error sessions, handles trailing compaction, and returns active subagents', async () => {
+      // 1. Cleanly finished session
+      await service.set('sess-done', {
+        entries: [
+          { id: 'u1', sessionId: 'sess-done', createdAt: 1, kind: 'user', content: [{ type: 'text', text: 'hi' }] },
+          { id: 'a1', sessionId: 'sess-done', createdAt: 2, kind: 'assistant', content: [{ type: 'text', text: 'ok' }], status: 'done', stopReason: 'stop' },
+        ],
+      })
+
+      // 2. Cleanly aborted session (user stop without restart error or pending tool calls)
+      await service.set('sess-aborted', {
+        entries: [
+          { id: 'u2', sessionId: 'sess-aborted', createdAt: 1, kind: 'user', content: [{ type: 'text', text: 'hi' }] },
+          { id: 'a2', sessionId: 'sess-aborted', createdAt: 2, kind: 'assistant', content: [{ type: 'text', text: 'partial' }], status: 'aborted', stopReason: 'aborted' },
+        ],
+      })
+
+      // 3. Unfinished: last entry is user
+      await service.set('sess-user-last', {
+        entries: [
+          { id: 'u3', sessionId: 'sess-user-last', createdAt: 1, kind: 'user', content: [{ type: 'text', text: 'pending' }] },
+        ],
+      })
+
+      // 4. Unfinished: last entry is toolResult
+      await service.set('sess-tool-last', {
+        entries: [
+          { id: 'u4', sessionId: 'sess-tool-last', createdAt: 1, kind: 'user', content: [{ type: 'text', text: 'run' }] },
+          { id: 'a4', sessionId: 'sess-tool-last', createdAt: 2, kind: 'assistant', content: [{ type: 'toolCall', id: 'tc1', name: 'bash', arguments: {} }], status: 'done', stopReason: 'toolUse' },
+          { id: 'tr4', sessionId: 'sess-tool-last', createdAt: 3, kind: 'toolResult', toolCallId: 'tc1', toolName: 'bash', content: [{ type: 'text', text: 'out' }], isError: false },
+        ],
+      })
+
+      // 5. Unfinished: assistant streaming followed by trailing compaction
+      await service.set('sess-streaming-compaction', {
+        entries: [
+          { id: 'u5', sessionId: 'sess-streaming-compaction', createdAt: 1, kind: 'user', content: [{ type: 'text', text: 'go' }] },
+          { id: 'a5', sessionId: 'sess-streaming-compaction', createdAt: 2, kind: 'assistant', content: [], status: 'streaming', stopReason: 'pending' },
+          { id: 'c5', sessionId: 'sess-streaming-compaction', createdAt: 3, kind: 'compaction', summary: 'sum', firstKeptEntryId: 'u5' },
+        ],
+      })
+
+      // 6. Unfinished: assistant interrupted by restart
+      await service.set('sess-restart-err', {
+        entries: [
+          { id: 'u6', sessionId: 'sess-restart-err', createdAt: 1, kind: 'user', content: [{ type: 'text', text: 'go' }] },
+          { id: 'a6', sessionId: 'sess-restart-err', createdAt: 2, kind: 'assistant', content: [{ type: 'text', text: 'part' }], status: 'aborted', stopReason: 'aborted', errorMessage: 'Interrupted by session restart' },
+        ],
+      })
+
+      // 7. Unfinished: assistant with unfulfilled toolCall
+      await service.set('sess-pending-tool', {
+        entries: [
+          { id: 'u7', sessionId: 'sess-pending-tool', createdAt: 1, kind: 'user', content: [{ type: 'text', text: 'go' }] },
+          { id: 'a7', sessionId: 'sess-pending-tool', createdAt: 2, kind: 'assistant', content: [{ type: 'toolCall', id: 'tc7', name: 'read', arguments: { path: 'a' } }], status: 'done', stopReason: 'toolUse' },
+        ],
+      })
+
+      // 8. Archived unfinished session -> must be ignored
+      await service.set('sess-archived', {
+        archivedAt: Date.now(),
+        entries: [
+          { id: 'u8', sessionId: 'sess-archived', createdAt: 1, kind: 'user', content: [{ type: 'text', text: 'ignored' }] },
+        ],
+      })
+
+      // 9. Worktree error session -> must be ignored
+      await service.set('sess-wt-err', {
+        workLocation: 'worktree',
+        worktreeSetup: {
+          sessionId: 'sess-wt-err',
+          status: 'error',
+          stepWorkspace: 'done',
+          stepCheckout: 'error',
+          stepEnvironment: 'pending',
+          logs: 'failed',
+          expandedDetails: true,
+        },
+        entries: [
+          { id: 'u9', sessionId: 'sess-wt-err', createdAt: 1, kind: 'user', content: [{ type: 'text', text: 'ignored' }] },
+        ],
+      })
+
+      // 10. Active running subagent in a completed parent session
+      await service.set('sess-parent-with-sa', {
+        entries: [
+          { id: 'u10', sessionId: 'sess-parent-with-sa', createdAt: 1, kind: 'user', content: [{ type: 'text', text: 'spawn' }] },
+          { id: 'a10', sessionId: 'sess-parent-with-sa', createdAt: 2, kind: 'assistant', content: [{ type: 'text', text: 'done' }], status: 'done', stopReason: 'stop' },
+        ],
+        subAgents: [
+          {
+            id: 'sa-running',
+            sessionId: 'sa-running-sess',
+            parentSessionId: 'sess-parent-with-sa',
+            parentToolCallId: 'tc-sa-1',
+            name: 'Worker',
+            status: 'running',
+            createdAt: 1,
+            updatedAt: 1,
+          },
+          {
+            id: 'sa-done',
+            sessionId: 'sa-done-sess',
+            parentSessionId: 'sess-parent-with-sa',
+            name: 'DoneWorker',
+            status: 'completed',
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        ],
+      })
+
+      // 11. Corrupt / legacy entry -> goes to fallbackSessionIds
+      await service.set('sess-legacy', {
+        entries: [
+          { id: 'leg-1', role: 'user', content: 'legacy text' },
+        ],
+      })
+
+      const result = await service.findUnfinished()
+
+      expect(result.unfinishedSessionIds.sort()).toEqual([
+        'sess-pending-tool',
+        'sess-restart-err',
+        'sess-streaming-compaction',
+        'sess-tool-last',
+        'sess-user-last',
+      ])
+      expect(result.fallbackSessionIds).toEqual(['sess-legacy'])
+      expect(result.activeSubAgents.map((sa) => sa.id)).toEqual(['sa-running'])
+    })
+
+    it('scans hundreds of large sessions rapidly without reading full histories', async () => {
+      const bulkPayload = 'x'.repeat(20_000)
+      const db = service.getDb()
+      const insertSession = db.prepare(
+        'INSERT INTO sessions (id, title, is_subagent, created_at, updated_at) VALUES (?, ?, 0, ?, ?)',
+      )
+      const insertEntry = db.prepare(
+        'INSERT INTO session_entries (id, session_id, kind, version, created_at, entry_index, payload_json) VALUES (?, ?, ?, 1, ?, ?, ?)',
+      )
+      db.transaction(() => {
+        for (let i = 0; i < 200; i++) {
+          const sid = `perf-sess-${i}`
+          insertSession.run(sid, sid, 1000 + i, 1000 + i)
+          for (let j = 0; j < 20; j++) {
+            const entry =
+              j === 19 && i === 123
+                ? { id: `${sid}-e-${j}`, sessionId: sid, createdAt: 1000, kind: 'user', content: [{ type: 'text', text: 'unfinished' }] }
+                : j % 2 === 0
+                  ? { id: `${sid}-e-${j}`, sessionId: sid, createdAt: 1000, kind: 'user', content: [{ type: 'text', text: bulkPayload }] }
+                  : { id: `${sid}-e-${j}`, sessionId: sid, createdAt: 1001, kind: 'assistant', content: [{ type: 'text', text: bulkPayload }], status: 'done', stopReason: 'stop' }
+            insertEntry.run(entry.id, sid, entry.kind, entry.createdAt, j, JSON.stringify(entry))
+          }
+        }
+      })()
+
+      const start = performance.now()
+      const result = await service.findUnfinished()
+      const elapsedMs = performance.now() - start
+
+      expect(result.unfinishedSessionIds).toEqual(['perf-sess-123'])
+      expect(result.fallbackSessionIds).toEqual([])
+      expect(elapsedMs).toBeLessThan(500)
+    })
+  })
 })
 

@@ -15,7 +15,7 @@ describe('cpa.core.session-manager main entry', () => {
         expect(services.map((s) => s.id).sort()).toEqual(['sessionRunRegistry', 'sessionService'])
 
         const rpcs = harness.getRegistered('rpc')
-        expect(rpcs).toHaveLength(21)
+        expect(rpcs).toHaveLength(22)
         const rpcMethods = rpcs.map((r) => r.id).sort()
         expect(rpcMethods).toEqual([
             'session:abortRun',
@@ -27,6 +27,7 @@ describe('cpa.core.session-manager main entry', () => {
             'session:claimPendingDelegateRuns',
             'session:delegateRun',
             'session:delete',
+            'session:findUnfinished',
             'session:get',
             'session:getActiveRuns',
             'session:getResumePromptState',

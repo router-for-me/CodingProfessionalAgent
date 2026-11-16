@@ -96,6 +96,7 @@ export const RENDERER_CAPABILITY_DESCRIPTORS: readonly RendererCapabilityDescrip
     { name: 'SessionAckDelegateRun', method: 'session:ackDelegateRun', capability: 'sessions.manage' },
     { name: 'SessionQueryMetrics', method: 'session:queryMetrics', capability: 'sessions.read' },
     { name: 'SessionSearch', method: 'session:search', capability: 'sessions.read' },
+    { name: 'SessionFindUnfinished', method: 'session:findUnfinished', capability: 'sessions.read' },
 
 
     // Tray

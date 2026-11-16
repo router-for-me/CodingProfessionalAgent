@@ -14,6 +14,7 @@ import {
   loadSessionEntries,
   saveSessionData,
   schedulePersist,
+  withSuppressedPersistence,
 } from '@/application/services/persistenceService'
 import {
   isSessionUnfinished,
@@ -59,22 +60,102 @@ function healSubAgent(
   }
 }
 
+const SCAN_FALLBACK_CONCURRENCY = 8
+
+async function mapWithConcurrency<T>(
+  items: readonly T[],
+  concurrency: number,
+  worker: (item: T) => Promise<void>,
+): Promise<void> {
+  if (items.length === 0) return
+  let index = 0
+  const workers = Array.from(
+    { length: Math.min(concurrency, items.length) },
+    async () => {
+      while (index < items.length) {
+        const current = items[index++]
+        if (current !== undefined) {
+          await worker(current)
+        }
+      }
+    },
+  )
+  await Promise.all(workers)
+}
+
 export async function scanUnfinishedTasks(): Promise<ScanResult> {
   let sessions = useSessionStore.getState().sessions
 
-  // In desktop/electron mode, ensure we query the authoritative sessions list from SQLite
   const bridge = getHostBridge()
-  if (typeof bridge?.SessionListSessions === 'function') {
-    try {
-      const remote = await bridge.SessionListSessions()
-      if (Array.isArray(remote) && remote.length > 0) {
-        for (const s of remote) {
+  const hasFastScan = typeof bridge?.SessionFindUnfinished === 'function'
+  const hasListSessions = typeof bridge?.SessionListSessions === 'function'
+  const hasGetActiveRuns = typeof bridge?.SessionGetActiveRuns === 'function'
+
+  let fastScanResult: Awaited<ReturnType<NonNullable<typeof bridge>['SessionFindUnfinished']>> | null = null
+  let remoteRuns: Awaited<ReturnType<NonNullable<typeof bridge>['SessionGetActiveRuns']>> | null = null
+
+  if (hasFastScan) {
+    const [scanRes, runsRes] = await Promise.all([
+      bridge.SessionFindUnfinished!().catch(() => null),
+      hasListSessions && sessions.length === 0
+        ? bridge.SessionListSessions!().catch(() => null)
+        : Promise.resolve(null),
+    ])
+    fastScanResult = scanRes
+    if (Array.isArray(runsRes) && runsRes.length > 0) {
+      withSuppressedPersistence(() => {
+        for (const s of runsRes) {
           useSessionStore.getState().upsertRemoteSession(s)
         }
-        sessions = useSessionStore.getState().sessions
+      })
+      sessions = useSessionStore.getState().sessions
+    }
+    if (hasGetActiveRuns) {
+      try {
+        remoteRuns = await bridge.SessionGetActiveRuns!()
+      } catch {
+        // Ignore
       }
-    } catch {
-      // Ignore
+    }
+  } else {
+    const [remoteSessions, runsRes] = await Promise.all([
+      hasListSessions ? bridge.SessionListSessions!().catch(() => null) : Promise.resolve(null),
+      hasGetActiveRuns ? bridge.SessionGetActiveRuns!().catch(() => null) : Promise.resolve(null),
+    ])
+    if (Array.isArray(remoteSessions) && remoteSessions.length > 0) {
+      withSuppressedPersistence(() => {
+        for (const s of remoteSessions) {
+          useSessionStore.getState().upsertRemoteSession(s)
+        }
+      })
+      sessions = useSessionStore.getState().sessions
+    }
+    remoteRuns = runsRes
+  }
+
+  // If fast scan discovered unfinished items for sessions not yet in store, sync session metadata once.
+  if (fastScanResult && hasListSessions) {
+    const knownSessionIds = new Set(sessions.map((s) => s.id))
+    const hasMissingSession =
+      fastScanResult.unfinishedSessionIds.some((id) => !knownSessionIds.has(id)) ||
+      fastScanResult.fallbackSessionIds.some((id) => !knownSessionIds.has(id)) ||
+      fastScanResult.activeSubAgents.some(
+        (sa) => Boolean(sa.parentSessionId) && !knownSessionIds.has(sa.parentSessionId!),
+      )
+    if (hasMissingSession) {
+      try {
+        const remote = await bridge.SessionListSessions!()
+        if (Array.isArray(remote) && remote.length > 0) {
+          withSuppressedPersistence(() => {
+            for (const s of remote) {
+              useSessionStore.getState().upsertRemoteSession(s)
+            }
+          })
+          sessions = useSessionStore.getState().sessions
+        }
+      } catch {
+        // Ignore
+      }
     }
   }
 
@@ -87,24 +168,25 @@ export async function scanUnfinishedTasks(): Promise<ScanResult> {
     }
   }
 
-  if (typeof bridge?.SessionGetActiveRuns === 'function') {
-    try {
-      const remoteRuns = await bridge.SessionGetActiveRuns()
-      if (Array.isArray(remoteRuns)) {
-        for (const run of remoteRuns) {
-          if (run && run.sessionId && run.status && run.status !== 'idle') {
-            activeRunningSessionIds.add(run.sessionId)
-          }
-        }
+  if (Array.isArray(remoteRuns)) {
+    for (const run of remoteRuns) {
+      if (run && run.sessionId && run.status && run.status !== 'idle') {
+        activeRunningSessionIds.add(run.sessionId)
       }
-    } catch {
-      // Ignore
     }
   }
 
   // Filter out archived sessions from auto-resume scan
   const activeSessions = sessions.filter((s) => !s.archivedAt)
-  const activeSessionIdSet = new Set(activeSessions.map((s) => s.id))
+  const activeSessionById = new Map(activeSessions.map((s) => [s.id, s]))
+  const activeSessionIdSet = new Set(activeSessionById.keys())
+
+  const hasWorktreeError = (sessionId: string): boolean => {
+    const worktreeSetup =
+      useWorktreeSetupStore.getState().getSetup(sessionId) ??
+      activeSessionById.get(sessionId)?.worktreeSetup
+    return Boolean(worktreeSetup && worktreeSetup.status === 'error')
+  }
 
   const unfinishedSessionIds: string[] = []
   const unfinishedSubAgentIds: string[] = []
@@ -115,29 +197,89 @@ export async function scanUnfinishedTasks(): Promise<ScanResult> {
     sessionIdsToScan.add(currentSessionId)
   }
 
-  for (const sessionId of sessionIdsToScan) {
-    if (activeRunningSessionIds.has(sessionId)) {
-      continue
-    }
-    try {
-      const inMemory = useMessageStore.getState().getEntries(sessionId)
-      const entries =
-        inMemory && inMemory.length > 0
-          ? inMemory
-          : (await loadSessionEntries(sessionId)) ?? []
-      // If worktree setup failed (checkout or environment script), do not treat as an unfinished task to resume
-      const worktreeSetup =
-        useWorktreeSetupStore.getState().getSetup(sessionId) ??
-        useSessionStore.getState().sessions.find((s) => s.id === sessionId)?.worktreeSetup
-      if (worktreeSetup && worktreeSetup.status === 'error') {
+  if (fastScanResult) {
+    const diskUnfinishedSet = new Set(fastScanResult.unfinishedSessionIds)
+    const diskFallbackSet = new Set(fastScanResult.fallbackSessionIds)
+    const sessionsNeedingFallbackLoad: string[] = []
+
+    for (const sessionId of sessionIdsToScan) {
+      if (activeRunningSessionIds.has(sessionId) || hasWorktreeError(sessionId)) {
         continue
       }
-      if (isSessionUnfinished(entries)) {
-        unfinishedSessionIds.push(sessionId)
+      const inMemory = useMessageStore.getState().getEntries(sessionId)
+      if (inMemory && inMemory.length > 0) {
+        if (isSessionUnfinished(inMemory)) {
+          unfinishedSessionIds.push(sessionId)
+        }
+        continue
       }
-    } catch {
-      // Ignore load failure
+      if (diskUnfinishedSet.has(sessionId)) {
+        unfinishedSessionIds.push(sessionId)
+      } else if (diskFallbackSet.has(sessionId)) {
+        sessionsNeedingFallbackLoad.push(sessionId)
+      }
     }
+
+    await mapWithConcurrency(
+      sessionsNeedingFallbackLoad,
+      SCAN_FALLBACK_CONCURRENCY,
+      async (sessionId) => {
+        try {
+          const entries = (await loadSessionEntries(sessionId)) ?? []
+          if (isSessionUnfinished(entries)) {
+            unfinishedSessionIds.push(sessionId)
+          }
+        } catch {
+          // Ignore load failure
+        }
+      },
+    )
+
+    if (
+      Array.isArray(fastScanResult.activeSubAgents) &&
+      fastScanResult.activeSubAgents.length > 0
+    ) {
+      const existingAgentIds = new Set(useSubAgentStore.getState().agents.map((a) => a.id))
+      const missingAgents = fastScanResult.activeSubAgents.filter(
+        (sa) => sa && typeof sa.id === 'string' && !existingAgentIds.has(sa.id),
+      )
+      if (missingAgents.length > 0) {
+        withSuppressedPersistence(() => {
+          useSubAgentStore.getState().mergeHostAgents(missingAgents as SubAgentRecord[])
+        })
+      }
+    }
+  } else {
+    const sessionsToLoadFromDisk: string[] = []
+
+    for (const sessionId of sessionIdsToScan) {
+      if (activeRunningSessionIds.has(sessionId) || hasWorktreeError(sessionId)) {
+        continue
+      }
+      const inMemory = useMessageStore.getState().getEntries(sessionId)
+      if (inMemory && inMemory.length > 0) {
+        if (isSessionUnfinished(inMemory)) {
+          unfinishedSessionIds.push(sessionId)
+        }
+      } else {
+        sessionsToLoadFromDisk.push(sessionId)
+      }
+    }
+
+    await mapWithConcurrency(
+      sessionsToLoadFromDisk,
+      SCAN_FALLBACK_CONCURRENCY,
+      async (sessionId) => {
+        try {
+          const entries = (await loadSessionEntries(sessionId)) ?? []
+          if (isSessionUnfinished(entries)) {
+            unfinishedSessionIds.push(sessionId)
+          }
+        } catch {
+          // Ignore load failure
+        }
+      },
+    )
   }
 
   // Re-fetch all subagents after sessions have been loaded into memory

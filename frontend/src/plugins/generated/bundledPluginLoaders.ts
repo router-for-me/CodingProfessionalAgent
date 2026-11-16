@@ -60,7 +60,8 @@ export const bundledManifests: Readonly<Record<string, PluginManifest>> = Object
                         "session:claimPendingDelegateRuns",
                         "session:ackDelegateRun",
                         "session:queryMetrics",
-                        "session:search"
+                        "session:search",
+                        "session:findUnfinished"
                 ],
                 "settings-group": [
                         "archived"
