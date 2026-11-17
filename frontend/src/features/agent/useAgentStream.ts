@@ -10,6 +10,7 @@ import { getHashRoutePathname } from '@cpa/plugin-ui'
 import { getHostBridge, subscribeHostNativeEvents, onHostReconnect } from '@/application/services/hostTransport'
 import { registerHostAgentController } from '@/application/services/createHostServices'
 import type { SessionDelegateRunRequest } from '@/features/agent-runtime/native/types'
+import { clearForkedSessionPromptState, waitForForkedSessionPrompt } from '@/features/agent-runtime/session/forkSession'
 import {
     createContext,
     createElement,
@@ -159,6 +160,21 @@ type ServiceRuntime = {
     pendingSteers: Map<string, UserEntry[]>
     sessionQueues: Map<string, Array<{ entry: UserEntry; payload: AgentSendPayload; options?: AgentSendOptions }>>
     pendingDelegateRuns: SessionDelegateRunRequest[]
+    delegatedDrafts: Map<
+        string,
+        {
+            userEntryId: string
+            requestId?: string
+            sessionId: string
+            runId?: string
+            text: string
+            skillReferences?: readonly { start: number; name: string }[]
+            images: readonly ComposerImage[]
+            awaitingDelegateSettlement?: boolean
+            enhancementFailure?: Extract<AgentRunEvent, { type: 'error' }>
+            cancelled?: boolean
+        }
+    >
     inFlightDelegateRuns: Set<string>
     completedDelegateRuns: Set<string>
     flightFinishCallbacks: Map<number, Array<(succeeded: boolean) => void>>
@@ -397,6 +413,83 @@ function bindNativeSync(service: AgentService): void {
                     return // Ignore self-echo from runs hosted by this client (even after flight is released)
                 }
 
+                const event = parsed.event
+                const eventSessionId =
+                    'sessionId' in event && typeof event.sessionId === 'string' && event.sessionId
+                        ? event.sessionId
+                        : parsed.sessionId
+                if (rt.deletedSessionIds.has(parsed.sessionId) || rt.deletedSessionIds.has(eventSessionId)) {
+                    for (const [key, draft] of rt.delegatedDrafts.entries()) {
+                        if (draft.sessionId === parsed.sessionId || draft.sessionId === eventSessionId) {
+                            draft.cancelled = true
+                            rt.delegatedDrafts.delete(key)
+                        }
+                    }
+                    return
+                }
+                if (event.type === 'user-entry' && event.entry?.id) {
+                    const draft = rt.delegatedDrafts.get(event.entry.id)
+                    if (draft && draft.sessionId === parsed.sessionId) {
+                        draft.runId = parsed.runId
+                    }
+                }
+                if (event.type === 'error' && isEnhancementFailure(event.preflightCode)) {
+                    withSuppressedPersistence(() => {
+                        adapter.apply(event)
+                        recordEnhancementFailure(event)
+                    })
+                    useUiStore.getState().pushToast(String(i18n.t(`agent.preflight.${event.preflightCode}`, { defaultValue: event.message })))
+                    const matchedDraft =
+                        (event.userEntryId ? rt.delegatedDrafts.get(event.userEntryId) : undefined) ??
+                        (event.requestId
+                            ? Array.from(rt.delegatedDrafts.values()).find(
+                                  (draft) => draft.sessionId === parsed.sessionId && draft.requestId === event.requestId,
+                              )
+                            : undefined) ??
+                        Array.from(rt.delegatedDrafts.values()).find(
+                            (draft) => draft.sessionId === parsed.sessionId && draft.runId === parsed.runId,
+                        )
+                    if (matchedDraft && matchedDraft.sessionId === parsed.sessionId) {
+                        restoreComposerDraftIfEmpty(
+                            parsed.sessionId,
+                            matchedDraft.text,
+                            matchedDraft.skillReferences,
+                            matchedDraft.images,
+                            rt,
+                        )
+                        if (matchedDraft.awaitingDelegateSettlement) {
+                            matchedDraft.enhancementFailure = event
+                        } else {
+                            rt.delegatedDrafts.delete(matchedDraft.userEntryId)
+                        }
+                    }
+                    return
+                }
+                if (
+                    event.type === 'agent-end' ||
+                    event.type === 'error' ||
+                    event.type === 'aborted'
+                ) {
+                    for (const [key, draft] of rt.delegatedDrafts.entries()) {
+                        const matchesRun = Boolean(parsed.runId && draft.runId === parsed.runId)
+                        const matchesUserEntry = Boolean(
+                            'userEntryId' in event &&
+                                event.userEntryId &&
+                                draft.userEntryId === event.userEntryId,
+                        )
+                        const matchesRequest = Boolean(
+                            'requestId' in event &&
+                                event.requestId &&
+                                draft.requestId === event.requestId,
+                        )
+                        if (
+                            draft.sessionId === parsed.sessionId &&
+                            (matchesRun || matchesUserEntry || matchesRequest)
+                        ) {
+                            rt.delegatedDrafts.delete(key)
+                        }
+                    }
+                }
                 const currentSessionId = useSessionStore.getState().currentSessionId
                 const isCurrentSession = currentSessionId === parsed.sessionId
                 const isKnownSubAgent = useSubAgentStore
@@ -431,6 +524,9 @@ function bindNativeSync(service: AgentService): void {
             try {
                 const sessionItem = JSON.parse(nativeEvent.data) as Session
                 if (sessionItem && sessionItem.id) {
+                    if (rt.deletedSessionIds.has(sessionItem.id)) {
+                        return
+                    }
                     if (!hasPendingSessionMetadata(sessionItem.id)) {
                         withSuppressedPersistence(() => {
                             useSessionStore.getState().upsertRemoteSession(sessionItem)
@@ -466,7 +562,29 @@ function bindNativeSync(service: AgentService): void {
                     return
                 }
 
+                for (const [key, draft] of rt.delegatedDrafts.entries()) {
+                    if (draft.sessionId === parsed.sessionId) {
+                        rt.delegatedDrafts.delete(key)
+                    }
+                }
                 handleSessionAbort(rt, service, parsed.sessionId)
+            } catch {
+                // Ignore JSON parse error
+            }
+        } else if (nativeEvent.kind === 'session:run-status') {
+            try {
+                const parsed = JSON.parse(nativeEvent.data) as {
+                    sessionId?: string
+                    status?: string
+                    runId?: string
+                }
+                if (parsed.sessionId && parsed.status === 'idle' && parsed.runId) {
+                    for (const [key, draft] of rt.delegatedDrafts.entries()) {
+                        if (draft.sessionId === parsed.sessionId && draft.runId === parsed.runId) {
+                            rt.delegatedDrafts.delete(key)
+                        }
+                    }
+                }
             } catch {
                 // Ignore JSON parse error
             }
@@ -476,6 +594,12 @@ function bindNativeSync(service: AgentService): void {
                     sessionId?: string
                 }
                 if (parsed.sessionId) {
+                    for (const [key, draft] of rt.delegatedDrafts.entries()) {
+                        if (draft.sessionId === parsed.sessionId) {
+                            draft.cancelled = true
+                            rt.delegatedDrafts.delete(key)
+                        }
+                    }
                     handleSessionDeleted(rt, service, parsed.sessionId)
                 }
             } catch {
@@ -507,9 +631,38 @@ function bindNativeSync(service: AgentService): void {
         }
     })
 
-    if (typeof unsubscribe === 'function') {
-        nativeUnsubscribes.set(service, unsubscribe)
-    }
+    let prevSessionIds = new Set(useSessionStore.getState().sessions.map((s) => s.id))
+    const unsubscribeSessionStore = useSessionStore.subscribe((state) => {
+        const currentIds = new Set(state.sessions.map((s) => s.id))
+        for (const prevId of prevSessionIds) {
+            if (!currentIds.has(prevId) && !rt.deletedSessionIds.has(prevId)) {
+                if (rt.runs.has(prevId)) {
+                    handleSessionDeleted(rt, service, prevId)
+                } else {
+                    rt.deletedSessionIds.add(prevId)
+                    while (rt.deletedSessionIds.size > 1000) {
+                        const oldest = rt.deletedSessionIds.values().next().value
+                        if (oldest) rt.deletedSessionIds.delete(oldest)
+                        else break
+                    }
+                    useUiStore.getState().clearSessionComposerDraft(prevId)
+                }
+            }
+        }
+        for (const id of currentIds) {
+            if (!prevSessionIds.has(id)) {
+                rt.deletedSessionIds.delete(id)
+            }
+        }
+        prevSessionIds = currentIds
+    })
+
+    nativeUnsubscribes.set(service, () => {
+        if (typeof unsubscribe === 'function') {
+            unsubscribe()
+        }
+        unsubscribeSessionStore()
+    })
 }
 
 function pruneHistoricalSubAgents(
@@ -674,6 +827,7 @@ function createRuntime(): ServiceRuntime {
         pendingSteers: new Map(),
         sessionQueues: new Map(),
         pendingDelegateRuns: [],
+        delegatedDrafts: new Map(),
         inFlightDelegateRuns: new Set(),
         completedDelegateRuns: new Set(),
         flightFinishCallbacks: new Map(),
@@ -948,6 +1102,12 @@ function handleSessionDeleted(
 ): void {
     if (!sessionId) return
     rt.deletedSessionIds.add(sessionId)
+    for (const [key, draft] of rt.delegatedDrafts.entries()) {
+        if (draft.sessionId === sessionId) {
+            draft.cancelled = true
+            rt.delegatedDrafts.delete(key)
+        }
+    }
     while (rt.deletedSessionIds.size > 1000) {
         const oldest = rt.deletedSessionIds.values().next().value
         if (oldest) rt.deletedSessionIds.delete(oldest)
@@ -955,7 +1115,9 @@ function handleSessionDeleted(
     }
     bumpSessionActionEpoch(sessionId)
 
+    clearForkedSessionPromptState(sessionId)
     useSessionStore.getState().removeRemoteSession(sessionId)
+    useUiStore.getState().clearSessionComposerDraft(sessionId)
 
     const flight = rt.runs.get(sessionId)
     if (flight) {
@@ -1002,6 +1164,7 @@ function handleSessionDeleted(
 
     rt.pendingTakeoverAborts.delete(sessionId)
     sessionActionQueues.delete(sessionId)
+    service.evictSessionCache?.(sessionId)
     emit(rt)
 }
 
@@ -1071,6 +1234,35 @@ async function executeDelegateRun(
         }
     }
 
+    let invokedSendInternal = false
+    const broadcastPreStartCancellation = (
+        reason: 'aborted' | 'error',
+        message?: string,
+    ) => {
+        if (!req.sessionId || (!req.userEntryId && !req.requestId)) return
+        if (rt.deletedSessionIds.has(req.sessionId)) return
+        const eventRunId = createId()
+        rememberHostedRunId(rt, eventRunId)
+        const event: AgentRunEvent =
+            reason === 'aborted'
+                ? {
+                      type: 'aborted',
+                      sessionId: req.sessionId,
+                      runId: eventRunId,
+                      ...(req.userEntryId ? { userEntryId: req.userEntryId } : {}),
+                      ...(req.requestId ? { requestId: req.requestId } : {}),
+                  }
+                : {
+                      type: 'error',
+                      sessionId: req.sessionId,
+                      runId: eventRunId,
+                      message: message || 'Delegated run failed',
+                      ...(req.userEntryId ? { userEntryId: req.userEntryId } : {}),
+                      ...(req.requestId ? { requestId: req.requestId } : {}),
+                  }
+        void getHostBridge()?.SessionBroadcastStreamEvent(req.sessionId, eventRunId, event)
+    }
+
     try {
         if (req.action === 'compact') {
             await executeDelegatedCompact(rt, req, startEpoch, markDelegateRunFinished)
@@ -1127,14 +1319,21 @@ async function executeDelegateRun(
             (req.sessionId && rt.deletedSessionIds.has(req.sessionId)) ||
             (req.sessionId && startEpoch && !isEpochValid(req.sessionId, startEpoch))
         ) {
+            if (!req.sessionId || !rt.deletedSessionIds.has(req.sessionId)) {
+                broadcastPreStartCancellation('aborted')
+            }
             markDelegateRunFinished(false)
             return
         }
         const handler = rt.sendInternalHandler ?? rt.sendHandler
         if (rt.disposed || !handler) {
+            if (!req.sessionId || !rt.deletedSessionIds.has(req.sessionId)) {
+                broadcastPreStartCancellation('aborted')
+            }
             markDelegateRunFinished(false)
             return
         }
+        invokedSendInternal = handler === rt.sendInternalHandler
         const sendResult = await handler({
             text: req.text ?? '',
             images: req.images?.map((img) => ({
@@ -1153,16 +1352,28 @@ async function executeDelegateRun(
             speed: req.speed,
             editMessageId: req.editMessageId,
             userEntryId: req.userEntryId,
+            requestId: req.requestId,
             userEntryCreatedAt: req.userEntryCreatedAt,
             skillReferences: req.skillReferences,
             followUpMode: req.followUpMode,
             onRunFinish: markDelegateRunFinished,
         })
         if (!sendResult) {
+            broadcastPreStartCancellation('aborted')
             markDelegateRunFinished(false)
         }
     } catch (error) {
         markDelegateRunFinished(false)
+        const isDeleted = Boolean(req.sessionId && rt.deletedSessionIds.has(req.sessionId))
+        const isAborted =
+            isAbortError(error) ||
+            (error instanceof AgentPreflightError && error.code === 'aborted')
+        if (!invokedSendInternal && !isDeleted) {
+            broadcastPreStartCancellation(
+                isAborted ? 'aborted' : 'error',
+                error instanceof Error ? error.message : String(error ?? 'Delegated run failed'),
+            )
+        }
         if (req.sessionId) {
             void getHostBridge()?.SessionBroadcastRunStatus(
                 req.sessionId,
@@ -1171,7 +1382,9 @@ async function executeDelegateRun(
                 '',
             )
         }
-        toastPreflight(error)
+        if (!isAborted && !isDeleted) {
+            toastPreflight(error)
+        }
     }
 }
 
@@ -1713,6 +1926,42 @@ function createRuntimeSettingsResolver(targetSessionId: string) {
     }
 }
 
+function isEnhancementFailure(code?: string): boolean {
+    return code === 'system_prompt_enhancement_failed' || code === 'system_prompt_enhancement_no_model'
+}
+
+function recordEnhancementFailure(event: Extract<AgentRunEvent, { type: 'error' }>): void {
+    const id = `${event.runId}-preflight-error`
+    if (useMessageStore.getState().getEntries(event.sessionId).some((entry) => entry.id === id)) return
+    useMessageStore.getState().appendEntry({
+        id, sessionId: event.sessionId, createdAt: Date.now(), kind: 'assistant',
+        content: [], status: 'error', stopReason: 'error', errorMessage: event.message,
+    })
+}
+
+function restoreComposerDraftIfEmpty(
+    sessionId: string | null,
+    text: string,
+    skillReferences?: readonly { start: number; name: string }[],
+    images?: readonly ComposerImage[],
+    rt?: ServiceRuntime,
+): void {
+    if (!sessionId) return
+    if (rt?.deletedSessionIds.has(sessionId)) return
+    if (!useSessionStore.getState().sessions.some((s) => s.id === sessionId)) return
+    const uiState = useUiStore.getState()
+    const key = `session:${sessionId}`
+    if (
+        uiState.composerDrafts[key] ||
+        (uiState.composerDraftAttachments[key]?.length ?? 0) > 0 ||
+        (uiState.composerRestoredAttachments[key]?.length ?? 0) > 0
+    ) {
+        return
+    }
+    uiState.setComposerDraftForSession(sessionId, text, skillReferences, { preserveLegacyDraft: true })
+    if (images?.length) uiState.setComposerRestoredAttachments(sessionId, images)
+}
+
 function buildUserEntry(
     sessionId: string,
     text: string,
@@ -1927,6 +2176,7 @@ async function prepareExecutionRun(
                 baseUrl: params.settings.cliProxyApi.baseUrl,
                 apiKey: params.settings.cliProxyApi.apiKey,
                 modelId: params.settings.modelId,
+                defaultModelId: useSettingsStore.getState().settings.modelId,
                 models: params.catalog,
                 reasoningLevel: params.settings.reasoningLevel,
                 speed: params.settings.speed,
@@ -1947,6 +2197,7 @@ async function prepareExecutionRun(
                 skillsSettings: params.settings.skills,
                 gitSettings: params.settings.git,
                 modelSettings: params.settings.modelSettings,
+                systemPromptEnhancement: params.settings.systemPromptEnhancement,
                 getEntries: async (sid: string) => {
                     await ensureSessionLoaded(sid)
                     return useMessageStore.getState().getEntries(sid)
@@ -2058,6 +2309,7 @@ async function prepareExecutionRun(
             baseUrl: params.settings.cliProxyApi.baseUrl,
             apiKey: params.settings.cliProxyApi.apiKey,
             modelId: params.settings.modelId,
+            defaultModelId: useSettingsStore.getState().settings.modelId,
             models: params.catalog,
             reasoningLevel: params.settings.reasoningLevel,
             speed: params.settings.speed,
@@ -2079,6 +2331,7 @@ async function prepareExecutionRun(
             skillsSettings: params.settings.skills,
             gitSettings: params.settings.git,
             modelSettings: params.settings.modelSettings,
+            systemPromptEnhancement: params.settings.systemPromptEnhancement,
             getEntries: async (sid: string) => {
                 await ensureSessionLoaded(sid)
                 return useMessageStore.getState().getEntries(sid)
@@ -2326,6 +2579,39 @@ export function useAgentStream(
                 throw new Error('No conversation entries to compact')
             }
 
+            if (isBrowserEnvironment()) {
+                const bridge = getHostBridge()
+                if (bridge?.SessionDelegateRun) {
+                    const remoteRun = useSessionRunStore.getState().activeRuns[sessionId]
+                    if (remoteRun && remoteRun.status !== 'idle') {
+                        throw new Error('A run is already active')
+                    }
+                    const optimisticRunId = `delegated-${Date.now()}`
+                    useSessionRunStore.getState().setRun(sessionId, {
+                        sessionId,
+                        status: 'running',
+                        runId: optimisticRunId,
+                        clientId: 'browser-local',
+                        updatedAt: Date.now(),
+                    })
+                    try {
+                        await bridge.SessionDelegateRun({
+                            requestId: `compact-${createId()}`,
+                            sessionId,
+                            text: focus ?? '',
+                            action: 'compact',
+                        })
+                    } catch (error) {
+                        const current = useSessionRunStore.getState().activeRuns[sessionId]
+                        if (current?.runId === optimisticRunId) {
+                            useSessionRunStore.getState().clearRun(sessionId)
+                        }
+                        throw error
+                    }
+                    return
+                }
+            }
+
             // Capture immutable settings for this compact call.
             const session = useSessionStore
                 .getState()
@@ -2354,6 +2640,7 @@ export function useAgentStream(
 
             // Activate adapter before compact so agent-start is received.
             const adapter = createAgentEventAdapter(useMessageStore)
+            let terminalEventBroadcasted = false
 
             try {
                 const prepResult = await prepareExecutionRun({
@@ -2433,17 +2720,40 @@ export function useAgentStream(
                 })
 
                 for (const event of result.events ?? []) {
+                    if (rt.deletedSessionIds.has(sessionId)) break
+                    if (event.type === 'error' || event.type === 'aborted') {
+                        terminalEventBroadcasted = true
+                    }
+                    const outgoingEvent =
+                        event.type === 'error' && isEnhancementFailure(event.preflightCode)
+                            ? {
+                                  ...event,
+                                  message: String(
+                                      i18n.t(`agent.preflight.${event.preflightCode}`, {
+                                          defaultValue: event.message,
+                                      }),
+                                  ),
+                              }
+                            : event
                     void getHostBridge()?.SessionBroadcastStreamEvent(
                         sessionId,
                         runId,
-                        prepareStreamEventForBroadcast(event),
+                        prepareStreamEventForBroadcast(outgoingEvent),
                     )
-                    const applyResult = adapter.apply(event)
-                    scheduleFromUrgency(applyResult.urgency)
+                    const applyResult = adapter.apply(outgoingEvent)
+                    if (
+                        outgoingEvent.type === 'error' &&
+                        isEnhancementFailure(outgoingEvent.preflightCode)
+                    ) {
+                        recordEnhancementFailure(outgoingEvent)
+                        schedulePersist(true)
+                    } else {
+                        scheduleFromUrgency(applyResult.urgency)
+                    }
                     const currentFlight = rt.runs.get(sessionId)
                     if (currentFlight && currentFlight.flightToken === token) {
                         currentFlight.runStatus = mapRunStatus(
-                            event,
+                            outgoingEvent,
                             currentFlight.runStatus,
                         )
                         emit(rt)
@@ -2451,17 +2761,83 @@ export function useAgentStream(
                 }
 
                 if (!result.ok) {
-                    const message =
-                        result.code === 'compact_failed'
-                            ? i18n.t('agent.preflight.compact_failed', {
-                                  defaultValue: result.message,
-                              })
-                            : result.message
-                    throw new Error(message)
+                    if (result.code === 'aborted') {
+                        throw createAbortError()
+                    }
+                    if (isEnhancementFailure(result.code)) {
+                        const code =
+                            result.code === 'system_prompt_enhancement_no_model'
+                                ? 'system_prompt_enhancement_no_model'
+                                : 'system_prompt_enhancement_failed'
+                        throw new AgentPreflightError(
+                            code,
+                            String(
+                                i18n.t(`agent.preflight.${code}`, {
+                                    defaultValue: result.message,
+                                }),
+                            ),
+                            `agent.preflight.${code}`,
+                        )
+                    }
+                    if (result.code === 'compact_failed') {
+                        throw new AgentPreflightError(
+                            'compact_failed',
+                            String(
+                                i18n.t('agent.preflight.compact_failed', {
+                                    defaultValue: result.message,
+                                }),
+                            ),
+                            'agent.preflight.compact_failed',
+                        )
+                    }
+                    throw new Error(result.message)
                 }
             } catch (error) {
                 flushFlightFinishCallbacks(rt, token, false)
-                if (!isAbortError(error)) {
+                const isDeleted = rt.deletedSessionIds.has(sessionId)
+                const aborted =
+                    ac.signal.aborted ||
+                    isAbortError(error) ||
+                    (error instanceof AgentPreflightError && error.code === 'aborted')
+                if (!isDeleted && !aborted) {
+                    if (!terminalEventBroadcasted) {
+                        const preflightCode =
+                            error instanceof AgentPreflightError ? error.code : undefined
+                        const message =
+                            error instanceof AgentPreflightError
+                                ? String(i18n.t(error.i18nKey, { defaultValue: error.message }))
+                                : error instanceof Error
+                                  ? error.message
+                                  : String(error ?? 'Compact failed')
+                        const failure: Extract<AgentRunEvent, { type: 'error' }> = {
+                            type: 'error',
+                            sessionId,
+                            runId,
+                            message,
+                            ...(preflightCode ? { preflightCode } : {}),
+                        }
+                        adapter.apply(failure)
+                        if (isEnhancementFailure(preflightCode)) {
+                            recordEnhancementFailure(failure)
+                        }
+                        void getHostBridge()?.SessionBroadcastStreamEvent(
+                            sessionId,
+                            runId,
+                            failure,
+                        )
+                        const endEvent: AgentRunEvent = {
+                            type: 'agent-end',
+                            sessionId,
+                            runId,
+                        }
+                        adapter.apply(endEvent)
+                        void getHostBridge()?.SessionBroadcastStreamEvent(
+                            sessionId,
+                            runId,
+                            endEvent,
+                        )
+                        schedulePersist(true)
+                    }
                     toastPreflight(error)
                 }
                 throw error
@@ -2748,6 +3124,7 @@ export function useAgentStream(
                         baseUrl: settings.cliProxyApi.baseUrl,
                         apiKey: settings.cliProxyApi.apiKey,
                         modelId: settings.modelId,
+                        defaultModelId: useSettingsStore.getState().settings.modelId,
                         models: catalog,
                         reasoningLevel: settings.reasoningLevel,
                         speed: settings.speed,
@@ -2768,6 +3145,7 @@ export function useAgentStream(
                         skillsSettings: settings.skills,
                         gitSettings: settings.git,
                         modelSettings: settings.modelSettings,
+                        systemPromptEnhancement: settings.systemPromptEnhancement,
                         getEntries: async (sid: string) => {
                             await ensureSessionLoaded(sid)
                             return useMessageStore.getState().getEntries(sid)
@@ -3043,7 +3421,8 @@ export function useAgentStream(
                 if (
                     !rt.pendingPreflights.has(token) ||
                     ac.signal.aborted ||
-                    rt.disposed
+                    rt.disposed ||
+                    rt.deletedSessionIds.has(sessionId)
                 ) {
                     throw createAbortError()
                 }
@@ -3093,27 +3472,29 @@ export function useAgentStream(
                 const adapter = createAgentEventAdapter(useMessageStore)
                 streamStarted = true
 
-                void getHostBridge()?.SessionBroadcastRunStatus(
-                    boundSessionId,
-                    'running',
-                    boundRunId,
-                    '',
-                )
-                const entriesToBroadcast =
-                    activatedUserEntries.length > 0
-                        ? activatedUserEntries
-                        : [userEntry]
-                for (const entry of entriesToBroadcast) {
-                    void getHostBridge()?.SessionBroadcastStreamEvent(
+                if (!rt.deletedSessionIds.has(boundSessionId)) {
+                    void getHostBridge()?.SessionBroadcastRunStatus(
                         boundSessionId,
+                        'running',
                         boundRunId,
-                        {
-                            type: 'user-entry',
-                            sessionId: boundSessionId,
-                            runId: boundRunId,
-                            entry,
-                        },
+                        '',
                     )
+                    const entriesToBroadcast =
+                        activatedUserEntries.length > 0
+                            ? activatedUserEntries
+                            : [userEntry]
+                    for (const entry of entriesToBroadcast) {
+                        void getHostBridge()?.SessionBroadcastStreamEvent(
+                            boundSessionId,
+                            boundRunId,
+                            {
+                                type: 'user-entry',
+                                sessionId: boundSessionId,
+                                runId: boundRunId,
+                                entry,
+                            },
+                        )
+                    }
                 }
 
                 // Background lifecycle — callers may navigate immediately after accept.
@@ -3188,7 +3569,10 @@ export function useAgentStream(
                             if (event.type === 'error') {
                                 hasError = true
                             }
-                            if (rt.runs.get(boundSessionId!)?.flightToken !== token) break
+                            if (
+                                rt.runs.get(boundSessionId!)?.flightToken !== token ||
+                                rt.deletedSessionIds.has(boundSessionId!)
+                            ) break
                             void getHostBridge()?.SessionBroadcastStreamEvent(
                                 boundSessionId!,
                                 boundRunId!,
@@ -3225,30 +3609,69 @@ export function useAgentStream(
                     } catch (error) {
                         hasError = true
                         runSucceeded = false
-                        if (ac.signal.aborted || isAbortError(error)) {
-                            // silent abort
-                        } else if (!(error instanceof AgentPreflightError)) {
+                        if (
+                            ac.signal.aborted ||
+                            isAbortError(error) ||
+                            (error instanceof AgentPreflightError && error.code === 'aborted')
+                        ) {
+                            if (
+                                boundSessionId &&
+                                boundRunId &&
+                                !rt.deletedSessionIds.has(boundSessionId) &&
+                                (payload.userEntryId || payload.requestId)
+                            ) {
+                                void getHostBridge()?.SessionBroadcastStreamEvent(boundSessionId, boundRunId, {
+                                    type: 'aborted',
+                                    sessionId: boundSessionId,
+                                    runId: boundRunId,
+                                    ...(payload.userEntryId ? { userEntryId: payload.userEntryId } : {}),
+                                    ...(payload.requestId ? { requestId: payload.requestId } : {}),
+                                })
+                            }
+                        } else if (!boundSessionId || !rt.deletedSessionIds.has(boundSessionId)) {
                             const message =
-                                error instanceof Error
-                                    ? error.message
-                                    : String(error ?? 'stream error')
-                            adapter.apply({
-                                type: 'error',
-                                runId: boundRunId!,
-                                sessionId: boundSessionId!,
-                                message,
-                            })
+                                error instanceof AgentPreflightError
+                                    ? String(i18n.t(error.i18nKey, { defaultValue: error.message }))
+                                    : error instanceof Error
+                                      ? error.message
+                                      : String(error ?? 'stream error')
+                            const failure: Extract<AgentRunEvent, { type: 'error' }> = {
+                                type: 'error', runId: boundRunId!, sessionId: boundSessionId!, message,
+                                ...(error instanceof AgentPreflightError ? { preflightCode: error.code } : {}),
+                                ...(payload.userEntryId ? { userEntryId: payload.userEntryId } : {}),
+                                ...(payload.requestId ? { requestId: payload.requestId } : {}),
+                            }
+                            adapter.apply(failure)
+                            if (isEnhancementFailure(failure.preflightCode)) recordEnhancementFailure(failure)
+                            void getHostBridge()?.SessionBroadcastStreamEvent(boundSessionId!, boundRunId!, failure)
                             schedulePersist(true)
                             if (boundSessionId !== useSessionStore.getState().currentSessionId && typeof window !== 'undefined' && getHashRoutePathname() !== `/chat/${boundSessionId}`) {
                                 useSessionStore.getState().markUnread(boundSessionId!, 'error')
                             }
-                            const errorToast = message
-                                ? `${i18n.t('composer.sendFailed', { defaultValue: 'Send failed' })}: ${message}`
-                                : i18n.t('composer.sendFailed', { defaultValue: 'Send failed' })
+                            const errorToast =
+                                error instanceof AgentPreflightError
+                                    ? message
+                                    : message
+                                      ? `${i18n.t('composer.sendFailed', { defaultValue: 'Send failed' })}: ${message}`
+                                      : i18n.t('composer.sendFailed', { defaultValue: 'Send failed' })
                             useUiStore.getState().pushToast(errorToast)
+                            if (
+                                error instanceof AgentPreflightError &&
+                                (error.code === 'system_prompt_enhancement_failed' ||
+                                    error.code === 'system_prompt_enhancement_no_model')
+                            ) {
+                                restoreComposerDraftIfEmpty(
+                                    boundSessionId,
+                                    trimmed,
+                                    payload.skillReferences,
+                                    images,
+                                    rt,
+                                )
+                            }
                         }
                     } finally {
-                        if (boundSessionId && boundRunId && adapter.getActiveRunId(boundSessionId) === boundRunId) {
+                        const isDeleted = Boolean(boundSessionId && rt.deletedSessionIds.has(boundSessionId))
+                        if (!isDeleted && boundSessionId && boundRunId && adapter.getActiveRunId(boundSessionId) === boundRunId) {
                             if (ac.signal.aborted) {
                                 adapter.apply({
                                     type: 'aborted',
@@ -3262,7 +3685,7 @@ export function useAgentStream(
                                 runId: boundRunId,
                             })
                         }
-                        if (boundSessionId !== useSessionStore.getState().currentSessionId && typeof window !== 'undefined' && getHashRoutePathname() !== `/chat/${boundSessionId}`) {
+                        if (!isDeleted && boundSessionId !== useSessionStore.getState().currentSessionId && typeof window !== 'undefined' && getHashRoutePathname() !== `/chat/${boundSessionId}`) {
                             const session = useSessionStore.getState().sessions.find((s) => s.id === boundSessionId)
                             if (session && session.unread !== 'error') {
                                 useSessionStore.getState().markUnread(boundSessionId!, true)
@@ -3274,7 +3697,7 @@ export function useAgentStream(
                             boundRunId!,
                             '',
                         )
-                        if (!ac.signal.aborted && runSucceeded && boundSessionId) {
+                        if (!isDeleted && !ac.signal.aborted && runSucceeded && boundSessionId) {
                             const session = useSessionStore.getState().sessions.find((s) => s.id === boundSessionId)
                             const title = session?.title || ''
                             void getHostBridge()?.NotificationTaskCompleted?.({
@@ -3344,6 +3767,7 @@ export function useAgentStream(
                 emit(rt)
                 flushFlightFinishCallbacks(rt, token, false)
                 const sid = boundSessionId || targetSessionId
+                const isDeleted = Boolean(sid && rt.deletedSessionIds.has(sid))
                 if (sid) {
                     void getHostBridge()?.SessionBroadcastRunStatus(
                         sid,
@@ -3352,8 +3776,64 @@ export function useAgentStream(
                         '',
                     )
                 }
-                if (!isAbortError(error)) {
+                if (!isDeleted && !isAbortError(error)) {
                     toastPreflight(error)
+                }
+                if (!isDeleted && sid && error instanceof AgentPreflightError && isEnhancementFailure(error.code)) {
+                    const failure: Extract<AgentRunEvent, { type: 'error' }> = {
+                        type: 'error', sessionId: sid, runId: boundRunId ?? createId(),
+                        message: String(i18n.t(error.i18nKey, { defaultValue: error.message })),
+                        preflightCode: error.code, userEntryId: payload.userEntryId,
+                        ...(payload.requestId ? { requestId: payload.requestId } : {}),
+                    }
+                    rememberHostedRunId(rt, failure.runId)
+                    createAgentEventAdapter(useMessageStore).apply(failure)
+                    recordEnhancementFailure(failure)
+                    void getHostBridge()?.SessionBroadcastStreamEvent(sid, failure.runId, failure)
+                    schedulePersist(true)
+                } else if (!isDeleted && sid && (payload.userEntryId || payload.requestId)) {
+                    const eventRunId = boundRunId ?? createId()
+                    rememberHostedRunId(rt, eventRunId)
+                    if (isAbortError(error) || (error instanceof AgentPreflightError && error.code === 'aborted')) {
+                        void getHostBridge()?.SessionBroadcastStreamEvent(sid, eventRunId, {
+                            type: 'aborted',
+                            sessionId: sid,
+                            runId: eventRunId,
+                            ...(payload.userEntryId ? { userEntryId: payload.userEntryId } : {}),
+                            ...(payload.requestId ? { requestId: payload.requestId } : {}),
+                        })
+                    } else {
+                        const message =
+                            error instanceof AgentPreflightError
+                                ? String(i18n.t(error.i18nKey, { defaultValue: error.message }))
+                                : error instanceof Error
+                                  ? error.message
+                                  : String(error ?? 'Send failed')
+                        void getHostBridge()?.SessionBroadcastStreamEvent(sid, eventRunId, {
+                            type: 'error',
+                            sessionId: sid,
+                            runId: eventRunId,
+                            message,
+                            ...(error instanceof AgentPreflightError ? { preflightCode: error.code } : {}),
+                            ...(payload.userEntryId ? { userEntryId: payload.userEntryId } : {}),
+                            ...(payload.requestId ? { requestId: payload.requestId } : {}),
+                        })
+                    }
+                }
+                if (
+                    !isDeleted &&
+                    boundSessionId &&
+                    error instanceof AgentPreflightError &&
+                    (error.code === 'system_prompt_enhancement_failed' ||
+                        error.code === 'system_prompt_enhancement_no_model')
+                ) {
+                    restoreComposerDraftIfEmpty(
+                        boundSessionId,
+                        trimmed,
+                        payload.skillReferences,
+                        images,
+                        rt,
+                    )
                 }
                 // Reject so Composer retains draft on preflight/abort failure.
                 throw error
@@ -3391,6 +3871,7 @@ export function useAgentStream(
                           sessionId: input.sessionId,
                           editMessageId: input.editMessageId,
                           userEntryId: input.userEntryId,
+                          requestId: input.requestId,
                           queuedUserEntryIds: input.queuedUserEntryIds,
                           userEntryCreatedAt: input.userEntryCreatedAt,
                           followUpMode: input.followUpMode,
@@ -3414,7 +3895,10 @@ export function useAgentStream(
                         : (scopedSessionId !== undefined
                             ? (scopedSessionId || null)
                             : (initialSessionState.currentSessionId || null))
-                if (targetSessionId) await awaitSessionWakeBarrier(targetSessionId)
+                if (targetSessionId) {
+                    await awaitSessionWakeBarrier(targetSessionId)
+                    await waitForForkedSessionPrompt(targetSessionId)
+                }
                 const sessionState = useSessionStore.getState()
                 const targetSession = targetSessionId
                     ? sessionState.sessions.find((s) => s.id === targetSessionId)
@@ -3587,10 +4071,32 @@ export function useAgentStream(
                     allowPreRunSessionFlush(sessionId)
                 }
                 schedulePersist(true)
+                const bridge = getHostBridge()
+                const stableRequestId = payload.requestId || (userEntry.id ? `req-${userEntry.id}` : undefined)
+                const browserRuntime = service ? getRuntime(service) : undefined
+                const startEpoch = getSessionActionEpoch(sessionId)
+                const trackedDraft = {
+                    userEntryId: userEntry.id,
+                    requestId: stableRequestId,
+                    sessionId,
+                    text: trimmed,
+                    skillReferences: payload.skillReferences,
+                    images,
+                    awaitingDelegateSettlement: Boolean(bridge?.SessionDelegateRun),
+                    enhancementFailure: undefined as Extract<AgentRunEvent, { type: 'error' }> | undefined,
+                    cancelled: false,
+                }
+                const isSessionDeletedOrCancelled = () =>
+                    Boolean(
+                        trackedDraft.cancelled ||
+                            browserRuntime?.deletedSessionIds.has(sessionId) ||
+                            !isEpochValid(sessionId, startEpoch) ||
+                            !useSessionStore.getState().sessions.some((s) => s.id === sessionId),
+                    )
+                browserRuntime?.delegatedDrafts.set(userEntry.id, trackedDraft)
                 const onAccepted = payload.onSessionAccepted ?? opts?.onSessionAccepted
                 onAccepted?.(sessionId)
 
-                const bridge = getHostBridge()
                 if (bridge?.SessionDelegateRun) {
                     const optimisticRunId = isAlreadyRunning ? null : `delegated-${Date.now()}`
                     if (!isAlreadyRunning) {
@@ -3603,7 +4109,6 @@ export function useAgentStream(
                         })
                     }
                     try {
-                        const stableRequestId = payload.requestId || (userEntry.id ? `req-${userEntry.id}` : undefined)
                         await bridge.SessionDelegateRun({
                             requestId: stableRequestId,
                             sessionId,
@@ -3621,13 +4126,65 @@ export function useAgentStream(
                             followUpMode: payload.followUpMode,
                         })
                     } catch (error) {
+                        trackedDraft.awaitingDelegateSettlement = false
+                        const earlyFailure = trackedDraft.enhancementFailure
+                        browserRuntime?.delegatedDrafts.delete(userEntry.id)
                         if (!isAlreadyRunning) {
                             const current = useSessionRunStore.getState().activeRuns[sessionId]
                             if (current?.runId === optimisticRunId) {
                                 useSessionRunStore.getState().clearRun(sessionId)
                             }
                         }
+                        if (isSessionDeletedOrCancelled()) {
+                            return null
+                        }
+                        if (earlyFailure) {
+                            restoreComposerDraftIfEmpty(
+                                sessionId,
+                                trackedDraft.text,
+                                trackedDraft.skillReferences,
+                                trackedDraft.images,
+                                browserRuntime,
+                            )
+                        }
                         throw error
+                    }
+                    trackedDraft.awaitingDelegateSettlement = false
+                    if (isSessionDeletedOrCancelled()) {
+                        browserRuntime?.delegatedDrafts.delete(userEntry.id)
+                        if (!isAlreadyRunning) {
+                            const current = useSessionRunStore.getState().activeRuns[sessionId]
+                            if (current?.runId === optimisticRunId) {
+                                useSessionRunStore.getState().clearRun(sessionId)
+                            }
+                        }
+                        return null
+                    }
+                    if (trackedDraft.enhancementFailure) {
+                        const failure = trackedDraft.enhancementFailure
+                        browserRuntime?.delegatedDrafts.delete(userEntry.id)
+                        if (!isAlreadyRunning) {
+                            const current = useSessionRunStore.getState().activeRuns[sessionId]
+                            if (current?.runId === optimisticRunId) {
+                                useSessionRunStore.getState().clearRun(sessionId)
+                            }
+                        }
+                        restoreComposerDraftIfEmpty(
+                            sessionId,
+                            trackedDraft.text,
+                            trackedDraft.skillReferences,
+                            trackedDraft.images,
+                            browserRuntime,
+                        )
+                        const code =
+                            failure.preflightCode === 'system_prompt_enhancement_no_model'
+                                ? 'system_prompt_enhancement_no_model'
+                                : 'system_prompt_enhancement_failed'
+                        throw new AgentPreflightError(
+                            code,
+                            String(i18n.t(`agent.preflight.${code}`, { defaultValue: failure.message })),
+                            `agent.preflight.${code}`,
+                        )
                     }
                 }
 
@@ -3755,7 +4312,8 @@ export function useAgentStream(
             if (
                 rt.runs.get(sessionId)?.flightToken !== token ||
                 ac.signal.aborted ||
-                rt.disposed
+                rt.disposed ||
+                rt.deletedSessionIds.has(sessionId)
             ) {
                 throw createAbortError()
             }
@@ -3846,7 +4404,10 @@ export function useAgentStream(
                         if (event.type === 'error') {
                             hasError = true
                         }
-                        if (rt.runs.get(boundSessionId)?.flightToken !== token) break
+                        if (
+                            rt.runs.get(boundSessionId)?.flightToken !== token ||
+                            rt.deletedSessionIds.has(boundSessionId)
+                        ) break
                         void getHostBridge()?.SessionBroadcastStreamEvent(
                             boundSessionId,
                             boundRunId,
@@ -3876,30 +4437,52 @@ export function useAgentStream(
                 } catch (error) {
                     hasError = true
                     runSucceeded = false
-                    if (ac.signal.aborted || isAbortError(error)) {
+                    if (
+                        ac.signal.aborted ||
+                        isAbortError(error) ||
+                        (error instanceof AgentPreflightError && error.code === 'aborted')
+                    ) {
                         // silent abort
-                    } else if (!(error instanceof AgentPreflightError)) {
+                    } else if (!rt.deletedSessionIds.has(boundSessionId)) {
+                        const preflightCode =
+                            error instanceof AgentPreflightError ? error.code : undefined
                         const message =
-                            error instanceof Error
-                                ? error.message
-                                : String(error ?? 'stream error')
-                        adapter.apply({
+                            error instanceof AgentPreflightError
+                                ? String(i18n.t(error.i18nKey, { defaultValue: error.message }))
+                                : error instanceof Error
+                                  ? error.message
+                                  : String(error ?? 'stream error')
+                        const failure: Extract<AgentRunEvent, { type: 'error' }> = {
                             type: 'error',
                             runId: boundRunId,
                             sessionId: boundSessionId,
                             message,
-                        })
+                            ...(preflightCode ? { preflightCode } : {}),
+                        }
+                        adapter.apply(failure)
+                        if (isEnhancementFailure(failure.preflightCode)) {
+                            recordEnhancementFailure(failure)
+                        }
+                        void getHostBridge()?.SessionBroadcastStreamEvent(
+                            boundSessionId,
+                            boundRunId,
+                            failure,
+                        )
                         schedulePersist(true)
                         if (boundSessionId !== useSessionStore.getState().currentSessionId && typeof window !== 'undefined' && getHashRoutePathname() !== `/chat/${boundSessionId}`) {
                             useSessionStore.getState().markUnread(boundSessionId, 'error')
                         }
-                        const errorToast = message
-                            ? `${i18n.t('composer.sendFailed', { defaultValue: 'Send failed' })}: ${message}`
-                            : i18n.t('composer.sendFailed', { defaultValue: 'Send failed' })
+                        const errorToast =
+                            error instanceof AgentPreflightError
+                                ? message
+                                : message
+                                  ? `${i18n.t('composer.sendFailed', { defaultValue: 'Send failed' })}: ${message}`
+                                  : i18n.t('composer.sendFailed', { defaultValue: 'Send failed' })
                         useUiStore.getState().pushToast(errorToast)
                     }
                 } finally {
-                    if (boundSessionId && boundRunId && adapter.getActiveRunId(boundSessionId) === boundRunId) {
+                    const isDeleted = rt.deletedSessionIds.has(boundSessionId)
+                    if (!isDeleted && boundSessionId && boundRunId && adapter.getActiveRunId(boundSessionId) === boundRunId) {
                         if (ac.signal.aborted) {
                             adapter.apply({
                                 type: 'aborted',
@@ -3913,7 +4496,7 @@ export function useAgentStream(
                             runId: boundRunId,
                         })
                     }
-                    if (boundSessionId !== useSessionStore.getState().currentSessionId && typeof window !== 'undefined' && getHashRoutePathname() !== `/chat/${boundSessionId}`) {
+                    if (!isDeleted && boundSessionId !== useSessionStore.getState().currentSessionId && typeof window !== 'undefined' && getHashRoutePathname() !== `/chat/${boundSessionId}`) {
                         const session = useSessionStore.getState().sessions.find((s) => s.id === boundSessionId)
                         if (session && session.unread !== 'error') {
                             useSessionStore.getState().markUnread(boundSessionId, true)
@@ -3925,7 +4508,7 @@ export function useAgentStream(
                         boundRunId,
                         '',
                     )
-                    if (!ac.signal.aborted && runSucceeded && boundSessionId) {
+                    if (!isDeleted && !ac.signal.aborted && runSucceeded && boundSessionId) {
                         const session = useSessionStore.getState().sessions.find((s) => s.id === boundSessionId)
                         const title = session?.title || ''
                         void getHostBridge()?.NotificationTaskCompleted?.({
@@ -3992,7 +4575,43 @@ export function useAgentStream(
             return sessionId
         } catch (error) {
             flushFlightFinishCallbacks(rt, token, false)
-            if (!isAbortError(error)) {
+            const isDeleted = rt.deletedSessionIds.has(sessionId)
+            const aborted =
+                ac.signal.aborted ||
+                isAbortError(error) ||
+                (error instanceof AgentPreflightError && error.code === 'aborted')
+            void getHostBridge()?.SessionBroadcastRunStatus(
+                sessionId,
+                'idle',
+                '',
+                '',
+            )
+            if (!isDeleted && !aborted) {
+                const preflightCode =
+                    error instanceof AgentPreflightError ? error.code : undefined
+                const message =
+                    error instanceof AgentPreflightError
+                        ? String(i18n.t(error.i18nKey, { defaultValue: error.message }))
+                        : error instanceof Error
+                          ? error.message
+                          : String(error ?? 'Resume failed')
+                const failure: Extract<AgentRunEvent, { type: 'error' }> = {
+                    type: 'error',
+                    sessionId,
+                    runId,
+                    message,
+                    ...(preflightCode ? { preflightCode } : {}),
+                }
+                createAgentEventAdapter(useMessageStore).apply(failure)
+                if (isEnhancementFailure(preflightCode)) {
+                    recordEnhancementFailure(failure)
+                }
+                void getHostBridge()?.SessionBroadcastStreamEvent(
+                    sessionId,
+                    runId,
+                    failure,
+                )
+                schedulePersist(true)
                 toastPreflight(error)
             }
             throw error
@@ -4136,38 +4755,76 @@ function applyTurnPauseDelta(entries: readonly ConversationEntry[]): Conversatio
                 const capturedProjectId = session.projectId ?? null
                 const capturedProjectPaths = resolveProjectPathsById(capturedProjectId)
                 const ac = new AbortController()
-                const prepResult = await prepareExecutionRun({
-                    service,
-                    sessionId: session.id,
-                    session,
-                    settings,
-                    catalog,
-                    workLocation: session.workLocation,
-                    projectPaths: capturedProjectPaths,
-                    branch: session.branch,
-                    environmentId: session.environmentId,
-                    scheduleId: session.scheduleId ?? null,
-                    signal: ac.signal,
-                    allowSetup: false,
-                })
-                if (!prepResult.ok || !prepResult.prepared || isResumeCancelled()) {
+                let prepResult: PrepareExecutionRunResult
+                try {
+                    prepResult = await prepareExecutionRun({
+                        service,
+                        sessionId: session.id,
+                        session,
+                        settings,
+                        catalog,
+                        workLocation: session.workLocation,
+                        projectPaths: capturedProjectPaths,
+                        branch: session.branch,
+                        environmentId: session.environmentId,
+                        scheduleId: session.scheduleId ?? null,
+                        signal: ac.signal,
+                        allowSetup: false,
+                    })
+                } catch (error) {
+                    const aborted =
+                        ac.signal.aborted ||
+                        isAbortError(error) ||
+                        (error instanceof AgentPreflightError && error.code === 'aborted')
+                    if (!isResumeCancelled() && !aborted) {
+                        if (error instanceof AgentPreflightError && isEnhancementFailure(error.code)) {
+                            const failureRunId = createId()
+                            rememberHostedRunId(rt, failureRunId)
+                            const failure: Extract<AgentRunEvent, { type: 'error' }> = {
+                                type: 'error',
+                                sessionId,
+                                runId: failureRunId,
+                                message: String(i18n.t(error.i18nKey, { defaultValue: error.message })),
+                                preflightCode: error.code,
+                            }
+                            createAgentEventAdapter(useMessageStore).apply(failure)
+                            recordEnhancementFailure(failure)
+                            void getHostBridge()?.SessionBroadcastStreamEvent(
+                                sessionId,
+                                failureRunId,
+                                failure,
+                            )
+                            schedulePersist(true)
+                        }
+                        toastPreflight(error)
+                    }
+                    onRunFinish?.(false)
                     return null
                 }
+                if (!prepResult.ok || !prepResult.prepared || isResumeCancelled()) {
+                    onRunFinish?.(false)
+                    return null
+                }
+                let anySubAgentFailed = false
                 for (const subAgent of unfinishedSubAgents) {
                     if (isResumeCancelled()) return null
                     const childEntries = useMessageStore.getState().getEntries(subAgent.sessionId)
                     if (service.subAgents) {
                         try {
-                            await service.subAgents.resumeSubAgent(subAgent.id, {
+                            const subRes = await service.subAgents.resumeSubAgent(subAgent.id, {
                                 signal: ac.signal,
                                 entries: childEntries,
                             })
+                            if (subRes?.isError) {
+                                anySubAgentFailed = true
+                            }
                         } catch (e) {
+                            anySubAgentFailed = true
                             console.error('Failed to resume subagent:', e)
                         }
                     }
                 }
-                onRunFinish?.(true)
+                onRunFinish?.(!anySubAgentFailed)
                 return sessionId
             }
 

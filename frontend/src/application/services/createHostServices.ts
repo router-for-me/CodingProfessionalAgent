@@ -67,7 +67,7 @@ import {
     saveProjectHooks,
     saveUserHooks,
 } from '@cpa/plugin-sdk'
-import { forkSession } from '@/features/agent-runtime/session/forkSession'
+import { forkSession, waitForForkedSessionPrompt } from '@/features/agent-runtime/session/forkSession'
 import { executeSessionCompletionHook } from '@/features/agent-runtime/session/executeSessionHook'
 import { createWorktreeForProject } from '@/lib/worktreeManager'
 import { runEnvironmentSetup } from '@/lib/environmentRunner'
@@ -180,6 +180,21 @@ export interface CreateHostServicesOptions {
 export function createHostServices(options: CreateHostServicesOptions = {}): HostServices {
     const { capabilityClient, router, notifier } = options
     const agentRunStateCache = new Map<string, AgentRunState>()
+    const deletedSessionIds = new Set<string>()
+
+    const isDeletedSessionDraftKey = (key: string): boolean => {
+        if (!key || key === 'new-chat') return false
+        const normalizedKey = key.startsWith('session:') ? key : `session:${key}`
+        const sessionId = normalizedKey.slice('session:'.length)
+        if (!sessionId) return false
+        if (useSessionStore.getState().sessions.some((s) => s.id === sessionId)) {
+            return false
+        }
+        return (
+            deletedSessionIds.has(sessionId) ||
+            Boolean(useUiStore.getState().deletedSessionDraftKeys?.[normalizedKey])
+        )
+    }
 
     const dispatchCancelSessionWarmers = (sessionId?: string) => {
         options.agentService?.cancelSessionWarmers?.(sessionId)
@@ -208,11 +223,15 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
         },
 
         create(input?: any): string {
-            return useSessionStore.getState().createSession(input)
+            const id = useSessionStore.getState().createSession(input)
+            deletedSessionIds.delete(id)
+            return id
         },
 
         async delete(sessionId: string): Promise<void> {
+            deletedSessionIds.add(sessionId)
             dispatchCancelSessionWarmers(sessionId)
+            useUiStore.getState().clearSessionComposerDraft(sessionId)
             useSessionStore.getState().removeSession(sessionId)
         },
 
@@ -377,6 +396,9 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
                 messageId: atEntryId,
                 ...options,
             })
+            if (res) {
+                await waitForForkedSessionPrompt(res)
+            }
             return res ?? undefined
         },
 
@@ -629,6 +651,9 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
         },
         setEditorSettings(partial) {
             useSettingsStore.getState().setEditorSettings(partial)
+        },
+        setSystemPromptEnhancement(partial) {
+            useSettingsStore.getState().setSystemPromptEnhancement(partial)
         },
         setAppearance(partial) {
             useSettingsStore.getState().setAppearance(partial)
@@ -1259,11 +1284,30 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
         },
 
         setComposerDraft(key: string, draft: string, references = []): void {
+            if (isDeletedSessionDraftKey(key)) return
             useUiStore.getState().setComposerDraftForSession?.(key, draft, references)
+        },
+
+        getComposerDraftAttachments(key: string) {
+            return useUiStore.getState().composerDraftAttachments[key]
+        },
+
+        setComposerDraftAttachments(key: string, attachmentsOrUpdater: any): void {
+            if (isDeletedSessionDraftKey(key)) return
+            useUiStore.getState().setComposerDraftAttachments?.(key, attachmentsOrUpdater)
+        },
+
+        clearComposerDraftAttachments(key: string): void {
+            useUiStore.getState().clearComposerDraftAttachments?.(key)
+        },
+
+        consumeComposerRestoredAttachments(key: string) {
+            return useUiStore.getState().consumeComposerRestoredAttachments(key)
         },
 
         clearComposerDraft(key: string): void {
             useUiStore.getState().setComposerDraftForSession?.(key, '')
+            useUiStore.getState().clearComposerDraftAttachments?.(key)
         },
 
         subscribe(listener: () => void): () => void {
@@ -1954,6 +1998,9 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
                 messageId: atEntryId,
                 ...options,
             })
+            if (res) {
+                await waitForForkedSessionPrompt(res)
+            }
             return res ?? undefined
         },
         async executeHook(_hookName: string, sessionId: string, _context?: unknown): Promise<void> {

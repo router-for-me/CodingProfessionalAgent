@@ -280,7 +280,16 @@ export const settingsRendererEntry = definePluginEntry({
                 labelKey: 'settings.nav.personalization',
                 icon: Smile,
                 component: PersonalizationSection,
-                keywords: ['personalization', 'instructions', 'custom', 'user', 'memory'],
+                keywords: [
+                    'personalization',
+                    'instructions',
+                    'custom',
+                    'user',
+                    'memory',
+                    'system prompt',
+                    'enhancement',
+                    'multilingual',
+                ],
                 items: [
                     {
                         id: 'customInstructions',
@@ -293,6 +302,25 @@ export const settingsRendererEntry = definePluginEntry({
                         labelKey: 'settings.personalization.personality',
                         descriptionKey: 'settings.personalization.personality.desc',
                         keywords: ['personality', 'tone'],
+                    },
+                    {
+                        id: 'systemPromptEnhancement',
+                        labelKey: 'settings.personalization.systemPromptEnhancement',
+                        descriptionKey: 'settings.personalization.systemPromptEnhancement.desc',
+                        keywords: ['system prompt', 'enhancement', 'rewrite'],
+                    },
+                    {
+                        id: 'systemPromptEnhancementModel',
+                        labelKey: 'settings.personalization.systemPromptEnhancement.model',
+                        descriptionKey: 'settings.personalization.systemPromptEnhancement.modelDesc',
+                        keywords: ['system prompt', 'builder model', 'model'],
+                    },
+                    {
+                        id: 'systemPromptEnhancementMultilingual',
+                        labelKey: 'settings.personalization.systemPromptEnhancement.multilingual',
+                        descriptionKey:
+                            'settings.personalization.systemPromptEnhancement.multilingualDesc',
+                        keywords: ['system prompt', 'multilingual', 'language'],
                     },
                     {
                         id: 'memory',

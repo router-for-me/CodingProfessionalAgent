@@ -5719,8 +5719,2407 @@ function createWorktreePrepareInput(
                     }
                 }
             }
-            walk(frontendSrc)
+                    walk(frontendSrc)
             expect(hits).toEqual([])
+        })
+    })
+
+    describe('system prompt enhancement lifecycle', () => {
+
+        it.each(['compact', 'winner', 'write-error', 'readback-error'] as const)('resolves the authoritative enhanced prompt for %s', async (scenario) => {
+            const bridge = new FakeNativeBridge()
+            const candidate = 'Inspect files carefully using title when available, preserve safety constraints and reply in the user language.'
+            const client = new FakeCPAClient()
+            client.queue(
+                { kind: 'stream', final: (seed) => doneAssistant(seed, { content: [{ type: 'text', text: candidate }], stopReason: 'stop' }) },
+                { kind: 'stream', final: (seed) => doneAssistant(seed, { stopReason: 'stop' }) },
+            )
+            if (scenario === 'winner') {
+                bridge.SessionSetSystemPrompt = vi.fn(async (id) => { await FakeNativeBridge.prototype.SessionSetSystemPrompt.call(bridge, id, 'DATABASE_WINNER'); return true })
+            } else if (scenario === 'write-error') {
+                bridge.SessionSetSystemPrompt = vi.fn().mockRejectedValue(new Error('SQLite write failed'))
+            } else if (scenario === 'readback-error') {
+                bridge.SessionGetSystemPrompt = vi.fn().mockResolvedValueOnce(null).mockRejectedValue(new Error('Readback failed'))
+            }
+            const compact = vi.fn(async (entries: any, _options?: any) => ({ entries }))
+            const service = new CLIProxyAPIAgentService({
+                bridge, createClient: () => client,
+                createTools: async () => [], compact: compact as any,
+                loadResources: async () => ({ contextFiles: [], skills: [], prompts: [], systemPrompt: 'RAW', mutableCoreSystemPrompt: 'Preserve all behavioral and language rules.', verbatimContextPrompt: '', diagnostics: [] }),
+            })
+            const prepared = await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317', apiKey: 'key', modelId: modelBase.id, models: [modelBase],
+                reasoningLevel: 'medium', speed: 'standard', sessionId: 'review-session',
+                systemPromptEnhancement: { enabled: true, multilingualEnabled: false, allowedLanguages: ['en'], modelId: '' },
+            })
+            if (scenario === 'compact') {
+                await service.compact({ prepared, sessionId: 'review-session', runId: 'compact', entries: [userEntry('old', 'history')] })
+                expect(client.calls).toHaveLength(1)
+                expect(compact.mock.calls[0]?.[1]?.sessionSystemPrompt).toBe(candidate)
+                expect(await bridge.SessionGetSystemPrompt('review-session')).toBe(candidate)
+            } else {
+                const run = () => collect(service.streamChat({ prepared, sessionId: 'review-session', runId: 'run', entries: [], userEntry: userEntry('new', 'hello') }))
+                if (scenario === 'winner') {
+                    await run()
+                    expect(client.calls[1]?.systemPrompt).toBe('DATABASE_WINNER')
+                } else {
+                    await expect(run()).rejects.toMatchObject({ name: 'AgentPreflightError', code: 'system_prompt_enhancement_failed', i18nKey: 'agent.preflight.system_prompt_enhancement_failed' })
+                    expect(client.calls).toHaveLength(1)
+                }
+            }
+        })
+        it('does not call build model during double prepareRun (worktree flow), synthesizes once on first streamChat, persists to SQLite, and reuses identical prompt across subsequent turns, manual compact, and settings changes', async () => {
+            const bridge = new FakeNativeBridge()
+            bridge.setFile('/agent/AGENTS.md', 'GLOBAL_VERBATIM_AGENTS')
+            const fakeClient = new FakeCPAClient()
+            const builderModel: ModelCatalogEntry = {
+                ...modelBase,
+                id: 'builder-model',
+            }
+
+            // Turn 1: build call + main chat call; Turn 2: main chat call; Compact: isolated summary call
+            fakeClient.queue(
+                {
+                    kind: 'stream',
+                    final: (seed) =>
+                        doneAssistant(seed, {
+                            content: [
+                                {
+                                    type: 'text',
+                                    text: 'Rewritten unique instruction set using title read bash edit write in /wt/s-wt.',
+                                },
+                            ],
+                            stopReason: 'stop',
+                        }),
+                },
+                {
+                    kind: 'stream',
+                    final: (seed) =>
+                        doneAssistant(seed, {
+                            content: [{ type: 'text', text: 'Turn 1 answer' }],
+                            stopReason: 'stop',
+                        }),
+                },
+                {
+                    kind: 'stream',
+                    final: (seed) =>
+                        doneAssistant(seed, {
+                            content: [{ type: 'text', text: 'Turn 2 answer' }],
+                            stopReason: 'stop',
+                        }),
+                },
+            )
+
+            const compactMock = vi.fn(async (entries: any, _options?: any) => ({
+                entry: {
+                    id: 'cmp-1',
+                    sessionId: 's-wt',
+                    kind: 'compaction' as const,
+                    summary: 'summary',
+                    firstKeptEntryId: entries[0]?.id ?? 'u1',
+                    createdAt: 100,
+                },
+                entries,
+            }))
+
+            const service = new CLIProxyAPIAgentService({
+                bridge,
+                createClient: () => fakeClient as unknown as CPAClient,
+                compact: compactMock as any,
+                loadResources: async (input) => ({
+                    contextFiles: [{ path: '/agent/AGENTS.md', content: 'GLOBAL_VERBATIM_AGENTS' }],
+                    skills: [],
+                    prompts: [],
+                    systemPrompt: `SYSTEM tools=${(input.tools ?? []).map((t) => t.name).join(',')}`,
+                    mutableCoreSystemPrompt: `CORE tools=${(input.tools ?? []).map((t) => t.name).join(',')} cwd=${input.cwd ?? ''}`,
+                    verbatimContextPrompt: 'GLOBAL_VERBATIM_AGENTS',
+                    diagnostics: [],
+                }),
+                createTools: async (cwd) =>
+                    cwd
+                        ? [makeTool('read'), makeTool('bash'), makeTool('edit'), makeTool('write')]
+                        : [],
+                now: () => 1000,
+                generateId: (() => {
+                    let n = 0
+                    return () => `id-${++n}`
+                })(),
+            })
+
+            const enhancement = {
+                enabled: true,
+                multilingualEnabled: false,
+                allowedLanguages: ['en'] as ('en')[],
+                modelId: 'builder-model',
+            }
+
+            // Double prepareRun (worktree flow: first with sessionId: null, second with sessionId: 's-wt')
+            await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'sk-test',
+                modelId: modelBase.id,
+                models: [modelBase, builderModel],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                projectPath: '/repo',
+                sessionId: null,
+                systemPromptEnhancement: enhancement,
+            })
+            const preparedWt = await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'sk-test',
+                modelId: modelBase.id,
+                models: [modelBase, builderModel],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                projectPath: '/wt/s-wt',
+                sessionId: 's-wt',
+                systemPromptEnhancement: enhancement,
+            })
+
+            // Zero build model calls during prepareRun
+            expect(fakeClient.calls).toHaveLength(0)
+
+            // Turn 1 streamChat triggers 1 build call + 1 main call
+            const u1 = userEntry('u1', 'Hello', 's-wt')
+            await collect(
+                service.streamChat({
+                    prepared: preparedWt,
+                    sessionId: 's-wt',
+                    runId: 'r1',
+                    entries: [],
+                    userEntry: u1,
+                }),
+            )
+
+            expect(fakeClient.calls).toHaveLength(2)
+            expect(fakeClient.calls[0]?.model.id).toBe('builder-model')
+            const expectedLockedPrompt =
+                'Rewritten unique instruction set using title read bash edit write in /wt/s-wt.\n\nGLOBAL_VERBATIM_AGENTS'
+            expect(fakeClient.calls[1]?.systemPrompt).toBe(expectedLockedPrompt)
+            expect(await bridge.SessionGetSystemPrompt('s-wt')).toBe(expectedLockedPrompt)
+
+            // Turn 2: disable enhancement globally; session must still reuse exact persisted prompt
+            const preparedTurn2 = await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'sk-test',
+                modelId: modelBase.id,
+                models: [modelBase, builderModel],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                projectPath: '/wt/s-wt',
+                sessionId: 's-wt',
+                systemPromptEnhancement: { ...enhancement, enabled: false },
+            })
+            await collect(
+                service.streamChat({
+                    prepared: preparedTurn2,
+                    sessionId: 's-wt',
+                    runId: 'r2',
+                    entries: [u1],
+                    userEntry: userEntry('u2', 'Next turn', 's-wt'),
+                }),
+            )
+
+            expect(fakeClient.calls).toHaveLength(3)
+            expect(fakeClient.calls[2]?.systemPrompt).toBe(expectedLockedPrompt)
+
+            // Manual compact also passes the exact persisted sessionSystemPrompt
+            await service.compact({
+                prepared: preparedTurn2,
+                sessionId: 's-wt',
+                runId: 'r-cmp',
+                entries: [u1],
+            })
+            expect(compactMock).toHaveBeenCalledTimes(1)
+            expect(compactMock.mock.calls[0]?.[1]?.sessionSystemPrompt).toBe(expectedLockedPrompt)
+        })
+
+        it('throws AgentPreflightError(system_prompt_enhancement_no_model) in prepareRun when enhancement is enabled and no enabled model exists', async () => {
+            const { service } = createService()
+            await expect(
+                service.prepare({
+                    baseUrl: 'http://127.0.0.1:8317',
+                    apiKey: 'sk-test',
+                    modelId: modelBase.id,
+                    models: [modelBase],
+                    reasoningLevel: 'medium',
+                    speed: 'standard',
+                    modelSettings: {
+                        enableAll: false,
+                        models: {
+                            [modelBase.id]: { enabled: false },
+                        },
+                        modelOrder: [],
+                    },
+                    systemPromptEnhancement: {
+                        enabled: true,
+                        multilingualEnabled: false,
+                        allowedLanguages: ['en'],
+                        modelId: '',
+                    },
+                }),
+            ).rejects.toMatchObject({
+                name: 'AgentPreflightError',
+                code: 'system_prompt_enhancement_no_model',
+            })
+        })
+
+        it('fails closed when SessionGetSystemPrompt rejects instead of rebuilding or sending raw prompt, and drops cache when SessionSetSystemPrompt returns false', async () => {
+            const bridge = new FakeNativeBridge()
+            bridge.SessionGetSystemPrompt = vi.fn().mockRejectedValue(new Error('SQLite read failed'))
+            const fakeClient = new FakeCPAClient()
+            fakeClient.queue({
+                kind: 'stream',
+                final: (seed) =>
+                    doneAssistant(seed, {
+                        content: [{ type: 'text', text: 'Should not run' }],
+                        stopReason: 'stop',
+                    }),
+            })
+
+            const service = new CLIProxyAPIAgentService({
+                bridge,
+                createClient: () => fakeClient as unknown as CPAClient,
+                loadResources: async () => ({
+                    contextFiles: [],
+                    skills: [],
+                    prompts: [],
+                    systemPrompt: 'RAW',
+                    mutableCoreSystemPrompt: 'RAW_CORE',
+                    verbatimContextPrompt: '',
+                    diagnostics: [],
+                }),
+                createTools: async () => [],
+                now: () => 1000,
+                generateId: () => 'id-1',
+            })
+
+            const prepared = await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'sk-test',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                sessionId: 's-read-err',
+                systemPromptEnhancement: {
+                    enabled: true,
+                    multilingualEnabled: false,
+                    allowedLanguages: ['en'],
+                    modelId: modelBase.id,
+                },
+            })
+
+            await expect(
+                collect(
+                    service.streamChat({
+                        prepared,
+                        sessionId: 's-read-err',
+                        runId: 'r-read-err',
+                        entries: [],
+                        userEntry: userEntry('u1', 'hi', 's-read-err'),
+                    }),
+                ),
+            ).rejects.toMatchObject({
+                name: 'AgentPreflightError',
+                code: 'system_prompt_enhancement_failed',
+            })
+            expect(fakeClient.calls).toHaveLength(0)
+
+            // When SessionSetSystemPrompt returns false (tombstoned), do not cache or proceed
+            bridge.SessionGetSystemPrompt = vi.fn().mockResolvedValue(null)
+            bridge.SessionSetSystemPrompt = vi.fn().mockResolvedValue(false)
+            const fakeClient2 = new FakeCPAClient()
+            fakeClient2.queue({
+                kind: 'stream',
+                final: (seed) =>
+                    doneAssistant(seed, {
+                        content: [{ type: 'text', text: 'Unique rewritten core prompt using title without fingerprints.' }],
+                        stopReason: 'stop',
+                    }),
+            })
+            const service2 = new CLIProxyAPIAgentService({
+                bridge,
+                createClient: () => fakeClient2 as unknown as CPAClient,
+                loadResources: async () => ({
+                    contextFiles: [],
+                    skills: [],
+                    prompts: [],
+                    systemPrompt: 'RAW',
+                    mutableCoreSystemPrompt: 'RAW_CORE',
+                    verbatimContextPrompt: '',
+                    diagnostics: [],
+                }),
+                createTools: async () => [],
+                now: () => 1000,
+                generateId: () => 'id-2',
+            })
+            const prepared2 = await service2.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'sk-test',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                sessionId: 's-tomb',
+                systemPromptEnhancement: {
+                    enabled: true,
+                    multilingualEnabled: false,
+                    allowedLanguages: ['en'],
+                    modelId: modelBase.id,
+                },
+            })
+            await expect(
+                collect(
+                    service2.streamChat({
+                        prepared: prepared2,
+                        sessionId: 's-tomb',
+                        runId: 'r-tomb',
+                        entries: [],
+                        userEntry: userEntry('u1', 'hi', 's-tomb'),
+                    }),
+                ),
+            ).rejects.toMatchObject({
+                name: 'AgentPreflightError',
+                code: 'session_gone',
+            })
+            expect(fakeClient2.calls).toHaveLength(1)
+        })
+
+        it('falls back to global defaultModelId rather than session modelId when enhancement.modelId is empty', async () => {
+            const bridge = new FakeNativeBridge()
+            const globalModel: ModelCatalogEntry = { ...modelBase, id: 'global-default-model', label: 'Global' }
+            const sessionModel: ModelCatalogEntry = { ...modelBase, id: 'session-override-model', label: 'Session' }
+            const fakeClient = new FakeCPAClient()
+            fakeClient.queue(
+                {
+                    kind: 'stream',
+                    final: (seed) =>
+                        doneAssistant(seed, {
+                            content: [{ type: 'text', text: 'Use title before other work only when declared; otherwise focus on the delegated task. Preserve behavioral constraints and the user reply language.' }],
+                            stopReason: 'stop',
+                        }),
+                },
+                {
+                    kind: 'stream',
+                    final: (seed) =>
+                        doneAssistant(seed, {
+                            content: [{ type: 'text', text: 'Reply' }],
+                            stopReason: 'stop',
+                        }),
+                },
+            )
+            const service = new CLIProxyAPIAgentService({
+                bridge,
+                createClient: () => fakeClient as unknown as CPAClient,
+                loadResources: async () => ({
+                    contextFiles: [],
+                    skills: [],
+                    prompts: [],
+                    systemPrompt: 'RAW',
+                    mutableCoreSystemPrompt: 'RAW_CORE',
+                    verbatimContextPrompt: '',
+                    diagnostics: [],
+                }),
+                createTools: async () => [],
+                now: () => 1000,
+                generateId: () => 'id-3',
+            })
+            const prepared = await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'sk-test',
+                modelId: sessionModel.id,
+                defaultModelId: globalModel.id,
+                models: [sessionModel, globalModel],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                sessionId: 's-default-model',
+                systemPromptEnhancement: {
+                    enabled: true,
+                    multilingualEnabled: false,
+                    allowedLanguages: ['en'],
+                    modelId: '',
+                },
+            })
+
+            await collect(
+                service.streamChat({
+                    prepared,
+                    sessionId: 's-default-model',
+                    runId: 'r-def',
+                    entries: [],
+                    userEntry: userEntry('u1', 'hi', 's-default-model'),
+                }),
+            )
+
+            expect(fakeClient.calls).toHaveLength(2)
+            expect(fakeClient.calls[0]?.model.id).toBe('global-default-model')
+            expect(fakeClient.calls[1]?.model.id).toBe('session-override-model')
+        })
+
+        it('forwards parent enhancedSystemPrompt through sub-agent loop into overflow compaction', async () => {
+            const bridge = new FakeNativeBridge()
+            const lockedPrompt = 'LOCKED_SUBAGENT_PARENT_PROMPT'
+            await bridge.SessionSetSystemPrompt('s-sub-cmp', lockedPrompt)
+
+            const fakeClient = new FakeCPAClient()
+            // 1. Subagent initial call fails with context_length_exceeded to trigger overflow compaction
+            // 2. Subagent retry after compaction succeeds
+            // 3. Parent turn completes
+            fakeClient.queue(
+                {
+                    kind: 'stream',
+                    final: (seed) =>
+                        doneAssistant(seed, {
+                            stopReason: 'error',
+                            status: 'error',
+                            errorMessage: 'context_length_exceeded',
+                            content: [],
+                        }),
+                },
+                {
+                    kind: 'stream',
+                    final: (seed) =>
+                        doneAssistant(seed, {
+                            stopReason: 'stop',
+                            content: [{ type: 'text', text: 'child recovered after compact' }],
+                        }),
+                },
+                {
+                    kind: 'stream',
+                    final: (seed) =>
+                        doneAssistant(seed, {
+                            stopReason: 'stop',
+                            content: [{ type: 'text', text: 'parent finished' }],
+                        }),
+                },
+            )
+
+            const compactMock = vi.fn(async (entries: any, _options?: any) => ({
+                entry: {
+                    id: 'cmp-sub-1',
+                    sessionId: 'child-1',
+                    kind: 'compaction' as const,
+                    summary: 'child compacted',
+                    firstKeptEntryId: entries[0]?.id ?? 'u-child',
+                    createdAt: 100,
+                },
+                entries,
+            }))
+
+            const service = new CLIProxyAPIAgentService({
+                bridge,
+                createClient: () => fakeClient as unknown as CPAClient,
+                compact: compactMock as any,
+                loadResources: async () => ({
+                    contextFiles: [],
+                    skills: [],
+                    prompts: [],
+                    systemPrompt: 'RAW',
+                    mutableCoreSystemPrompt: 'RAW_CORE',
+                    verbatimContextPrompt: '',
+                    diagnostics: [],
+                }),
+                createTools: async () => [],
+                now: () => 1000,
+                generateId: (() => {
+                    let n = 0
+                    return () => `sub-${++n}`
+                })(),
+            })
+
+            const prepared = await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'sk-test',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                sessionId: 's-sub-cmp',
+            })
+
+            const parentStream = service.streamChat({
+                prepared,
+                sessionId: 's-sub-cmp',
+                runId: 'r-parent-sub',
+                entries: [],
+                userEntry: userEntry('u-p', 'delegate work', 's-sub-cmp'),
+            })
+            const firstEvent = await parentStream.next()
+            expect(firstEvent.value).toMatchObject({ type: 'agent-start' })
+
+            const childRes = await service.subAgents.spawn('work task', {
+                name: 'Worker',
+                modelId: modelBase.id,
+                parentSessionId: 's-sub-cmp',
+            })
+            expect(childRes.isError).toBeFalsy()
+            expect(compactMock).toHaveBeenCalledTimes(1)
+            expect(compactMock.mock.calls[0]?.[1]?.sessionSystemPrompt).toBe(lockedPrompt)
+
+            // Drain parent stream
+            while (!(await parentStream.next()).done) {
+                // drain
+            }
+        })
+
+        it('resolves persisted parent enhanced prompt asynchronously on direct sub-agent resume after restart without prior streamChat and fails closed on read error', async () => {
+            const bridge = new FakeNativeBridge()
+            const persistedPrompt = 'PERSISTED_AFTER_RESTART_PROMPT'
+            await bridge.SessionSetSystemPrompt('s-restart', persistedPrompt)
+
+            const fakeClient = new FakeCPAClient()
+            fakeClient.queue({
+                kind: 'stream',
+                final: (seed) =>
+                    doneAssistant(seed, {
+                        content: [{ type: 'text', text: 'Sub-agent resumed' }],
+                        stopReason: 'stop',
+                    }),
+            })
+
+            const service = new CLIProxyAPIAgentService({
+                bridge,
+                createClient: () => fakeClient as unknown as CPAClient,
+                createTools: async () => [makeTool('read')],
+                loadResources: async () => ({
+                    contextFiles: [],
+                    skills: [],
+                    prompts: [],
+                    systemPrompt: 'RAW_UNENHANCED_SUBAGENT',
+                    mutableCoreSystemPrompt: 'RAW_CORE',
+                    verbatimContextPrompt: '',
+                    diagnostics: [],
+                }),
+            })
+
+            service.subAgents.hydrate([
+                {
+                    id: 'sub-restart-1',
+                    sessionId: 'child-restart-1',
+                    parentSessionId: 's-restart',
+                    name: 'Worker',
+                    color: '#3dd68c',
+                    icon: 'atom',
+                    status: 'aborted',
+                    modelId: modelBase.id,
+                    createdAt: 1,
+                    updatedAt: 2,
+                },
+            ])
+
+            await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'sk-test',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                sessionId: 's-restart',
+                systemPromptEnhancement: {
+                    enabled: true,
+                    multilingualEnabled: false,
+                    allowedLanguages: ['en'],
+                    modelId: '',
+                },
+            })
+
+            const res = await service.subAgents.resumeSubAgent('sub-restart-1', {
+                entries: [userEntry('u-child', 'Continue', 'child-restart-1')],
+            })
+            expect(res.isError).toBeFalsy()
+            expect(fakeClient.calls).toHaveLength(1)
+            expect(fakeClient.calls[0]?.systemPrompt).toBe(persistedPrompt)
+
+            // Fail closed if reading persisted prompt fails
+            const failingBridge = new FakeNativeBridge()
+            failingBridge.SessionGetSystemPrompt = vi.fn().mockRejectedValue(new Error('DB down'))
+            const failClient = new FakeCPAClient()
+            const failService = new CLIProxyAPIAgentService({
+                bridge: failingBridge,
+                createClient: () => failClient as unknown as CPAClient,
+                createTools: async () => [makeTool('read')],
+                loadResources: async () => ({
+                    contextFiles: [],
+                    skills: [],
+                    prompts: [],
+                    systemPrompt: 'RAW_UNENHANCED_SUBAGENT',
+                    mutableCoreSystemPrompt: 'RAW_CORE',
+                    verbatimContextPrompt: '',
+                    diagnostics: [],
+                }),
+            })
+            failService.subAgents.hydrate([
+                {
+                    id: 'sub-restart-fail',
+                    sessionId: 'child-restart-fail',
+                    parentSessionId: 's-restart-fail',
+                    name: 'Worker',
+                    color: '#3dd68c',
+                    icon: 'atom',
+                    status: 'aborted',
+                    modelId: modelBase.id,
+                    createdAt: 1,
+                    updatedAt: 2,
+                },
+            ])
+            await failService.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'sk-test',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                sessionId: 's-restart-fail',
+                systemPromptEnhancement: {
+                    enabled: true,
+                    multilingualEnabled: false,
+                    allowedLanguages: ['en'],
+                    modelId: '',
+                },
+            })
+            const failRes = await failService.subAgents.resumeSubAgent('sub-restart-fail', {
+                entries: [userEntry('u-child-fail', 'Continue', 'child-restart-fail')],
+            })
+            expect(failRes.isError).toBe(true)
+            expect(failClient.calls).toHaveLength(0)
+        })
+
+        it('rejects stale cachedContext whose systemPrompt differs from persisted sessionSystemPrompt during compact', async () => {
+            const bridge = new FakeNativeBridge()
+            const fakeClient = new FakeCPAClient()
+            const u1 = userEntry('u1', 'Hello', 's-stale-cache')
+            const a1: AssistantEntry = {
+                id: 'a1',
+                sessionId: 's-stale-cache',
+                createdAt: 2,
+                kind: 'assistant',
+                model: modelBase.id,
+                content: [{ type: 'text', text: 'Answer' }],
+                status: 'done',
+                stopReason: 'stop',
+            }
+            fakeClient.queue(
+                { kind: 'stream', final: (seed) => doneAssistant(seed, { content: [{ type: 'text', text: 'Answer' }], stopReason: 'stop' }) },
+            )
+
+            const compactMock = vi.fn(async (entries: any, _options?: any) => ({
+                entry: {
+                    id: 'cmp-stale',
+                    sessionId: 's-stale-cache',
+                    kind: 'compaction' as const,
+                    summary: 'summary',
+                    firstKeptEntryId: 'u1',
+                    createdAt: 100,
+                },
+                entries,
+            }))
+
+            const service = new CLIProxyAPIAgentService({
+                bridge,
+                createClient: () => fakeClient as unknown as CPAClient,
+                compact: compactMock as any,
+                loadResources: async () => ({
+                    contextFiles: [],
+                    skills: [],
+                    prompts: [],
+                    systemPrompt: 'OLD_RAW',
+                    mutableCoreSystemPrompt: 'OLD_CORE',
+                    verbatimContextPrompt: '',
+                    diagnostics: [],
+                }),
+                createTools: async () => [],
+            })
+
+            const preparedUnenhanced = await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'sk-test',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                fastContextCompaction: false,
+                sessionId: 's-stale-cache',
+            })
+
+            await collect(service.streamChat({
+                prepared: preparedUnenhanced,
+                sessionId: 's-stale-cache',
+                runId: 'r-old',
+                entries: [],
+                userEntry: u1,
+            }))
+
+            // Later the session gets an enhanced prompt persisted
+            await bridge.SessionSetSystemPrompt('s-stale-cache', 'ENHANCED_LOCKED_PROMPT')
+            await service.compact({
+                prepared: preparedUnenhanced,
+                sessionId: 's-stale-cache',
+                runId: 'r-compact-stale',
+                entries: [u1, a1],
+            })
+
+            expect(compactMock).toHaveBeenCalledTimes(1)
+            expect(compactMock.mock.calls[0]?.[1]?.sessionSystemPrompt).toBe('ENHANCED_LOCKED_PROMPT')
+            expect(compactMock.mock.calls[0]?.[1]?.cachedContext).toBeUndefined()
+        })
+
+        it('includes SessionStart hook additionalContexts and dynamic title tool during first-time compact on a pre-existing session', async () => {
+            const bridge = new FakeNativeBridge()
+            const fakeClient = new FakeCPAClient()
+            const candidate = 'Use title tool carefully and honor HOOK_SESSION_CONTEXT when assisting the user in English.'
+            fakeClient.queue(
+                { kind: 'stream', final: (seed) => doneAssistant(seed, { content: [{ type: 'text', text: candidate }], stopReason: 'stop' }) },
+                { kind: 'stream', final: (seed) => doneAssistant(seed, { content: [{ type: 'text', text: 'Chat turn' }], stopReason: 'stop' }) },
+            )
+
+            const registry = new ExtensionRegistry()
+            registry.registerHook({
+                id: 'test.session-start',
+                event: 'SessionStart',
+                order: 100,
+                failureMode: 'open',
+                execute: async () => ({
+                    continue: true,
+                    additionalContexts: ['HOOK_SESSION_CONTEXT'],
+                }),
+            })
+            registry.registerToolFactory({
+                id: 'title',
+                targets: ['main'],
+                create: async () => makeTool('title'),
+            })
+
+            const compactMock = vi.fn(async (entries: any, _options?: any) => ({
+                entry: {
+                    id: 'cmp-hook',
+                    sessionId: 's-preexisting',
+                    kind: 'compaction' as const,
+                    summary: 'summary',
+                    firstKeptEntryId: entries[0]?.id ?? 'u1',
+                    createdAt: 100,
+                },
+                entries,
+            }))
+
+            const service = new CLIProxyAPIAgentService({
+                bridge,
+                extensionRegistry: registry,
+                createClient: () => fakeClient as unknown as CPAClient,
+                compact: compactMock as any,
+                loadResources: async () => ({
+                    contextFiles: [],
+                    skills: [],
+                    prompts: [],
+                    systemPrompt: 'RAW',
+                    mutableCoreSystemPrompt: 'Base core instructions.',
+                    verbatimContextPrompt: '',
+                    diagnostics: [],
+                }),
+                createTools: async () => [],
+            })
+
+            const prepared = await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'sk-test',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                sessionId: 's-preexisting',
+                systemPromptEnhancement: {
+                    enabled: true,
+                    multilingualEnabled: false,
+                    allowedLanguages: ['en'],
+                    modelId: '',
+                },
+            })
+
+            const u1 = userEntry('u1', 'Old turn', 's-preexisting')
+            await service.compact({
+                prepared,
+                sessionId: 's-preexisting',
+                runId: 'r-cmp-hook',
+                entries: [u1],
+            })
+
+            // Builder call received SessionStart additionalContexts and dynamic title tool requirement
+            expect(fakeClient.calls).toHaveLength(1)
+            const builderUserText = JSON.stringify(fakeClient.calls[0]?.entries)
+            expect(builderUserText).toContain('HOOK_SESSION_CONTEXT')
+            expect(builderUserText).toContain('title')
+            expect(compactMock.mock.calls[0]?.[1]?.sessionSystemPrompt).toBe(candidate)
+
+            // Subsequent chat turn reuses the exact locked prompt
+            await collect(service.streamChat({
+                prepared,
+                sessionId: 's-preexisting',
+                runId: 'r-chat-after-cmp',
+                entries: [u1],
+                userEntry: userEntry('u2', 'Next', 's-preexisting'),
+            }))
+            expect(fakeClient.calls[1]?.systemPrompt).toBe(candidate)
+        })
+
+        it('builds, persists, and uses enhanced prompt when directly resuming a sub-agent on a pre-existing session with no persisted prompt, failing closed on error', async () => {
+            const bridge = new FakeNativeBridge()
+            const builtPrompt = 'Synthesized parent prompt preserving read and title tool usage and HOOK_DIRECT_RESUME context in English.'
+            const fakeClient = new FakeCPAClient()
+            fakeClient.queue(
+                { kind: 'stream', final: (seed) => doneAssistant(seed, { content: [{ type: 'text', text: builtPrompt }], stopReason: 'stop' }) },
+                { kind: 'stream', final: (seed) => doneAssistant(seed, { content: [{ type: 'text', text: 'Sub-agent resumed with enhancement' }], stopReason: 'stop' }) },
+            )
+
+            const registry = new ExtensionRegistry()
+            let sessionStartCalls = 0
+            registry.registerHook({
+                id: 'test.direct-sub-resume-hook',
+                event: 'SessionStart',
+                order: 100,
+                failureMode: 'open',
+                execute: async () => {
+                    sessionStartCalls += 1
+                    return {
+                        continue: true,
+                        additionalContexts: ['HOOK_DIRECT_RESUME'],
+                    }
+                },
+            })
+            let titleFactoryCalls = 0
+            registry.registerToolFactory({
+                id: 'title',
+                targets: ['main'],
+                create: async () => {
+                    titleFactoryCalls += 1
+                    return makeTool('title')
+                },
+            })
+
+            const service = new CLIProxyAPIAgentService({
+                bridge,
+                extensionRegistry: registry,
+                createClient: () => fakeClient as unknown as CPAClient,
+                createTools: async () => [makeTool('read')],
+                loadResources: async () => ({
+                    contextFiles: [],
+                    skills: [],
+                    prompts: [],
+                    systemPrompt: 'RAW_UNENHANCED_SUBAGENT',
+                    mutableCoreSystemPrompt: 'Base core instructions.',
+                    verbatimContextPrompt: '',
+                    diagnostics: [],
+                }),
+            })
+
+            service.subAgents.hydrate([
+                {
+                    id: 'sub-preexisting-1',
+                    sessionId: 'child-preexisting-1',
+                    parentSessionId: 's-preexisting-direct',
+                    name: 'Worker',
+                    color: '#3dd68c',
+                    icon: 'atom',
+                    status: 'aborted',
+                    modelId: modelBase.id,
+                    createdAt: 1,
+                    updatedAt: 2,
+                },
+            ])
+
+            await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'sk-test',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                sessionId: 's-preexisting-direct',
+                getEntries: async () => [userEntry('u-parent', 'Start parent', 's-preexisting-direct')],
+                systemPromptEnhancement: {
+                    enabled: true,
+                    multilingualEnabled: false,
+                    allowedLanguages: ['en'],
+                    modelId: '',
+                },
+            })
+
+            const res = await service.subAgents.resumeSubAgent('sub-preexisting-1', {
+                entries: [userEntry('u-child', 'Continue', 'child-preexisting-1')],
+            })
+
+            expect(res.isError).toBeFalsy()
+            expect(sessionStartCalls).toBe(1)
+            expect(titleFactoryCalls).toBe(1)
+            expect(await bridge.SessionGetSystemPrompt('s-preexisting-direct')).toBe(builtPrompt)
+            expect(fakeClient.calls).toHaveLength(2)
+            expect(JSON.stringify(fakeClient.calls[0]?.entries)).toContain('HOOK_DIRECT_RESUME')
+            expect(fakeClient.calls[1]?.systemPrompt).toBe(builtPrompt)
+
+            // Fail closed when enhancement synthesis fails on direct sub-agent resume
+            const failClient = new FakeCPAClient()
+            failClient.queue({
+                kind: 'throw',
+                error: new Error('Builder upstream failed'),
+            })
+            const failService = new CLIProxyAPIAgentService({
+                bridge: new FakeNativeBridge(),
+                createClient: () => failClient as unknown as CPAClient,
+                createTools: async () => [makeTool('read')],
+                loadResources: async () => ({
+                    contextFiles: [],
+                    skills: [],
+                    prompts: [],
+                    systemPrompt: 'RAW_UNENHANCED_SUBAGENT',
+                    mutableCoreSystemPrompt: 'Base core instructions.',
+                    verbatimContextPrompt: '',
+                    diagnostics: [],
+                }),
+            })
+            failService.subAgents.hydrate([
+                {
+                    id: 'sub-preexisting-fail',
+                    sessionId: 'child-preexisting-fail',
+                    parentSessionId: 's-preexisting-fail',
+                    name: 'Worker',
+                    color: '#3dd68c',
+                    icon: 'atom',
+                    status: 'aborted',
+                    modelId: modelBase.id,
+                    createdAt: 1,
+                    updatedAt: 2,
+                },
+            ])
+            await failService.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'sk-test',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                sessionId: 's-preexisting-fail',
+                systemPromptEnhancement: {
+                    enabled: true,
+                    multilingualEnabled: false,
+                    allowedLanguages: ['en'],
+                    modelId: '',
+                },
+            })
+
+            const failRes = await failService.subAgents.resumeSubAgent('sub-preexisting-fail', {
+                entries: [userEntry('u-child-fail', 'Continue', 'child-preexisting-fail')],
+            })
+            expect(failRes.isError).toBe(true)
+            // Must never invoke sub-agent execution with unenhanced fallback prompt
+            expect(failClient.calls.every((call) => call.systemPrompt !== 'RAW_UNENHANCED_SUBAGENT')).toBe(true)
+        })
+
+        it('skips SessionStart hook and dynamic title tool during manual compact when enhancement is disabled and no persisted prompt exists', async () => {
+            const bridge = new FakeNativeBridge()
+            const fakeClient = new FakeCPAClient()
+            const registry = new ExtensionRegistry()
+            let sessionStartCalls = 0
+            registry.registerHook({
+                id: 'test.compact-disabled-hook',
+                event: 'SessionStart',
+                order: 100,
+                failureMode: 'open',
+                execute: async () => {
+                    sessionStartCalls += 1
+                    return {
+                        continue: true,
+                        additionalContexts: ['SHOULD_NOT_RUN'],
+                    }
+                },
+            })
+            let titleFactoryCalls = 0
+            registry.registerToolFactory({
+                id: 'title',
+                targets: ['main'],
+                create: async () => {
+                    titleFactoryCalls += 1
+                    return makeTool('title')
+                },
+            })
+
+            const compactMock = vi.fn(async (entries: any, _options?: any) => ({
+                entry: {
+                    id: 'cmp-disabled',
+                    sessionId: 's-cmp-disabled',
+                    kind: 'compaction' as const,
+                    summary: 'summary',
+                    firstKeptEntryId: entries[0]?.id ?? 'u1',
+                    createdAt: 100,
+                },
+                entries,
+            }))
+
+            const service = new CLIProxyAPIAgentService({
+                bridge,
+                extensionRegistry: registry,
+                createClient: () => fakeClient as unknown as CPAClient,
+                compact: compactMock as any,
+                loadResources: async () => ({
+                    contextFiles: [],
+                    skills: [],
+                    prompts: [],
+                    systemPrompt: 'RAW',
+                    mutableCoreSystemPrompt: 'Base core instructions.',
+                    verbatimContextPrompt: '',
+                    diagnostics: [],
+                }),
+                createTools: async () => [],
+            })
+
+            const prepared = await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'sk-test',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                sessionId: 's-cmp-disabled',
+                systemPromptEnhancement: {
+                    enabled: false,
+                    multilingualEnabled: false,
+                    allowedLanguages: ['en'],
+                    modelId: '',
+                },
+            })
+
+            const u1 = userEntry('u1', 'Hello', 's-cmp-disabled')
+            await service.compact({
+                prepared,
+                sessionId: 's-cmp-disabled',
+                runId: 'r-cmp-disabled',
+                entries: [u1],
+            })
+
+            expect(sessionStartCalls).toBe(0)
+            expect(titleFactoryCalls).toBe(0)
+            expect(compactMock).toHaveBeenCalledTimes(1)
+            expect(compactMock.mock.calls[0]?.[1]?.sessionSystemPrompt).toBeUndefined()
+        })
+
+        it('cancels parent prompt synthesis immediately when stopping direct sub-agent resume', async () => {
+            const bridge = new FakeNativeBridge()
+            let builderAborted = false
+            let builderStarted!: () => void
+            const builderStartedPromise = new Promise<void>((resolve) => {
+                builderStarted = resolve
+            })
+
+            const hangingBuilderClient = {
+                stream: (_input: any, signalOrOpts?: AbortSignal | { signal?: AbortSignal }) => {
+                    const signal = signalOrOpts instanceof AbortSignal ? signalOrOpts : signalOrOpts?.signal
+                    builderStarted()
+                    return (async function* () {
+                        await new Promise<void>((_resolve, reject) => {
+                            if (signal?.aborted) {
+                                builderAborted = true
+                                const err = new Error('Aborted')
+                                err.name = 'AbortError'
+                                reject(err)
+                                return
+                            }
+                            signal?.addEventListener(
+                                'abort',
+                                () => {
+                                    builderAborted = true
+                                    const err = new Error('Aborted')
+                                    err.name = 'AbortError'
+                                    reject(err)
+                                },
+                                { once: true },
+                            )
+                        })
+                    })()
+                },
+                cancel: async () => {},
+                dispose: () => {},
+            }
+
+            const service = new CLIProxyAPIAgentService({
+                bridge,
+                createClient: () => hangingBuilderClient as unknown as CPAClient,
+                createTools: async () => [makeTool('read')],
+                loadResources: async () => ({
+                    contextFiles: [],
+                    skills: [],
+                    prompts: [],
+                    systemPrompt: 'RAW',
+                    mutableCoreSystemPrompt: 'Base core instructions.',
+                    verbatimContextPrompt: '',
+                    diagnostics: [],
+                }),
+            })
+
+            service.subAgents.hydrate([
+                {
+                    id: 'sub-stop-1',
+                    sessionId: 'child-stop-1',
+                    parentSessionId: 's-parent-stop',
+                    name: 'Worker',
+                    color: '#3dd68c',
+                    icon: 'atom',
+                    status: 'aborted',
+                    modelId: modelBase.id,
+                    createdAt: 1,
+                    updatedAt: 2,
+                },
+            ])
+
+            await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'sk-test',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                sessionId: 's-parent-stop',
+                systemPromptEnhancement: {
+                    enabled: true,
+                    multilingualEnabled: false,
+                    allowedLanguages: ['en'],
+                    modelId: '',
+                },
+            })
+
+            const resumePromise = service.subAgents.resumeSubAgent('sub-stop-1', {
+                entries: [userEntry('u-child-stop', 'Continue', 'child-stop-1')],
+            })
+
+            await builderStartedPromise
+            const stopResult = service.subAgents.stop('sub-stop-1')
+            expect(stopResult.isError).toBeFalsy()
+
+            const resumeResult = await Promise.race([
+                resumePromise,
+                new Promise<never>((_, reject) =>
+                    setTimeout(() => reject(new Error('resumeSubAgent stayed blocked after stop()')), 1000),
+                ),
+            ])
+
+            expect(builderAborted).toBe(true)
+            expect(resumeResult.isError).toBe(true)
+            expect(service.subAgents.list().find((a) => a.id === 'sub-stop-1')?.status).toBe('aborted')
+            expect(await bridge.SessionGetSystemPrompt('s-parent-stop')).toBeNull()
+        })
+
+        it('supports safe multi-waiter cancellation in single-flight inFlightPromptBuilds', async () => {
+            const bridge = new FakeNativeBridge()
+            const builtPrompt = 'Synthesized parent prompt preserving read and title tool usage in English.'
+            let builderAborted = false
+            let builderCalls = 0
+            let builderStarted!: () => void
+            const builderStartedPromise = new Promise<void>((resolve) => {
+                builderStarted = resolve
+            })
+            let resolveBuilder!: (text: string) => void
+            const builderResultPromise = new Promise<string>((resolve) => {
+                resolveBuilder = resolve
+            })
+
+            const multiClient = {
+                stream: (_input: any, signalOrOpts?: AbortSignal | { signal?: AbortSignal }) => {
+                    const signal = signalOrOpts instanceof AbortSignal ? signalOrOpts : signalOrOpts?.signal
+                    builderCalls += 1
+                    if (builderCalls === 1) {
+                        builderStarted()
+                        return (async function* () {
+                            const text = await new Promise<string>((resolve, reject) => {
+                                if (signal?.aborted) {
+                                    builderAborted = true
+                                    const err = new Error('Aborted')
+                                    err.name = 'AbortError'
+                                    reject(err)
+                                    return
+                                }
+                                signal?.addEventListener(
+                                    'abort',
+                                    () => {
+                                        builderAborted = true
+                                        const err = new Error('Aborted')
+                                        err.name = 'AbortError'
+                                        reject(err)
+                                    },
+                                    { once: true },
+                                )
+                                void builderResultPromise.then(resolve, reject)
+                            })
+                            const seed: AssistantEntry = {
+                                id: 'builder-mw-1',
+                                sessionId: 's-multi-waiter',
+                                createdAt: 1,
+                                kind: 'assistant',
+                                model: modelBase.id,
+                                content: [{ type: 'text', text }],
+                                status: 'done',
+                                stopReason: 'stop',
+                            }
+                            yield { type: 'done', message: seed } as AssistantStreamEvent
+                        })()
+                    }
+                    return (async function* () {
+                        const seed: AssistantEntry = {
+                            id: 'child-mw-2',
+                            sessionId: 'child-mw-2',
+                            createdAt: 2,
+                            kind: 'assistant',
+                            model: modelBase.id,
+                            content: [{ type: 'text', text: 'Sub-agent 2 succeeded' }],
+                            status: 'done',
+                            stopReason: 'stop',
+                        }
+                        yield { type: 'done', message: seed } as AssistantStreamEvent
+                    })()
+                },
+                cancel: async () => {},
+                dispose: () => {},
+            }
+
+            const service = new CLIProxyAPIAgentService({
+                bridge,
+                createClient: () => multiClient as unknown as CPAClient,
+                createTools: async () => [makeTool('read')],
+                loadResources: async () => ({
+                    contextFiles: [],
+                    skills: [],
+                    prompts: [],
+                    systemPrompt: 'RAW',
+                    mutableCoreSystemPrompt: 'Base core instructions.',
+                    verbatimContextPrompt: '',
+                    diagnostics: [],
+                }),
+            })
+
+            service.subAgents.hydrate([
+                {
+                    id: 'sub-mw-1',
+                    sessionId: 'child-mw-1',
+                    parentSessionId: 's-multi-waiter',
+                    name: 'Worker 1',
+                    color: '#3dd68c',
+                    icon: 'atom',
+                    status: 'aborted',
+                    modelId: modelBase.id,
+                    createdAt: 1,
+                    updatedAt: 2,
+                },
+                {
+                    id: 'sub-mw-2',
+                    sessionId: 'child-mw-2',
+                    parentSessionId: 's-multi-waiter',
+                    name: 'Worker 2',
+                    color: '#3dd68c',
+                    icon: 'atom',
+                    status: 'aborted',
+                    modelId: modelBase.id,
+                    createdAt: 1,
+                    updatedAt: 2,
+                },
+            ])
+
+            await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'sk-test',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                sessionId: 's-multi-waiter',
+                systemPromptEnhancement: {
+                    enabled: true,
+                    multilingualEnabled: false,
+                    allowedLanguages: ['en'],
+                    modelId: '',
+                },
+            })
+
+            const p1 = service.subAgents.resumeSubAgent('sub-mw-1', {
+                entries: [userEntry('u-c1', 'Continue 1', 'child-mw-1')],
+            })
+            await builderStartedPromise
+            const p2 = service.subAgents.resumeSubAgent('sub-mw-2', {
+                entries: [userEntry('u-c2', 'Continue 2', 'child-mw-2')],
+            })
+            await new Promise((r) => setTimeout(r, 20))
+
+            expect(builderCalls).toBe(1)
+
+            // Stop only the first waiter: p1 rejects/aborts immediately, shared build must NOT abort!
+            service.subAgents.stop('sub-mw-1')
+            const res1 = await Promise.race([
+                p1,
+                new Promise<never>((_, reject) =>
+                    setTimeout(() => reject(new Error('Waiter 1 did not abort promptly')), 1000),
+                ),
+            ])
+            expect(res1.isError).toBe(true)
+            expect(service.subAgents.list().find((a) => a.id === 'sub-mw-1')?.status).toBe('aborted')
+            expect(builderAborted).toBe(false)
+
+            // Now complete the shared synthesis for waiter 2
+            resolveBuilder(builtPrompt)
+            const res2 = await p2
+            expect(res2.isError).toBeFalsy()
+            expect(service.subAgents.list().find((a) => a.id === 'sub-mw-2')?.status).toBe('completed')
+            expect(await bridge.SessionGetSystemPrompt('s-multi-waiter')).toBe(builtPrompt)
+
+            // When ALL active waiters abort, the shared synthesis controller MUST abort
+            const bridge2 = new FakeNativeBridge()
+            let allWaitersAborted = false
+            let started2!: () => void
+            const started2Promise = new Promise<void>((resolve) => {
+                started2 = resolve
+            })
+            const abortAllClient = {
+                stream: (_input: any, signalOrOpts?: AbortSignal | { signal?: AbortSignal }) => {
+                    const signal = signalOrOpts instanceof AbortSignal ? signalOrOpts : signalOrOpts?.signal
+                    started2()
+                    return (async function* () {
+                        await new Promise<void>((_resolve, reject) => {
+                            if (signal?.aborted) {
+                                allWaitersAborted = true
+                                const err = new Error('Aborted')
+                                err.name = 'AbortError'
+                                reject(err)
+                                return
+                            }
+                            signal?.addEventListener(
+                                'abort',
+                                () => {
+                                    allWaitersAborted = true
+                                    const err = new Error('Aborted')
+                                    err.name = 'AbortError'
+                                    reject(err)
+                                },
+                                { once: true },
+                            )
+                        })
+                    })()
+                },
+                cancel: async () => {},
+                dispose: () => {},
+            }
+            const service2 = new CLIProxyAPIAgentService({
+                bridge: bridge2,
+                createClient: () => abortAllClient as unknown as CPAClient,
+                createTools: async () => [makeTool('read')],
+                loadResources: async () => ({
+                    contextFiles: [],
+                    skills: [],
+                    prompts: [],
+                    systemPrompt: 'RAW',
+                    mutableCoreSystemPrompt: 'Base core instructions.',
+                    verbatimContextPrompt: '',
+                    diagnostics: [],
+                }),
+            })
+            service2.subAgents.hydrate([
+                {
+                    id: 'sub-all-1',
+                    sessionId: 'child-all-1',
+                    parentSessionId: 's-multi-abort',
+                    name: 'Worker A',
+                    color: '#3dd68c',
+                    icon: 'atom',
+                    status: 'aborted',
+                    modelId: modelBase.id,
+                    createdAt: 1,
+                    updatedAt: 2,
+                },
+                {
+                    id: 'sub-all-2',
+                    sessionId: 'child-all-2',
+                    parentSessionId: 's-multi-abort',
+                    name: 'Worker B',
+                    color: '#3dd68c',
+                    icon: 'atom',
+                    status: 'aborted',
+                    modelId: modelBase.id,
+                    createdAt: 1,
+                    updatedAt: 2,
+                },
+            ])
+            await service2.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'sk-test',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                sessionId: 's-multi-abort',
+                systemPromptEnhancement: {
+                    enabled: true,
+                    multilingualEnabled: false,
+                    allowedLanguages: ['en'],
+                    modelId: '',
+                },
+            })
+
+            const a1 = service2.subAgents.resumeSubAgent('sub-all-1', {
+                entries: [userEntry('u-a1', 'Go 1', 'child-all-1')],
+            })
+            await started2Promise
+            const a2 = service2.subAgents.resumeSubAgent('sub-all-2', {
+                entries: [userEntry('u-a2', 'Go 2', 'child-all-2')],
+            })
+            await new Promise((r) => setTimeout(r, 20))
+
+            service2.subAgents.stop('sub-all-1')
+            await a1
+            expect(allWaitersAborted).toBe(false)
+
+            service2.subAgents.stop('sub-all-2')
+            await a2
+            expect(allWaitersAborted).toBe(true)
+            expect(await bridge2.SessionGetSystemPrompt('s-multi-abort')).toBeNull()
+        })
+
+        it('incorporates onRequest middleware systemPrompt additions during synthesis and fails closed if middleware mutates locked prompt at dispatch', async () => {
+            const bridge = new FakeNativeBridge()
+            const synthesized = 'Synthesized prompt honoring GUARDRAIL_FROM_MW with read and title tool in English.'
+            const fakeClient = new FakeCPAClient()
+            fakeClient.queue(
+                { kind: 'stream', final: (seed) => doneAssistant(seed, { content: [{ type: 'text', text: synthesized }], stopReason: 'stop' }) },
+                { kind: 'stream', final: (seed) => doneAssistant(seed, { content: [{ type: 'text', text: 'Main turn ok' }], stopReason: 'stop' }) },
+            )
+
+            const registry = new ExtensionRegistry()
+            registry.registerProtocolMiddleware({
+                id: 'idempotent-guardrail-mw',
+                order: 10,
+                onRequest: (input) => {
+                    if (
+                        input.systemPrompt.includes('Base core instructions.') &&
+                        !input.systemPrompt.includes('GUARDRAIL_FROM_MW')
+                    ) {
+                        return {
+                            ...input,
+                            systemPrompt: `${input.systemPrompt}\nGUARDRAIL_FROM_MW`,
+                        }
+                    }
+                    return input
+                },
+            })
+
+            const service = new CLIProxyAPIAgentService({
+                bridge,
+                extensionRegistry: registry,
+                createClient: () => fakeClient as unknown as CPAClient,
+                createTools: async () => [makeTool('read')],
+                loadResources: async () => ({
+                    contextFiles: [],
+                    skills: [],
+                    prompts: [],
+                    systemPrompt: 'RAW',
+                    mutableCoreSystemPrompt: 'Base core instructions.',
+                    verbatimContextPrompt: '',
+                    diagnostics: [],
+                }),
+            })
+
+            const prepared = await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'sk-test',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                sessionId: 's-mw-idempotent',
+                systemPromptEnhancement: {
+                    enabled: true,
+                    multilingualEnabled: false,
+                    allowedLanguages: ['en'],
+                    modelId: '',
+                },
+            })
+
+            const events1 = await collect(
+                service.streamChat({
+                    prepared,
+                    sessionId: 's-mw-idempotent',
+                    runId: 'r-mw-idempotent',
+                    entries: [],
+                    userEntry: userEntry('u1', 'Hello', 's-mw-idempotent'),
+                }),
+            )
+
+            expect(fakeClient.calls).toHaveLength(2)
+            expect(JSON.stringify(fakeClient.calls[0]?.entries)).toContain('GUARDRAIL_FROM_MW')
+            expect(fakeClient.calls[1]?.systemPrompt).toBe(synthesized)
+            expect(events1.some((e) => e.type === 'error')).toBe(false)
+
+            // Non-idempotent middleware mutating locked enhanced prompt must fail closed at dispatch
+            const badRegistry = new ExtensionRegistry()
+            badRegistry.registerProtocolMiddleware({
+                id: 'mutating-bypass-mw',
+                order: 10,
+                onRequest: (input) => ({
+                    ...input,
+                    systemPrompt: `${input.systemPrompt}\n[UNVALIDATED_TEMPLATE_BYPASS]`,
+                }),
+            })
+            const badClient = new FakeCPAClient()
+            badClient.queue(
+                { kind: 'stream', final: (seed) => doneAssistant(seed, { content: [{ type: 'text', text: synthesized }], stopReason: 'stop' }) },
+                { kind: 'stream', final: (seed) => doneAssistant(seed, { content: [{ type: 'text', text: 'Should never dispatch' }], stopReason: 'stop' }) },
+            )
+            const badService = new CLIProxyAPIAgentService({
+                bridge: new FakeNativeBridge(),
+                extensionRegistry: badRegistry,
+                createClient: () => badClient as unknown as CPAClient,
+                createTools: async () => [makeTool('read')],
+                loadResources: async () => ({
+                    contextFiles: [],
+                    skills: [],
+                    prompts: [],
+                    systemPrompt: 'RAW',
+                    mutableCoreSystemPrompt: 'Base core instructions.',
+                    verbatimContextPrompt: '',
+                    diagnostics: [],
+                }),
+            })
+            const badPrepared = await badService.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'sk-test',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                sessionId: 's-mw-bypass',
+                systemPromptEnhancement: {
+                    enabled: true,
+                    multilingualEnabled: false,
+                    allowedLanguages: ['en'],
+                    modelId: '',
+                },
+            })
+
+            const badEvents = await collect(
+                badService.streamChat({
+                    prepared: badPrepared,
+                    sessionId: 's-mw-bypass',
+                    runId: 'r-mw-bypass',
+                    entries: [],
+                    userEntry: userEntry('u2', 'Hello', 's-mw-bypass'),
+                }),
+            )
+
+            // Only the synthesis builder call ran; main chat call with mutated prompt never dispatched
+            expect(badClient.calls).toHaveLength(1)
+            expect(badEvents.some((e) => e.type === 'error' && e.message.includes('Locked enhanced system prompt cannot be modified by middleware'))).toBe(true)
+        })
+
+        it('does not leave an orphaned prompt build running when caller aborts around resolvePersistedEnhancedPrompt or before awaitInFlightPromptBuild', async () => {
+            // Case 1: Caller aborts right as SessionGetSystemPrompt resolves null
+            const bridge1 = new FakeNativeBridge()
+            const originalGet1 = bridge1.SessionGetSystemPrompt.bind(bridge1)
+            let abortedDuringGet = false
+            bridge1.SessionGetSystemPrompt = (sessionId: string) => {
+                const promise = originalGet1(sessionId)
+                if (!abortedDuringGet && sessionId === 's-preabort-get') {
+                    abortedDuringGet = true
+                    void promise.then(() => {
+                        Promise.resolve().then(() => {
+                            service1.abort('r-preabort-get')
+                        })
+                    })
+                }
+                return promise
+            }
+            const client1 = new FakeCPAClient()
+            client1.queue({
+                kind: 'stream',
+                final: (seed) =>
+                    doneAssistant(seed, {
+                        content: [{ type: 'text', text: 'Should never synthesize' }],
+                        stopReason: 'stop',
+                    }),
+            })
+            const service1 = new CLIProxyAPIAgentService({
+                bridge: bridge1,
+                createClient: () => client1 as unknown as CPAClient,
+                createTools: async () => [makeTool('read')],
+                loadResources: async () => ({
+                    contextFiles: [],
+                    skills: [],
+                    prompts: [],
+                    systemPrompt: 'RAW',
+                    mutableCoreSystemPrompt: 'Base core instructions.',
+                    verbatimContextPrompt: '',
+                    diagnostics: [],
+                }),
+            })
+            const prepared1 = await service1.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'sk-test',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                sessionId: 's-preabort-get',
+                systemPromptEnhancement: {
+                    enabled: true,
+                    multilingualEnabled: false,
+                    allowedLanguages: ['en'],
+                    modelId: '',
+                },
+            })
+
+            await expect(
+                collect(
+                    service1.streamChat({
+                        prepared: prepared1,
+                        sessionId: 's-preabort-get',
+                        runId: 'r-preabort-get',
+                        entries: [],
+                        userEntry: userEntry('u-preabort-1', 'Hello', 's-preabort-get'),
+                    }),
+                ),
+            ).rejects.toMatchObject({ code: 'aborted' })
+            await new Promise((r) => setTimeout(r, 20))
+
+            expect(abortedDuringGet).toBe(true)
+            expect(client1.calls).toHaveLength(0)
+            expect(await originalGet1('s-preabort-get')).toBeNull()
+
+            // Case 2: Caller aborts synchronously right before awaitInFlightPromptBuild when activeWaiters.size === 0
+            const bridge2 = new FakeNativeBridge()
+            const client2 = new FakeCPAClient()
+            client2.queue({
+                kind: 'stream',
+                final: (seed) =>
+                    doneAssistant(seed, {
+                        content: [{ type: 'text', text: 'Should never synthesize after pre-aborted awaitInFlightPromptBuild' }],
+                        stopReason: 'stop',
+                    }),
+            })
+            const registry2 = new ExtensionRegistry()
+            registry2.registerProtocolMiddleware({
+                id: 'abort-before-await-inflight-mw',
+                order: 10,
+                onRequest: (input) => {
+                    service2.abort('r-preabort-inflight')
+                    return input
+                },
+            })
+            const service2 = new CLIProxyAPIAgentService({
+                bridge: bridge2,
+                extensionRegistry: registry2,
+                createClient: () => client2 as unknown as CPAClient,
+                createTools: async () => [makeTool('read')],
+                loadResources: async () => ({
+                    contextFiles: [],
+                    skills: [],
+                    prompts: [],
+                    systemPrompt: 'RAW',
+                    mutableCoreSystemPrompt: 'Base core instructions.',
+                    verbatimContextPrompt: '',
+                    diagnostics: [],
+                }),
+            })
+            const prepared2 = await service2.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'sk-test',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                sessionId: 's-preabort-inflight',
+                systemPromptEnhancement: {
+                    enabled: true,
+                    multilingualEnabled: false,
+                    allowedLanguages: ['en'],
+                    modelId: '',
+                },
+            })
+
+            await expect(
+                collect(
+                    service2.streamChat({
+                        prepared: prepared2,
+                        sessionId: 's-preabort-inflight',
+                        runId: 'r-preabort-inflight',
+                        entries: [],
+                        userEntry: userEntry('u-preabort-2', 'Hello', 's-preabort-inflight'),
+                    }),
+                ),
+            ).rejects.toMatchObject({ code: 'aborted' })
+            await new Promise((r) => setTimeout(r, 20))
+
+            expect(client2.calls).toHaveLength(0)
+            expect(await bridge2.SessionGetSystemPrompt('s-preabort-inflight')).toBeNull()
+            expect((service2 as any).inFlightPromptBuilds.size).toBe(0)
+
+            // Case 3: Concurrent non-aborted waiter still succeeds cleanly when another waiter is pre-aborted
+            const bridge3 = new FakeNativeBridge()
+            const builtPrompt3 = 'Synthesized shared parent prompt preserving read and title tool usage in English.'
+            let resolveBuilder3!: (text: string) => void
+            const builderResult3 = new Promise<string>((resolve) => {
+                resolveBuilder3 = resolve
+            })
+            let builderStarted3!: () => void
+            const builderStartedPromise3 = new Promise<void>((resolve) => {
+                builderStarted3 = resolve
+            })
+            let streamCount3 = 0
+            const client3 = {
+                stream: (_input: any) => {
+                    streamCount3 += 1
+                    if (streamCount3 === 1) {
+                        builderStarted3()
+                        return (async function* () {
+                            const text = await builderResult3
+                            const seed: AssistantEntry = {
+                                id: 'builder-preabort-3',
+                                sessionId: 's-preabort-concurrent',
+                                createdAt: 1,
+                                kind: 'assistant',
+                                model: modelBase.id,
+                                content: [{ type: 'text', text }],
+                                status: 'done',
+                                stopReason: 'stop',
+                            }
+                            yield { type: 'done', message: seed } as AssistantStreamEvent
+                        })()
+                    }
+                    return (async function* () {
+                        const seed: AssistantEntry = {
+                            id: 'child-preabort-3',
+                            sessionId: 'child-preabort-3',
+                            createdAt: 2,
+                            kind: 'assistant',
+                            model: modelBase.id,
+                            content: [{ type: 'text', text: 'Concurrent waiter succeeded' }],
+                            status: 'done',
+                            stopReason: 'stop',
+                        }
+                        yield { type: 'done', message: seed } as AssistantStreamEvent
+                    })()
+                },
+                cancel: async () => {},
+                dispose: () => {},
+            }
+            const service3 = new CLIProxyAPIAgentService({
+                bridge: bridge3,
+                createClient: () => client3 as unknown as CPAClient,
+                createTools: async () => [makeTool('read')],
+                loadResources: async () => ({
+                    contextFiles: [],
+                    skills: [],
+                    prompts: [],
+                    systemPrompt: 'RAW',
+                    mutableCoreSystemPrompt: 'Base core instructions.',
+                    verbatimContextPrompt: '',
+                    diagnostics: [],
+                }),
+            })
+            service3.subAgents.hydrate([
+                {
+                    id: 'sub-preabort-waiter',
+                    sessionId: 'child-preabort-3',
+                    parentSessionId: 's-preabort-concurrent',
+                    name: 'Worker 1',
+                    color: '#3dd68c',
+                    icon: 'atom',
+                    status: 'aborted',
+                    modelId: modelBase.id,
+                    createdAt: 1,
+                    updatedAt: 2,
+                },
+            ])
+            await service3.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'sk-test',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                sessionId: 's-preabort-concurrent',
+                systemPromptEnhancement: {
+                    enabled: true,
+                    multilingualEnabled: false,
+                    allowedLanguages: ['en'],
+                    modelId: '',
+                },
+            })
+
+            const activeWaiterPromise = service3.subAgents.resumeSubAgent('sub-preabort-waiter', {
+                entries: [userEntry('u-c1', 'Continue', 'child-preabort-3')],
+            })
+            await builderStartedPromise3
+
+            const inFlightEntry = (service3 as any).inFlightPromptBuilds.get('s-preabort-concurrent')
+            expect(inFlightEntry).toBeDefined()
+            expect(inFlightEntry.activeWaiters.size).toBe(1)
+
+            const preAbortedController = new AbortController()
+            preAbortedController.abort()
+            await expect(
+                (service3 as any).awaitInFlightPromptBuild(
+                    's-preabort-concurrent',
+                    inFlightEntry,
+                    preAbortedController.signal,
+                ),
+            ).rejects.toMatchObject({ code: 'aborted' })
+
+            // Shared build must remain active for the concurrent non-aborted waiter
+            expect(inFlightEntry.controller.signal.aborted).toBe(false)
+            expect((service3 as any).inFlightPromptBuilds.get('s-preabort-concurrent')).toBe(inFlightEntry)
+
+            resolveBuilder3(builtPrompt3)
+            const activeResult = await activeWaiterPromise
+            expect(activeResult.isError).toBeFalsy()
+            expect(await bridge3.SessionGetSystemPrompt('s-preabort-concurrent')).toBe(builtPrompt3)
+        })
+
+        it('redacts apiKey from synthesis errors during direct sub-agent resume while preserving AgentPreflightError code', async () => {
+            const secretApiKey = 'sk-super-secret-subagent-key-12345'
+            const bridge = new FakeNativeBridge()
+            const failingClient = new FakeCPAClient()
+            const authError = new Error(
+                `Upstream auth failed for Bearer ${secretApiKey} with key=${secretApiKey}`,
+            )
+            failingClient.queue(
+                { kind: 'throw', error: authError },
+                { kind: 'throw', error: authError },
+                { kind: 'throw', error: authError },
+                { kind: 'throw', error: authError },
+                { kind: 'throw', error: authError },
+                { kind: 'throw', error: authError },
+            )
+
+            const service = new CLIProxyAPIAgentService({
+                bridge,
+                createClient: () => failingClient as unknown as CPAClient,
+                createTools: async () => [makeTool('read')],
+                loadResources: async () => ({
+                    contextFiles: [],
+                    skills: [],
+                    prompts: [],
+                    systemPrompt: 'RAW',
+                    mutableCoreSystemPrompt: 'Base core instructions.',
+                    verbatimContextPrompt: '',
+                    diagnostics: [],
+                }),
+            })
+            service.subAgents.hydrate([
+                {
+                    id: 'sub-redact-1',
+                    sessionId: 'child-redact-1',
+                    parentSessionId: 'parent-redact-1',
+                    name: 'Worker',
+                    color: '#3dd68c',
+                    icon: 'atom',
+                    status: 'aborted',
+                    modelId: modelBase.id,
+                    createdAt: 1,
+                    updatedAt: 2,
+                },
+            ])
+
+            const prepared = await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: secretApiKey,
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                sessionId: 'parent-redact-1',
+                systemPromptEnhancement: {
+                    enabled: true,
+                    multilingualEnabled: false,
+                    allowedLanguages: ['en'],
+                    modelId: '',
+                },
+            })
+
+            const resumeResult = await service.subAgents.resumeSubAgent('sub-redact-1', {
+                entries: [userEntry('u-redact-1', 'Continue', 'child-redact-1')],
+            })
+            expect(resumeResult.isError).toBe(true)
+            const resultText = resumeResult.content
+                .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+                .map((b) => b.text)
+                .join('\n')
+            expect(resultText).not.toContain(secretApiKey)
+            expect(resultText).toContain('[REDACTED]')
+
+            const record = service.subAgents.list().find((a) => a.id === 'sub-redact-1')
+            expect(record?.status).toBe('error')
+            expect(record?.errorMessage).toBeDefined()
+            expect(record?.errorMessage).not.toContain(secretApiKey)
+            expect(record?.errorMessage).toContain('[REDACTED]')
+
+            // Direct resolver rejection must preserve AgentPreflightError identity/code/i18nKey without leaking secrets
+            let caught: unknown
+            try {
+                await (service as any).resolveSubAgentParentEnhancedPrompt(
+                    prepared,
+                    'parent-redact-1',
+                )
+            } catch (err) {
+                caught = err
+            }
+            expect(caught).toBeInstanceOf(AgentPreflightError)
+            expect(caught).toMatchObject({
+                name: 'AgentPreflightError',
+                code: 'system_prompt_enhancement_failed',
+                i18nKey: 'agent.preflight.system_prompt_enhancement_failed',
+            })
+            expect((caught as Error).message).not.toContain(secretApiKey)
+            expect((caught as Error).message).toContain('[REDACTED]')
+        }, 15_000)
+
+        it('allows prepare() and streamChat() for an existing session with a locked system_prompt even when all enhancement builder models are disabled', async () => {
+            const bridge = new FakeNativeBridge()
+            const lockedPrompt = 'LOCKED_EXISTING_SESSION_PROMPT'
+            await bridge.SessionSetSystemPrompt('s-locked-no-model', lockedPrompt)
+
+            const fakeClient = new FakeCPAClient()
+            fakeClient.queue({
+                kind: 'stream',
+                final: (seed) =>
+                    doneAssistant(seed, {
+                        content: [{ type: 'text', text: 'Reply using locked prompt' }],
+                        stopReason: 'stop',
+                    }),
+            })
+
+            const service = new CLIProxyAPIAgentService({
+                bridge,
+                createClient: () => fakeClient as unknown as CPAClient,
+                createTools: async () => [makeTool('read')],
+                loadResources: async () => ({
+                    contextFiles: [],
+                    skills: [],
+                    prompts: [],
+                    systemPrompt: 'RAW',
+                    mutableCoreSystemPrompt: 'RAW_CORE',
+                    verbatimContextPrompt: '',
+                    diagnostics: [],
+                }),
+            })
+
+            const disabledModelSettings = {
+                enableAll: false,
+                models: {
+                    [modelBase.id]: { enabled: false },
+                },
+                modelOrder: [],
+            }
+            const enhancement = {
+                enabled: true,
+                multilingualEnabled: false,
+                allowedLanguages: ['en' as const],
+                modelId: '',
+            }
+
+            const prepared = await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'sk-test',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                sessionId: 's-locked-no-model',
+                modelSettings: disabledModelSettings,
+                systemPromptEnhancement: enhancement,
+            })
+
+            const events = await collect(
+                service.streamChat({
+                    prepared,
+                    sessionId: 's-locked-no-model',
+                    runId: 'r-locked-no-model',
+                    entries: [],
+                    userEntry: userEntry('u-locked', 'hi', 's-locked-no-model'),
+                }),
+            )
+
+            expect(events.some((e) => e.type === 'error')).toBe(false)
+            expect(fakeClient.calls).toHaveLength(1)
+            expect(fakeClient.calls[0]?.systemPrompt).toBe(lockedPrompt)
+
+            // A new session without a persisted prompt must still fail preflight with system_prompt_enhancement_no_model
+            await expect(
+                service.prepare({
+                    baseUrl: 'http://127.0.0.1:8317',
+                    apiKey: 'sk-test',
+                    modelId: modelBase.id,
+                    models: [modelBase],
+                    reasoningLevel: 'medium',
+                    speed: 'standard',
+                    sessionId: 's-new-no-model',
+                    modelSettings: disabledModelSettings,
+                    systemPromptEnhancement: enhancement,
+                }),
+            ).rejects.toMatchObject({
+                name: 'AgentPreflightError',
+                code: 'system_prompt_enhancement_no_model',
+            })
+
+            // If reading the persisted prompt rejects while no builder model is available, prepare() must fail closed
+            const originalGet = bridge.SessionGetSystemPrompt.bind(bridge)
+            bridge.SessionGetSystemPrompt = vi
+                .fn()
+                .mockRejectedValueOnce(new Error('SQLite read failed'))
+            await expect(
+                service.prepare({
+                    baseUrl: 'http://127.0.0.1:8317',
+                    apiKey: 'sk-test',
+                    modelId: modelBase.id,
+                    models: [modelBase],
+                    reasoningLevel: 'medium',
+                    speed: 'standard',
+                    sessionId: 's-read-err-no-model',
+                    modelSettings: disabledModelSettings,
+                    systemPromptEnhancement: enhancement,
+                }),
+            ).rejects.toMatchObject({
+                name: 'AgentPreflightError',
+                code: 'system_prompt_enhancement_failed',
+            })
+            bridge.SessionGetSystemPrompt = originalGet
+        })
+
+        it('does not call SessionSetSystemPrompt when buildController.signal aborts right after synthesizeEnhancedSystemPrompt resolves', async () => {
+            const bridge = new FakeNativeBridge()
+            const setSystemPromptSpy = vi.spyOn(bridge, 'SessionSetSystemPrompt')
+            const validBuiltPrompt =
+                'Unique synthesized instructions preserving read and title tool usage in English.'
+            let streamCalls = 0
+            let service!: CLIProxyAPIAgentService
+
+            const raceClient = {
+                stream: (input: ProtocolStreamInput) => {
+                    streamCalls += 1
+                    const seed: AssistantEntry = {
+                        ...input.seed,
+                        id: 'builder-post-synth-abort',
+                        content: [{ type: 'text', text: validBuiltPrompt }],
+                        status: 'done',
+                        stopReason: 'stop',
+                    }
+                    let yielded = false
+                    return {
+                        [Symbol.asyncIterator]() {
+                            return {
+                                async next() {
+                                    if (!yielded) {
+                                        yielded = true
+                                        return {
+                                            value: { type: 'done', message: seed } as AssistantStreamEvent,
+                                            done: false,
+                                        }
+                                    }
+                                    return { value: undefined, done: true }
+                                },
+                                async return() {
+                                    // Schedule abort on the microtask between collectSynthesisStreamText
+                                    // finishing and synthesizeEnhancedSystemPrompt resolving its caller.
+                                    Promise.resolve().then(() => {
+                                        Promise.resolve().then(() => {
+                                            service.abort('r-post-synth-abort')
+                                        })
+                                    })
+                                    return { value: undefined, done: true }
+                                },
+                            }
+                        },
+                    }
+                },
+                cancel: async () => {},
+                dispose: () => {},
+            }
+
+            service = new CLIProxyAPIAgentService({
+                bridge,
+                createClient: () => raceClient as unknown as CPAClient,
+                createTools: async () => [makeTool('read')],
+                loadResources: async () => ({
+                    contextFiles: [],
+                    skills: [],
+                    prompts: [],
+                    systemPrompt: 'RAW',
+                    mutableCoreSystemPrompt: 'Base core instructions.',
+                    verbatimContextPrompt: '',
+                    diagnostics: [],
+                }),
+            })
+
+            const prepared = await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'sk-test',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                sessionId: 's-post-synth-abort',
+                systemPromptEnhancement: {
+                    enabled: true,
+                    multilingualEnabled: false,
+                    allowedLanguages: ['en'],
+                    modelId: '',
+                },
+            })
+
+            await expect(
+                collect(
+                    service.streamChat({
+                        prepared,
+                        sessionId: 's-post-synth-abort',
+                        runId: 'r-post-synth-abort',
+                        entries: [],
+                        userEntry: userEntry('u-post-synth', 'Hello', 's-post-synth-abort'),
+                    }),
+                ),
+            ).rejects.toMatchObject({ code: 'aborted' })
+
+            // Allow the observed background buildPromise continuation to run
+            await new Promise((r) => setTimeout(r, 20))
+
+            expect(streamCalls).toBe(1)
+            expect(setSystemPromptSpy).not.toHaveBeenCalled()
+            expect(await bridge.SessionGetSystemPrompt('s-post-synth-abort')).toBeNull()
+        })
+
+        it('redacts apiKey when concurrent prepare() with disabled builder models awaits a failing in-flight sub-agent synthesis', async () => {
+            const secretApiKey = 'sk-prepare-concurrent-secret-98765'
+            const bridge = new FakeNativeBridge()
+            let markBuilderStarted!: () => void
+            const builderStartedPromise = new Promise<void>((resolve) => {
+                markBuilderStarted = resolve
+            })
+            let releaseSynthesisFailure!: () => void
+            const synthesisFailureGate = new Promise<void>((resolve) => {
+                releaseSynthesisFailure = resolve
+            })
+
+            let streamCallCount = 0
+            const failingClient = {
+                stream: () => {
+                    streamCallCount += 1
+                    const currentCall = streamCallCount
+                    if (currentCall === 1) {
+                        markBuilderStarted()
+                    }
+                    return {
+                        [Symbol.asyncIterator]() {
+                            return {
+                                async next() {
+                                    if (currentCall === 1) {
+                                        await synthesisFailureGate
+                                    }
+                                    throw new Error(
+                                        `Upstream auth failed for Bearer ${secretApiKey} with key=${secretApiKey}`,
+                                    )
+                                },
+                                async return() {
+                                    return { value: undefined, done: true }
+                                },
+                            }
+                        },
+                    }
+                },
+                cancel: async () => {},
+                dispose: () => {},
+            }
+
+            const service = new CLIProxyAPIAgentService({
+                bridge,
+                createClient: () => failingClient as unknown as CPAClient,
+                createTools: async () => [makeTool('read')],
+                loadResources: async () => ({
+                    contextFiles: [],
+                    skills: [],
+                    prompts: [],
+                    systemPrompt: 'RAW',
+                    mutableCoreSystemPrompt: 'Base core instructions.',
+                    verbatimContextPrompt: '',
+                    diagnostics: [],
+                }),
+            })
+            service.subAgents.hydrate([
+                {
+                    id: 'sub-prepare-redact',
+                    sessionId: 'child-prepare-redact',
+                    parentSessionId: 'parent-prepare-redact',
+                    name: 'Worker',
+                    color: '#3dd68c',
+                    icon: 'atom',
+                    status: 'aborted',
+                    modelId: modelBase.id,
+                    createdAt: 1,
+                    updatedAt: 2,
+                },
+            ])
+
+            await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: secretApiKey,
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                sessionId: 'parent-prepare-redact',
+                systemPromptEnhancement: {
+                    enabled: true,
+                    multilingualEnabled: false,
+                    allowedLanguages: ['en'],
+                    modelId: '',
+                },
+            })
+
+            const subAgentPromise = service.subAgents.resumeSubAgent('sub-prepare-redact', {
+                entries: [userEntry('u-pr-1', 'Continue', 'child-prepare-redact')],
+            })
+            await builderStartedPromise
+
+            const inFlightEntry = (service as any).inFlightPromptBuilds.get('parent-prepare-redact')
+            expect(inFlightEntry).toBeDefined()
+            expect(inFlightEntry.activeWaiters.size).toBe(1)
+
+            const concurrentPreparePromise = service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: secretApiKey,
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                sessionId: 'parent-prepare-redact',
+                modelSettings: {
+                    enableAll: false,
+                    models: {
+                        [modelBase.id]: { enabled: false },
+                    },
+                    modelOrder: [],
+                },
+                systemPromptEnhancement: {
+                    enabled: true,
+                    multilingualEnabled: false,
+                    allowedLanguages: ['en'],
+                    modelId: '',
+                },
+            })
+
+            expect(inFlightEntry.activeWaiters.size).toBe(2)
+            releaseSynthesisFailure()
+
+            let caught: unknown
+            try {
+                await concurrentPreparePromise
+            } catch (err) {
+                caught = err
+            }
+
+            expect(caught).toBeInstanceOf(AgentPreflightError)
+            expect(caught).toMatchObject({
+                name: 'AgentPreflightError',
+                code: 'system_prompt_enhancement_failed',
+                i18nKey: 'agent.preflight.system_prompt_enhancement_failed',
+            })
+            expect((caught as Error).message).not.toContain(secretApiKey)
+            expect((caught as Error).message).toContain('[REDACTED]')
+
+            const subAgentResult = await subAgentPromise
+            expect(subAgentResult.isError).toBe(true)
+        }, 15_000)
+
+        it('preserves system_prompt_enhancement_no_model and system_prompt_enhancement_failed codes in compact() result and error event', async () => {
+            const bridge = new FakeNativeBridge()
+            const failingClient = new FakeCPAClient()
+            failingClient.queue(
+                { kind: 'throw', error: new Error('builder fail 1') },
+                { kind: 'throw', error: new Error('builder fail 2') },
+                { kind: 'throw', error: new Error('builder fail 3') },
+            )
+            const service = new CLIProxyAPIAgentService({
+                bridge,
+                createClient: () => failingClient as unknown as CPAClient,
+                createTools: async () => [makeTool('read')],
+                loadResources: async () => ({
+                    contextFiles: [],
+                    skills: [],
+                    prompts: [],
+                    systemPrompt: 'RAW',
+                    mutableCoreSystemPrompt: 'RAW_CORE',
+                    verbatimContextPrompt: '',
+                    diagnostics: [],
+                }),
+            })
+
+            // 1. system_prompt_enhancement_no_model during compact
+            const preparedNoModel = await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'sk-test',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                sessionId: 's-compact-no-model',
+                modelSettings: {
+                    enableAll: false,
+                    models: { [modelBase.id]: { enabled: false } },
+                    modelOrder: [],
+                },
+            })
+            // Simulate enhancement enabled when compact runs without a persisted prompt or builder model
+            const noModelCompactRes = await service.compact({
+                prepared: {
+                    ...preparedNoModel,
+                    systemPromptEnhancement: {
+                        enabled: true,
+                        multilingualEnabled: false,
+                        allowedLanguages: ['en'],
+                        modelId: '',
+                    },
+                },
+                sessionId: 's-compact-no-model',
+                runId: 'run-compact-no-model',
+                entries: [userEntry('u1', 'hi', 's-compact-no-model')],
+            })
+            expect(noModelCompactRes.ok).toBe(false)
+            if (!noModelCompactRes.ok) {
+                expect(noModelCompactRes.code).toBe('system_prompt_enhancement_no_model')
+                expect(noModelCompactRes.events?.find((e) => e.type === 'error')).toMatchObject({
+                    type: 'error',
+                    preflightCode: 'system_prompt_enhancement_no_model',
+                })
+            }
+
+            // 2. system_prompt_enhancement_failed during compact
+            const preparedFail = await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'sk-test',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                sessionId: 's-compact-enh-fail',
+                systemPromptEnhancement: {
+                    enabled: true,
+                    multilingualEnabled: false,
+                    allowedLanguages: ['en'],
+                    modelId: '',
+                },
+            })
+            const failCompactRes = await service.compact({
+                prepared: preparedFail,
+                sessionId: 's-compact-enh-fail',
+                runId: 'run-compact-enh-fail',
+                entries: [userEntry('u2', 'hi', 's-compact-enh-fail')],
+            })
+            expect(failCompactRes.ok).toBe(false)
+            if (!failCompactRes.ok) {
+                expect(failCompactRes.code).toBe('system_prompt_enhancement_failed')
+                expect(failCompactRes.events?.find((e) => e.type === 'error')).toMatchObject({
+                    type: 'error',
+                    preflightCode: 'system_prompt_enhancement_failed',
+                })
+            }
         })
     })
 })

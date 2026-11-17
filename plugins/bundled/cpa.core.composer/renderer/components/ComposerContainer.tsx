@@ -56,8 +56,10 @@ export function ComposerContainer() {
         (payload: ComposerSendPayload): Promise<void> =>
             new Promise<void>((resolve, reject) => {
                 let accepted = false
+                let settled = false
+                let rejectedError: { value: unknown } | null = null
                 const acceptSession = (sessionId: string): void => {
-                    if (accepted) return
+                    if (accepted || rejectedError) return
                     accepted = true
                     try {
                         const navigation =
@@ -69,9 +71,29 @@ export function ComposerContainer() {
                                       } as any)
                                     : services?.navigation?.navigate?.(`/chat/${sessionId}`)
                                 : undefined
-                        void Promise.resolve(navigation).then(resolve, reject)
+                        void Promise.resolve(navigation)
+                            .then(() => Promise.resolve())
+                            .then(
+                                () => {
+                                    if (settled) return
+                                    settled = true
+                                    if (rejectedError) {
+                                        reject(rejectedError.value)
+                                    } else {
+                                        resolve()
+                                    }
+                                },
+                                (err) => {
+                                    if (settled) return
+                                    settled = true
+                                    reject(err)
+                                },
+                            )
                     } catch (error) {
-                        reject(error)
+                        if (!settled) {
+                            settled = true
+                            reject(error)
+                        }
                     }
                 }
 
@@ -99,7 +121,8 @@ export function ComposerContainer() {
                         (sessionId) => {
                             if (sessionId) {
                                 acceptSession(sessionId)
-                            } else if (!accepted) {
+                            } else if (!accepted && !settled) {
+                                settled = true
                                 reject(
                                     new Error(
                                         t('composer.sendFailed', {
@@ -110,7 +133,11 @@ export function ComposerContainer() {
                             }
                         },
                         (error: unknown) => {
-                            if (!accepted) reject(error)
+                            rejectedError = { value: error }
+                            if (!accepted && !settled) {
+                                settled = true
+                                reject(error)
+                            }
                         },
                     )
             }),

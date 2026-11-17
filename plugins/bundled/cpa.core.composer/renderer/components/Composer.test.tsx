@@ -12,6 +12,8 @@ import i18n from '@/i18n'
 import { HostServicesProvider, setDefaultHostServices, WorkspaceVisibilityProvider } from '@cpa/plugin-ui'
 import type { AppSettings, ModelCatalogEntry, Project, SessionItem } from '@cpa/plugin-api'
 import { rendererPluginRuntime } from '@/plugins/platform/RendererPluginRuntimeHost'
+import { createHostServices } from '@/application/services/createHostServices'
+import { useUiStore } from '@/stores/uiStore'
 import manifest from '../../manifest.json'
 import { composerRendererEntry } from '../index.js'
 import { Composer, MAX_IMAGE_INPUT_BYTES, type ComposerSendPayload } from './Composer.js'
@@ -1434,6 +1436,58 @@ describe('Composer $ skill picker', () => {
 })
 
 describe('Composer attachments', () => {
+
+    it('hydrates pending recovered attachments after switching back and consumes them once', async () => {
+        const restored = [{ id: 'recovery', name: 'recovered.png', mimeType: 'image/png', data: 'YWJj', width: 10, height: 20 }]
+        const onSend = vi.fn()
+        const pending: Record<string, any[]> = { 'session:sess-a': restored }
+        mockServices.ui.consumeComposerRestoredAttachments = vi.fn((key: string) => { const value = pending[key] ?? []; delete pending[key]; return value })
+        cachedUiSnapshot = { ...cachedUiSnapshot, composerRestoredAttachments: pending }
+        const view = render(<Composer sessionId="sess-b" onSend={onSend} />)
+        expect(screen.queryByRole('img', { name: 'recovered.png' })).not.toBeInTheDocument()
+        view.rerender(<Composer sessionId="sess-a" onSend={onSend} />)
+        await waitFor(() => expect(screen.getByRole('img', { name: 'recovered.png' })).toBeInTheDocument())
+        expect(pending['session:sess-a']).toBeUndefined()
+        await userEvent.setup().click(screen.getByRole('button', { name: 'Send' }))
+        expect(onSend.mock.calls[0]?.[0].images).toEqual([expect.objectContaining({ data: 'YWJj', name: 'recovered.png' })])
+    })
+
+    it('isolates attachments per session and restores failed attachments onto originating session without cross-session leakage', async () => {
+        const restoredA = [{ id: 'rec-a', name: 'recovered-a.png', mimeType: 'image/png', data: 'QUFB', width: 10, height: 20 }]
+        const onSend = vi.fn()
+        const pending: Record<string, any[]> = { 'session:sess-a': restoredA }
+        mockServices.ui.consumeComposerRestoredAttachments = vi.fn((key: string) => {
+            const value = pending[key] ?? []
+            delete pending[key]
+            return value
+        })
+        cachedUiSnapshot = { ...cachedUiSnapshot, composerRestoredAttachments: pending }
+
+        const view = render(<Composer sessionId="sess-b" onSend={onSend} />)
+        const fileB = jpegFile('session-b.jpg')
+        const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement
+        await act(async () => {
+            fireEvent.change(fileInput, { target: { files: [fileB] } })
+        })
+        await waitFor(() => expect(screen.getByRole('img', { name: 'session-b.jpg' })).toBeInTheDocument())
+
+        // Switch back to sess-a: must NOT show sess-b attachment, and must restore recovered-a.png
+        view.rerender(<Composer sessionId="sess-a" onSend={onSend} />)
+        await waitFor(() => expect(screen.getByRole('img', { name: 'recovered-a.png' })).toBeInTheDocument())
+        expect(screen.queryByRole('img', { name: 'session-b.jpg' })).not.toBeInTheDocument()
+
+        // Send on sess-a sends ONLY recovered-a.png
+        await userEvent.setup().click(screen.getByRole('button', { name: 'Send' }))
+        expect(onSend).toHaveBeenCalledTimes(1)
+        expect(onSend.mock.calls[0]?.[0].images).toEqual([
+            expect.objectContaining({ name: 'recovered-a.png', data: 'QUFB' }),
+        ])
+
+        // Switch back to sess-b: sess-b still retains its own attachment
+        view.rerender(<Composer sessionId="sess-b" onSend={onSend} />)
+        await waitFor(() => expect(screen.getByRole('img', { name: 'session-b.jpg' })).toBeInTheDocument())
+    })
+
     it.each(['files', 'items'] as const)('pastes clipboard images via %s and sends them once', async (source) => {
         const onSend = vi.fn()
         render(<Composer onSend={onSend} />)
@@ -2374,5 +2428,332 @@ describe('Composer sendShortcut setting', () => {
         expect(onSend).toHaveBeenCalledWith(
             expect.objectContaining({ text: 'Draft for enter' }),
         )
+    })
+})
+
+describe('Composer cross-session draft isolation and unmount attachment cleanup', () => {
+    it('does not leak session A background draft restoration into newly mounted session B Composer', async () => {
+        useUiStore.setState({
+            composerDraft: '',
+            composerDrafts: {},
+            composerDraftReferences: {},
+            composerDraftAttachments: {},
+            composerRestoredAttachments: {},
+        })
+        const hostServices = createHostServices()
+        hostServices.settings = mockServices.settings
+        hostServices.models = mockServices.models
+        hostServices.sessions = mockServices.sessions
+        hostServices.projects = mockServices.projects
+        hostServices.chatMessages = mockServices.chatMessages
+        hostServices.fileSystem = mockServices.fileSystem
+        hostServices.skillUsage = mockServices.skillUsage
+
+        // Simulate session A background draft restore as performed by useAgentStream
+        useUiStore.getState().setComposerDraftForSession('session-a', 'Session A failed prompt', [], {
+            preserveLegacyDraft: true,
+        })
+
+        render(
+            <HostServicesProvider services={hostServices}>
+                <Composer sessionId="session-b" onSend={() => undefined} />
+            </HostServicesProvider>,
+        )
+
+        expect(useUiStore.getState().composerDraft).toBe('')
+        expectComposerValue('')
+    })
+
+    it('clears sendDraftKey text, references, and attachments in uiStore when Home Composer unmounts before onSend resolves', async () => {
+        useUiStore.setState({
+            composerDraft: '',
+            composerDrafts: {},
+            composerDraftReferences: {},
+            composerDraftAttachments: {},
+            composerRestoredAttachments: {},
+        })
+        const hostServices = createHostServices()
+        hostServices.settings = mockServices.settings
+        hostServices.models = mockServices.models
+        hostServices.sessions = mockServices.sessions
+        hostServices.projects = mockServices.projects
+        hostServices.chatMessages = mockServices.chatMessages
+        hostServices.fileSystem = mockServices.fileSystem
+        hostServices.skillUsage = mockServices.skillUsage
+
+        let resolveSend!: () => void
+        const deferredSend = new Promise<void>((resolve) => {
+            resolveSend = resolve
+        })
+        const onSend = vi.fn(() => deferredSend)
+
+        const { unmount } = render(
+            <HostServicesProvider services={hostServices}>
+                <Composer sessionId={null} onSend={onSend} />
+            </HostServicesProvider>,
+        )
+
+        const file = jpegFile('home-nav.jpg')
+        const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement
+        await act(async () => {
+            fireEvent.change(fileInput, { target: { files: [file] } })
+        })
+        await waitFor(() => {
+            expect(screen.getByRole('img', { name: 'home-nav.jpg' })).toBeInTheDocument()
+        })
+
+        const user = userEvent.setup()
+        await user.type(screen.getByTestId('composer-input'), 'Home prompt')
+        expect(useUiStore.getState().composerDrafts['new-chat']).toBe('Home prompt')
+        expect(useUiStore.getState().composerDraftAttachments['new-chat']).toHaveLength(1)
+
+        await user.click(screen.getByRole('button', { name: 'Send' }))
+        expect(onSend).toHaveBeenCalledTimes(1)
+
+        // Simulate Home -> Chat navigation unmounting Home Composer before onSend resolves
+        unmount()
+
+        await act(async () => {
+            resolveSend()
+            await deferredSend
+        })
+
+        expect(useUiStore.getState().composerDrafts['new-chat']).toBe('')
+        expect(useUiStore.getState().composerDraftReferences['new-chat']).toEqual([])
+        expect(useUiStore.getState().composerDraftAttachments['new-chat']).toBeUndefined()
+    })
+
+    it('does not recreate deleted session attachment draft when async web image processing resolves after session deletion and switch', async () => {
+        useUiStore.setState({
+            composerDraft: '',
+            composerDrafts: {},
+            composerDraftReferences: {},
+            composerDraftAttachments: {},
+            composerRestoredAttachments: {},
+        })
+        sessionsState = [
+            { id: 'sess-del-web', title: 'To Delete', pinned: false, createdAt: 1, updatedAt: 1 },
+            { id: 'sess-keep-web', title: 'Keep', pinned: false, createdAt: 2, updatedAt: 2 },
+        ]
+        const hostServices = createHostServices()
+        hostServices.settings = mockServices.settings
+        hostServices.models = mockServices.models
+        hostServices.sessions = mockServices.sessions
+        hostServices.projects = mockServices.projects
+        hostServices.chatMessages = mockServices.chatMessages
+        hostServices.fileSystem = mockServices.fileSystem
+        hostServices.skillUsage = mockServices.skillUsage
+
+        let markStarted!: () => void
+        const started = new Promise<void>((resolve) => {
+            markStarted = resolve
+        })
+        let resolveProcess!: (value: any) => void
+        const imageProcessor: ImageProcessor = {
+            process: vi.fn(
+                () =>
+                    new Promise((resolve) => {
+                        resolveProcess = resolve
+                        markStarted()
+                    }),
+            ),
+        }
+
+        const { rerender } = render(
+            <HostServicesProvider services={hostServices}>
+                <Composer
+                    sessionId="sess-del-web"
+                    onSend={() => undefined}
+                    imageProcessor={imageProcessor}
+                />
+            </HostServicesProvider>,
+        )
+
+        const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement
+        act(() => {
+            fireEvent.change(fileInput, { target: { files: [jpegFile('late-web.jpg')] } })
+        })
+
+        await started
+
+        // Delete session sess-del-web and switch Composer to sess-keep-web while image processing is pending
+        act(() => {
+            useUiStore.getState().clearSessionComposerDraft('sess-del-web')
+            sessionsState = sessionsState.filter((s) => s.id !== 'sess-del-web')
+            notifySessions()
+            rerender(
+                <HostServicesProvider services={hostServices}>
+                    <Composer
+                        sessionId="sess-keep-web"
+                        onSend={() => undefined}
+                        imageProcessor={imageProcessor}
+                    />
+                </HostServicesProvider>,
+            )
+        })
+
+        await act(async () => {
+            resolveProcess({
+                ok: true,
+                mimeType: 'image/jpeg',
+                data: 'LATEBASE64',
+                width: 100,
+                height: 80,
+            })
+            await new Promise((resolve) => setTimeout(resolve, 10))
+        })
+
+        expect(useUiStore.getState().composerDraftAttachments['session:sess-del-web']).toBeUndefined()
+    })
+
+    it('does not recreate deleted session attachment draft when async native file processing resolves after session deletion and switch', async () => {
+        useUiStore.setState({
+            composerDraft: '',
+            composerDrafts: {},
+            composerDraftReferences: {},
+            composerDraftAttachments: {},
+            composerRestoredAttachments: {},
+        })
+        sessionsState = [
+            { id: 'sess-del-native', title: 'To Delete', pinned: false, createdAt: 1, updatedAt: 1 },
+            { id: 'sess-keep-native', title: 'Keep', pinned: false, createdAt: 2, updatedAt: 2 },
+        ]
+        let markReadStarted!: () => void
+        const readStarted = new Promise<void>((resolve) => {
+            markReadStarted = resolve
+        })
+        let resolveReadFile!: (data: { dataBase64: string }) => void
+        const hostServices = createHostServices()
+        hostServices.settings = mockServices.settings
+        hostServices.models = mockServices.models
+        hostServices.sessions = mockServices.sessions
+        hostServices.projects = mockServices.projects
+        hostServices.chatMessages = mockServices.chatMessages
+        hostServices.skillUsage = mockServices.skillUsage
+        hostServices.fileSystem = {
+            selectFilesAndFolders: vi.fn(async () => [
+                { name: 'late-native.jpg', path: '/tmp/late-native.jpg', isDirectory: false },
+            ]),
+            readFile: vi.fn(
+                () =>
+                    new Promise((resolve) => {
+                        resolveReadFile = resolve
+                        markReadStarted()
+                    }),
+            ),
+        }
+
+        const user = userEvent.setup()
+        const { rerender } = render(
+            <HostServicesProvider services={hostServices}>
+                <Composer sessionId="sess-del-native" onSend={() => undefined} />
+            </HostServicesProvider>,
+        )
+
+        await user.click(screen.getByRole('button', { name: /Attach/i }))
+        const filesItem = screen.getByText('Files & folders').closest('button')!
+        await user.click(filesItem)
+
+        await readStarted
+
+        act(() => {
+            useUiStore.getState().clearSessionComposerDraft('sess-del-native')
+            sessionsState = sessionsState.filter((s) => s.id !== 'sess-del-native')
+            notifySessions()
+            rerender(
+                <HostServicesProvider services={hostServices}>
+                    <Composer sessionId="sess-keep-native" onSend={() => undefined} />
+                </HostServicesProvider>,
+            )
+        })
+
+        // Minimal valid JPEG base64 header
+        const jpegBase64 = btoa(String.fromCharCode(0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01))
+        await act(async () => {
+            resolveReadFile({ dataBase64: jpegBase64 })
+            await new Promise((resolve) => setTimeout(resolve, 10))
+        })
+
+        expect(useUiStore.getState().composerDraftAttachments['session:sess-del-native']).toBeUndefined()
+    })
+
+    it('still writes processed attachment to originating session when switching to another session without deleting it', async () => {
+        useUiStore.setState({
+            composerDraft: '',
+            composerDrafts: {},
+            composerDraftReferences: {},
+            composerDraftAttachments: {},
+            composerRestoredAttachments: {},
+        })
+        sessionsState = [
+            { id: 'sess-orig', title: 'Orig', pinned: false, createdAt: 1, updatedAt: 1 },
+            { id: 'sess-other', title: 'Other', pinned: false, createdAt: 2, updatedAt: 2 },
+        ]
+        const hostServices = createHostServices()
+        hostServices.settings = mockServices.settings
+        hostServices.models = mockServices.models
+        hostServices.sessions = mockServices.sessions
+        hostServices.projects = mockServices.projects
+        hostServices.chatMessages = mockServices.chatMessages
+        hostServices.fileSystem = mockServices.fileSystem
+        hostServices.skillUsage = mockServices.skillUsage
+
+        let markStarted!: () => void
+        const started = new Promise<void>((resolve) => {
+            markStarted = resolve
+        })
+        let resolveProcess!: (value: any) => void
+        const imageProcessor: ImageProcessor = {
+            process: vi.fn(
+                () =>
+                    new Promise((resolve) => {
+                        resolveProcess = resolve
+                        markStarted()
+                    }),
+            ),
+        }
+
+        const { rerender } = render(
+            <HostServicesProvider services={hostServices}>
+                <Composer
+                    sessionId="sess-orig"
+                    onSend={() => undefined}
+                    imageProcessor={imageProcessor}
+                />
+            </HostServicesProvider>,
+        )
+
+        const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement
+        act(() => {
+            fireEvent.change(fileInput, { target: { files: [jpegFile('orig.jpg')] } })
+        })
+
+        await started
+
+        // Switch to sess-other WITHOUT deleting sess-orig
+        rerender(
+            <HostServicesProvider services={hostServices}>
+                <Composer
+                    sessionId="sess-other"
+                    onSend={() => undefined}
+                    imageProcessor={imageProcessor}
+                />
+            </HostServicesProvider>,
+        )
+
+        await act(async () => {
+            resolveProcess({
+                ok: true,
+                mimeType: 'image/jpeg',
+                data: 'ORIGBASE64',
+                width: 100,
+                height: 80,
+            })
+            await new Promise((resolve) => setTimeout(resolve, 10))
+        })
+
+        expect(useUiStore.getState().composerDraftAttachments['session:sess-orig']).toHaveLength(1)
+        expect(useUiStore.getState().composerDraftAttachments['session:sess-orig']?.[0]?.name).toBe('orig.jpg')
+        expect(useUiStore.getState().composerDraftAttachments['session:sess-other']).toBeUndefined()
     })
 })

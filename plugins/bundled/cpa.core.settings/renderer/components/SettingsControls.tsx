@@ -18,12 +18,14 @@ export function SettingsRow({
     description,
     control,
     last = false,
+    inheritTypography = false,
 }: {
     id?: string
     title: string
     description?: ReactNode
     control: ReactNode
     last?: boolean
+    inheritTypography?: boolean
 }) {
     return (
         <div
@@ -35,11 +37,23 @@ export function SettingsRow({
             )}
         >
             <div className="min-w-0 flex-1">
-                <div className="text-[13px] font-medium text-[var(--text-primary)]">
+                <div
+                    className={
+                        inheritTypography
+                            ? 'font-[inherit] text-[length:calc(var(--ui-font-size)-1px)] text-[var(--text-primary)]'
+                            : 'text-[13px] font-medium text-[var(--text-primary)]'
+                    }
+                >
                     {title}
                 </div>
                 {description ? (
-                    <div className="mt-0.5 text-[12px] leading-relaxed text-[var(--text-muted)]">
+                    <div
+                        className={
+                            inheritTypography
+                                ? 'mt-0.5 font-[inherit] text-[length:calc(var(--ui-font-size)-2px)] leading-relaxed text-[var(--text-muted)]'
+                                : 'mt-0.5 text-[12px] leading-relaxed text-[var(--text-muted)]'
+                        }
+                    >
                         {description}
                     </div>
                 ) : null}

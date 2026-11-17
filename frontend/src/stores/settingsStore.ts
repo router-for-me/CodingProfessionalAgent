@@ -9,7 +9,9 @@ import {
   DEFAULT_SUBAGENT_SETTINGS,
   DEFAULT_SKILLS_SETTINGS,
   DEFAULT_EDITOR_SETTINGS,
+  DEFAULT_SYSTEM_PROMPT_ENHANCEMENT_SETTINGS,
   normalizeCompactionThresholdPercent,
+  normalizeSystemPromptEnhancementSettings,
   type AppSettings,
   type CliProxyApiSettings,
   type EditorSettings,
@@ -22,6 +24,7 @@ import {
   type SkillsSettings,
   type Speed,
   type SubagentsSettings,
+  type SystemPromptEnhancementSettings,
   type TerminalPosition,
   type ThemeMode,
   type UserProfileSettings,
@@ -80,6 +83,7 @@ interface SettingsState {
   setSubagentSettings: (partial: Partial<SubagentsSettings>) => void
   setSkillsSettings: (partial: Partial<SkillsSettings>) => void
   setEditorSettings: (partial: Partial<EditorSettings>) => void
+  setSystemPromptEnhancement: (partial: Partial<SystemPromptEnhancementSettings>) => void
   setAppearance: (partial: Partial<AppSettings>) => void
   hydrate: (partial: Partial<AppSettings>) => void
 }
@@ -442,6 +446,17 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       },
     })),
 
+  setSystemPromptEnhancement: (partial) =>
+    set((state) => ({
+      settings: {
+        ...state.settings,
+        systemPromptEnhancement: normalizeSystemPromptEnhancementSettings({
+          ...(state.settings.systemPromptEnhancement ?? DEFAULT_SYSTEM_PROMPT_ENHANCEMENT_SETTINGS),
+          ...partial,
+        }),
+      },
+    })),
+
   setAppearance: (partial) =>
     set((state) => ({
       settings: { ...state.settings, ...partial },
@@ -591,6 +606,9 @@ export const useSettingsStore = create<SettingsState>((set) => ({
           ...partial.editor,
         }
       }
+      settings.systemPromptEnhancement = normalizeSystemPromptEnhancementSettings(
+        partial.systemPromptEnhancement ?? state.settings.systemPromptEnhancement,
+      )
       return { settings }
     })
   },

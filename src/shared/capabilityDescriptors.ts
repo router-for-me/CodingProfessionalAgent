@@ -77,6 +77,8 @@ export const RENDERER_CAPABILITY_DESCRIPTORS: readonly RendererCapabilityDescrip
     // Sessions
     { name: 'SessionGet', method: 'session:get', capability: 'sessions.read' },
     { name: 'SessionSet', method: 'session:set', capability: 'sessions.write' },
+    { name: 'SessionGetSystemPrompt', method: 'session:getSystemPrompt', capability: 'sessions.read' },
+    { name: 'SessionSetSystemPrompt', method: 'session:setSystemPrompt', capability: 'sessions.write' },
     { name: 'SessionDelete', method: 'session:delete', capability: 'sessions.write' },
     { name: 'SessionList', method: 'session:list', capability: 'sessions.read' },
     { name: 'SessionListSessions', method: 'session:listSessions', capability: 'sessions.read' },

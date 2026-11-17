@@ -971,6 +971,31 @@ describe('ComposerContainer Integration', () => {
         release1()
     })
 
+    it('keeps draft when send rejects before onSessionAccepted microtask settles', async () => {
+        const s1 = 'sess-early-reject'
+        sessionsState = [
+            { id: s1, title: 'Session Reject', pinned: false, createdAt: 1, updatedAt: 1 },
+        ]
+        setPathname(`/chat/${s1}`)
+        currentSessionIdState = s1
+        composerDraftsState[`session:${s1}`] = 'Keep draft on early reject'
+
+        mockAgent.send = vi.fn(async (payload: ChatSendPayload) => {
+            payload.onSessionAccepted?.(s1)
+            throw new Error('Early enhancement failure')
+        })
+
+        render(<ComposerContainer />)
+
+        const sendBtn = screen.getByRole('button', { name: 'Send' })
+        await userEvent.click(sendBtn)
+
+        await waitFor(() => {
+            expect(mockAgent.send).toHaveBeenCalledTimes(1)
+        })
+        expect(composerDraftsState[`session:${s1}`]).toBe('Keep draft on early reject')
+    })
+
     it('returns null when route is not home or chat', () => {
         setPathname('/scheduled')
         const { container } = render(<ComposerContainer />)

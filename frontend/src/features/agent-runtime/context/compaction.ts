@@ -32,6 +32,9 @@ import {
 export const SUMMARIZATION_SYSTEM_PROMPT =
     'You are a context summarization assistant. Do not continue the conversation. Only output the requested structured summary.'
 
+const CONTEXT_CHECKPOINT_USER_PROMPT_PREFIX =
+    '[Context Checkpoint Task] Do not continue the conversation or invoke tools. Only output the requested structured summary headings below.\n\n'
+
 export { DEFAULT_COMPACTION_SETTINGS }
 
 /** Tool result serialization budget measured in Unicode code points. */
@@ -289,9 +292,12 @@ export interface CompactConversationOptions {
      * When provided and all preconditions hold, compaction reuses the session's
      * prompt cache instead of flattening history into a cold request.
      */
+    /** Optional cached context for prompt cache reuse. */
     cachedContext?: CachedCompactionContext | null
     /** Compaction trigger reason ('auto' | 'manual' | 'overflow'). Overflow always uses isolated path. */
     trigger?: 'auto' | 'manual' | 'overflow'
+    /** Locked session enhanced system prompt to preserve across isolated summarization. */
+    sessionSystemPrompt?: string
     now?: () => number
     generateId?: () => string
     /** Injectable sleep for summary-level transient retries (Abort-interruptible). */
@@ -1166,10 +1172,14 @@ export const MIN_DYNAMIC_SUMMARY_OUTPUT_TOKENS = 1_024
 export const DEFAULT_PROMPT_CACHE_TTL_MS = 5 * 60 * 1000
 const SUMMARY_INPUT_SAFETY_MARGIN_TOKENS = 512
 
-function estimateIsolatedPromptInputTokens(promptText: string): number {
+function estimateIsolatedPromptInputTokens(
+    promptText: string,
+    systemPrompt: string = SUMMARIZATION_SYSTEM_PROMPT,
+    userPromptPrefixLength = 0,
+): number {
     return (
         Math.ceil(
-            (SUMMARIZATION_SYSTEM_PROMPT.length + promptText.length) / 4,
+            (systemPrompt.length + userPromptPrefixLength + promptText.length) / 4,
         ) + SUMMARY_INPUT_SAFETY_MARGIN_TOKENS
     )
 }
@@ -1221,6 +1231,8 @@ function trimSectionBody(
 function fitIsolatedPromptToContextWindow(
     promptText: string,
     model: ModelCatalogEntry,
+    systemPrompt: string = SUMMARIZATION_SYSTEM_PROMPT,
+    userPromptPrefixLength = 0,
 ): string {
     if (
         typeof model.contextWindow !== 'number' ||
@@ -1229,6 +1241,7 @@ function fitIsolatedPromptToContextWindow(
     ) {
         return promptText
     }
+    const overheadChars = systemPrompt.length + userPromptPrefixLength
     const contextWindow = Math.floor(model.contextWindow)
     const minOutput = Math.min(
         typeof model.maxTokens === 'number' && model.maxTokens > 0
@@ -1274,7 +1287,7 @@ function fitIsolatedPromptToContextWindow(
                 coreInstructions.length
 
             const totalFixedTokens =
-                Math.ceil((SUMMARIZATION_SYSTEM_PROMPT.length + fixedChars) / 4) +
+                Math.ceil((overheadChars + fixedChars) / 4) +
                 SUMMARY_INPUT_SAFETY_MARGIN_TOKENS
             const remainingForBodyAndOutput = contextWindow - totalFixedTokens
             if (remainingForBodyAndOutput <= 1) {
@@ -1290,7 +1303,7 @@ function fitIsolatedPromptToContextWindow(
             const maxTotalInputTokens = contextWindow - targetOutputReserve
             const maxPromptChars =
                 (maxTotalInputTokens - SUMMARY_INPUT_SAFETY_MARGIN_TOKENS) * 4 -
-                SUMMARIZATION_SYSTEM_PROMPT.length
+                overheadChars
             if (promptText.length <= maxPromptChars) {
                 return promptText
             }
@@ -1359,7 +1372,7 @@ function fitIsolatedPromptToContextWindow(
     }
 
     const fallbackFixedTokens =
-        Math.ceil(SUMMARIZATION_SYSTEM_PROMPT.length / 4) +
+        Math.ceil(overheadChars / 4) +
         SUMMARY_INPUT_SAFETY_MARGIN_TOKENS
     const fallbackRemaining = contextWindow - fallbackFixedTokens
     if (fallbackRemaining <= 1) {
@@ -1372,7 +1385,7 @@ function fitIsolatedPromptToContextWindow(
     const fallbackMaxChars =
         (contextWindow - fallbackOutputReserve - SUMMARY_INPUT_SAFETY_MARGIN_TOKENS) *
             4 -
-        SUMMARIZATION_SYSTEM_PROMPT.length
+        overheadChars
     if (promptText.length <= fallbackMaxChars) {
         return promptText
     }
@@ -1826,6 +1839,17 @@ export function canUseCachedCompaction(
     if (cachedContext.modelId !== options.model.id) {
         return undefined
     }
+    const expectedSessionPrompt =
+        typeof options.sessionSystemPrompt === 'string' &&
+        options.sessionSystemPrompt.trim().length > 0
+            ? options.sessionSystemPrompt
+            : undefined
+    if (
+        expectedSessionPrompt !== undefined &&
+        cachedContext.systemPrompt !== expectedSessionPrompt
+    ) {
+        return undefined
+    }
     const effectiveExpiresAt =
         typeof cachedContext.cacheExpiresAt === 'number' &&
         Number.isFinite(cachedContext.cacheExpiresAt)
@@ -2027,6 +2051,7 @@ async function runIsolatedSummary(params: {
     sleep: SleepFn
     retryDelaysMs: readonly number[]
     label: string
+    sessionSystemPrompt?: string
 }): Promise<AssistantEntry> {
     const {
         client,
@@ -2042,7 +2067,17 @@ async function runIsolatedSummary(params: {
         sleep,
         retryDelaysMs,
         label,
+        sessionSystemPrompt,
     } = params
+
+    const hasSessionSystemPrompt =
+        typeof sessionSystemPrompt === 'string' && sessionSystemPrompt.trim().length > 0
+    const effectiveSystemPrompt = hasSessionSystemPrompt
+        ? sessionSystemPrompt!
+        : SUMMARIZATION_SYSTEM_PROMPT
+    const effectiveUserPrompt = hasSessionSystemPrompt
+        ? `${CONTEXT_CHECKPOINT_USER_PROMPT_PREFIX}${promptText}`
+        : promptText
 
     const maxAttempts = 1 + retryDelaysMs.length
     let lastError: unknown
@@ -2058,7 +2093,7 @@ async function runIsolatedSummary(params: {
             sessionId,
             createdAt: now(),
             kind: 'user',
-            content: [{ type: 'text', text: promptText }],
+            content: [{ type: 'text', text: effectiveUserPrompt }],
         }
         const seed: AssistantEntry = {
             id: generateId(),
@@ -2075,7 +2110,7 @@ async function runIsolatedSummary(params: {
             const gen = client.stream(
                 {
                     model,
-                    systemPrompt: SUMMARIZATION_SYSTEM_PROMPT,
+                    systemPrompt: effectiveSystemPrompt,
                     entries: [userEntry],
                     tools: [],
                     reasoningEffort,
@@ -2328,6 +2363,16 @@ export async function compactConversation(
     }
 
     if (summaryText === undefined) {
+        const hasSessionSystemPrompt =
+            typeof options.sessionSystemPrompt === 'string' &&
+            options.sessionSystemPrompt.trim().length > 0
+        const effectiveIsolatedSystemPrompt = hasSessionSystemPrompt
+            ? options.sessionSystemPrompt!
+            : SUMMARIZATION_SYSTEM_PROMPT
+        const effectiveIsolatedPrefixLength = hasSessionSystemPrompt
+            ? CONTEXT_CHECKPOINT_USER_PROMPT_PREFIX.length
+            : 0
+
         if (preparation.isSplitTurn && preparation.turnPrefixEntries.length > 0) {
             const hasHistoryMessages = preparation.historyEntries.length > 0
             const hasPreviousSummary = Boolean(preparation.previousSummary)
@@ -2347,11 +2392,17 @@ export async function compactConversation(
                         options.customInstructions,
                     ),
                     options.model,
+                    effectiveIsolatedSystemPrompt,
+                    effectiveIsolatedPrefixLength,
                 )
                 const historyBudget = summaryMaxTokens(
                     settings.reserveTokens,
                     options.model,
-                    estimateIsolatedPromptInputTokens(historyPrompt),
+                    estimateIsolatedPromptInputTokens(
+                        historyPrompt,
+                        effectiveIsolatedSystemPrompt,
+                        effectiveIsolatedPrefixLength,
+                    ),
                 )
                 const historyEntry = await runIsolatedSummary({
                     client: options.client,
@@ -2367,6 +2418,7 @@ export async function compactConversation(
                     sleep,
                     retryDelaysMs,
                     label: 'Summarization',
+                    sessionSystemPrompt: options.sessionSystemPrompt,
                 })
                 historyResult = extractAssistantText(historyEntry)
                 validateSummaryStructure(historyResult)
@@ -2379,11 +2431,17 @@ export async function compactConversation(
             const prefixPrompt = fitIsolatedPromptToContextWindow(
                 buildTurnPrefixPromptText(preparation.turnPrefixEntries),
                 options.model,
+                effectiveIsolatedSystemPrompt,
+                effectiveIsolatedPrefixLength,
             )
             const prefixBudget = turnPrefixMaxTokens(
                 settings.reserveTokens,
                 options.model,
-                estimateIsolatedPromptInputTokens(prefixPrompt),
+                estimateIsolatedPromptInputTokens(
+                    prefixPrompt,
+                    effectiveIsolatedSystemPrompt,
+                    effectiveIsolatedPrefixLength,
+                ),
             )
             const prefixEntry = await runIsolatedSummary({
                 client: options.client,
@@ -2399,6 +2457,7 @@ export async function compactConversation(
                 sleep,
                 retryDelaysMs,
                 label: 'Turn prefix summarization',
+                sessionSystemPrompt: options.sessionSystemPrompt,
             })
             const prefixResult = extractAssistantText(prefixEntry)
             validateTurnPrefixStructure(prefixResult)
@@ -2413,11 +2472,17 @@ export async function compactConversation(
                     options.customInstructions,
                 ),
                 options.model,
+                effectiveIsolatedSystemPrompt,
+                effectiveIsolatedPrefixLength,
             )
             const historyBudget = summaryMaxTokens(
                 settings.reserveTokens,
                 options.model,
-                estimateIsolatedPromptInputTokens(historyPrompt),
+                estimateIsolatedPromptInputTokens(
+                    historyPrompt,
+                    effectiveIsolatedSystemPrompt,
+                    effectiveIsolatedPrefixLength,
+                ),
             )
             const historyEntry = await runIsolatedSummary({
                 client: options.client,
@@ -2433,6 +2498,7 @@ export async function compactConversation(
                 sleep,
                 retryDelaysMs,
                 label: 'Summarization',
+                sessionSystemPrompt: options.sessionSystemPrompt,
             })
             summaryText = extractAssistantText(historyEntry)
             validateSummaryStructure(summaryText)

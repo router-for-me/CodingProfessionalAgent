@@ -65,6 +65,7 @@ export interface SessionFilePayload {
   environmentId?: string | null
   worktreeSetup?: WorktreeSessionSetup | null
   pinnedSummaryVisible?: boolean | number | null
+  systemPrompt?: string
   createdAt?: number
   updatedAt?: number
   speed?: string
@@ -233,12 +234,13 @@ export class SessionDatabaseService {
     worktreePath?: string
     environmentId?: string | null
     worktreeSetup?: WorktreeSessionSetup
+    systemPrompt?: string
   } | null> {
     if (!sessionId || typeof sessionId !== 'string') return null
     const db = this.getDb()
 
     const sessionRow = this.getStatement(
-        'SELECT id, schedule_id, model_id, reasoning_effort, speed, work_location, worktree_path, environment_id, worktree_setup_json FROM sessions WHERE id = ?',
+        'SELECT id, schedule_id, model_id, reasoning_effort, speed, work_location, worktree_path, environment_id, worktree_setup_json, system_prompt, pending_system_prompt_from FROM sessions WHERE id = ?',
       ).get(sessionId) as
       | {
           id: string
@@ -250,6 +252,8 @@ export class SessionDatabaseService {
           worktree_path?: string | null
           environment_id?: string | null
           worktree_setup_json?: string | null
+          system_prompt?: string | null
+          pending_system_prompt_from?: string | null
         }
       | undefined
 
@@ -348,6 +352,10 @@ export class SessionDatabaseService {
         ? { environmentId: sessionRow.environment_id }
         : {}),
       ...(worktreeSetup ? { worktreeSetup } : {}),
+      ...(sessionRow.pending_system_prompt_from ? { pendingSystemPromptFrom: sessionRow.pending_system_prompt_from } : {}),
+      ...(typeof sessionRow.system_prompt === 'string' && sessionRow.system_prompt.length > 0
+        ? { systemPrompt: sessionRow.system_prompt }
+        : {}),
     }
   }
 
@@ -379,6 +387,8 @@ export class SessionDatabaseService {
     let environmentId: string | null = null
     let worktreeSetupJson: string | null = null
     let pinnedSummaryVisible: number | null = null
+    let systemPrompt: string | null = null
+    let pendingSystemPromptFrom: string | null = null
 
     if (Array.isArray(data)) {
       entries = data
@@ -476,6 +486,12 @@ export class SessionDatabaseService {
       } else if (typeof record.model === 'string') {
         modelId = record.model
       }
+      if (typeof record.pendingSystemPromptFrom === 'string' && record.pendingSystemPromptFrom) {
+        pendingSystemPromptFrom = record.pendingSystemPromptFrom
+      }
+      if (typeof record.systemPrompt === 'string' && record.systemPrompt.length > 0) {
+        systemPrompt = record.systemPrompt
+      }
     }
 
     if (!firstPromptAt && Array.isArray(entries)) {
@@ -494,7 +510,7 @@ export class SessionDatabaseService {
 
     const upsertSessionStmt = this.getStatement(`
       INSERT INTO sessions (
-        id, project_id, schedule_id, parent_session_id, is_subagent, title, branch, pinned, unread, archived_at, right_sidebar_json, first_prompt_at, model_id, reasoning_effort, speed, work_location, worktree_path, environment_id, worktree_setup_json, pinned_summary_visible, created_at, updated_at
+        id, project_id, schedule_id, parent_session_id, is_subagent, title, branch, pinned, unread, archived_at, right_sidebar_json, first_prompt_at, model_id, reasoning_effort, speed, work_location, worktree_path, environment_id, worktree_setup_json, pinned_summary_visible, system_prompt, pending_system_prompt_from, created_at, updated_at
       ) VALUES (
         @id,
         @project_id,
@@ -516,6 +532,8 @@ export class SessionDatabaseService {
         @environment_id,
         @worktree_setup_json,
         @pinned_summary_visible,
+        @system_prompt,
+        @pending_system_prompt_from,
         COALESCE(@created_at, @now),
         COALESCE(@updated_at, @now)
       ) ON CONFLICT(id) DO UPDATE SET
@@ -539,6 +557,7 @@ export class SessionDatabaseService {
         environment_id = CASE WHEN @environment_id IS NOT NULL THEN @environment_id ELSE sessions.environment_id END,
         worktree_setup_json = CASE WHEN @worktree_setup_json IS NOT NULL THEN @worktree_setup_json ELSE sessions.worktree_setup_json END,
         pinned_summary_visible = CASE WHEN @pinned_summary_visible IS NOT NULL THEN @pinned_summary_visible ELSE sessions.pinned_summary_visible END,
+        system_prompt = COALESCE(NULLIF(sessions.system_prompt, ''), @system_prompt),
         updated_at = COALESCE(@updated_at, @now)
     `)
 
@@ -692,6 +711,33 @@ export class SessionDatabaseService {
         throw new Error('SESSION_HISTORY_CONFLICT: Session history removal was not explicit')
       }
 
+      // Resolve pending fork prompt inheritance before any explicit system_prompt write
+      let effectiveSystemPrompt = systemPrompt
+      let effectivePendingSystemPromptFrom = pendingSystemPromptFrom
+      if (effectiveSystemPrompt !== null) {
+        const pendingRow = this.getStatement(
+          'SELECT system_prompt, pending_system_prompt_from FROM sessions WHERE id = ?',
+        ).get(sessionId) as
+          | { system_prompt: string | null; pending_system_prompt_from: string | null }
+          | undefined
+        if (!pendingRow?.system_prompt) {
+          const inheritFrom =
+            pendingRow?.pending_system_prompt_from || effectivePendingSystemPromptFrom
+          if (inheritFrom) {
+            const inherited = this.resolveSystemPromptChain(inheritFrom, true, new Set([sessionId]))
+            if (inherited) {
+              effectiveSystemPrompt = inherited
+            }
+            effectivePendingSystemPromptFrom = null
+            if (pendingRow?.pending_system_prompt_from) {
+              this.getStatement(
+                'UPDATE sessions SET pending_system_prompt_from = NULL WHERE id = ?',
+              ).run(sessionId)
+            }
+          }
+        }
+      }
+
       // 1. Upsert session row
       upsertSessionStmt.run({
         id: sessionId,
@@ -715,6 +761,8 @@ export class SessionDatabaseService {
         environment_id: environmentId,
         worktree_setup_json: worktreeSetupJson,
         pinned_summary_visible: pinnedSummaryVisible,
+        system_prompt: effectiveSystemPrompt,
+        pending_system_prompt_from: effectivePendingSystemPromptFrom,
         created_at: createdAt,
         updated_at: updatedAt,
         now,
@@ -1111,6 +1159,67 @@ export class SessionDatabaseService {
     if (tombstone) throw new Error('SESSION_DELETED: Deleted session IDs cannot be reused')
   }
 
+  private resolveSystemPromptChain(
+    startId: string,
+    required: boolean,
+    initialVisited?: ReadonlySet<string>,
+  ): string | null {
+    const visited = new Set<string>(initialVisited)
+    const resolve = (id: string, isRequired: boolean): string | null => {
+      if (visited.has(id)) throw new Error('Cyclic fork system prompt inheritance')
+      visited.add(id)
+      const row = this.getStatement('SELECT system_prompt, pending_system_prompt_from FROM sessions WHERE id = ?').get(id) as
+        | { system_prompt: string | null; pending_system_prompt_from: string | null }
+        | undefined
+      if (!row) {
+        if (isRequired) throw new Error('Fork system prompt source is unavailable')
+        return null
+      }
+      if (row.system_prompt) return row.system_prompt
+      if (!row.pending_system_prompt_from) return null
+      const inherited = resolve(row.pending_system_prompt_from, true)
+      this.getStatement('UPDATE sessions SET system_prompt = ?, pending_system_prompt_from = NULL WHERE id = ?').run(inherited, id)
+      return inherited
+    }
+    return resolve(startId, required)
+  }
+
+  getSystemPrompt(sessionId: string): string | null {
+    if (!sessionId || typeof sessionId !== 'string') return null
+    const db = this.getDb()
+    return db.transaction(() => this.resolveSystemPromptChain(sessionId, false))()
+  }
+
+  setSystemPrompt(sessionId: string, systemPrompt: string): boolean {
+    if (!sessionId || typeof sessionId !== 'string') return false
+    if (typeof systemPrompt !== 'string' || systemPrompt.length === 0) return false
+    const db = this.getDb()
+    const now = Date.now()
+    const writeTx = db.transaction(() => {
+      const tombstone = this.getStatement(
+        'SELECT 1 FROM session_tombstones WHERE id = ? LIMIT 1',
+      ).get(sessionId)
+      if (tombstone) {
+        return false
+      }
+      this.getSystemPrompt(sessionId)
+      this.getStatement(`
+        INSERT INTO sessions (
+          id, title, pinned, unread, created_at, updated_at, system_prompt
+        ) VALUES (
+          @id, 'New Session', 0, 0, @now, @now, @system_prompt
+        ) ON CONFLICT(id) DO UPDATE SET
+          system_prompt = COALESCE(NULLIF(sessions.system_prompt, ''), excluded.system_prompt)
+      `).run({
+        id: sessionId,
+        now,
+        system_prompt: systemPrompt,
+      })
+      return true
+    })
+    return writeTx()
+  }
+
   async delete(sessionId: string): Promise<void> {
     if (!sessionId || typeof sessionId !== 'string') return
     const db = this.getDb()
@@ -1160,7 +1269,7 @@ export class SessionDatabaseService {
   async listSessions(): Promise<SessionItem[]> {
     try {
       const rows = this.getStatement(`
-          SELECT id, project_id, schedule_id, parent_session_id, branch, title, pinned, unread, archived_at, right_sidebar_json, first_prompt_at, model_id, reasoning_effort, speed, work_location, worktree_path, environment_id, worktree_setup_json, pinned_summary_visible, created_at, updated_at
+          SELECT id, project_id, schedule_id, parent_session_id, branch, title, pinned, unread, archived_at, right_sidebar_json, first_prompt_at, model_id, reasoning_effort, speed, work_location, worktree_path, environment_id, worktree_setup_json, pinned_summary_visible, pending_system_prompt_from, created_at, updated_at
           FROM sessions
           WHERE is_subagent = 0
           ORDER BY pinned DESC, updated_at DESC
@@ -1177,7 +1286,7 @@ export class SessionDatabaseService {
     if (!sessionId || typeof sessionId !== 'string') return null
     const db = this.getDb()
     const row = this.getStatement(`
-        SELECT id, project_id, schedule_id, parent_session_id, branch, title, pinned, unread, archived_at, right_sidebar_json, first_prompt_at, model_id, reasoning_effort, speed, work_location, worktree_path, environment_id, worktree_setup_json, pinned_summary_visible, created_at, updated_at
+        SELECT id, project_id, schedule_id, parent_session_id, branch, title, pinned, unread, archived_at, right_sidebar_json, first_prompt_at, model_id, reasoning_effort, speed, work_location, worktree_path, environment_id, worktree_setup_json, pinned_summary_visible, pending_system_prompt_from, created_at, updated_at
         FROM sessions
         WHERE id = ?
       `)
@@ -1191,7 +1300,7 @@ export class SessionDatabaseService {
     if (!scheduleId || typeof scheduleId !== 'string') return []
     try {
       const rows = this.getStatement(`
-          SELECT id, project_id, schedule_id, parent_session_id, branch, title, pinned, unread, archived_at, right_sidebar_json, first_prompt_at, model_id, reasoning_effort, speed, work_location, worktree_path, environment_id, worktree_setup_json, pinned_summary_visible, created_at, updated_at
+          SELECT id, project_id, schedule_id, parent_session_id, branch, title, pinned, unread, archived_at, right_sidebar_json, first_prompt_at, model_id, reasoning_effort, speed, work_location, worktree_path, environment_id, worktree_setup_json, pinned_summary_visible, pending_system_prompt_from, created_at, updated_at
           FROM sessions
           WHERE schedule_id = ? AND is_subagent = 0
           ORDER BY created_at DESC
@@ -1210,7 +1319,7 @@ export class SessionDatabaseService {
     const now = Date.now()
 
     const existing = this.getStatement(
-        'SELECT id, project_id, schedule_id, parent_session_id, branch, title, pinned, unread, archived_at, right_sidebar_json, first_prompt_at, model_id, reasoning_effort, speed, work_location, worktree_path, environment_id, worktree_setup_json, pinned_summary_visible, created_at, updated_at FROM sessions WHERE id = ?',
+        'SELECT id, project_id, schedule_id, parent_session_id, branch, title, pinned, unread, archived_at, right_sidebar_json, first_prompt_at, model_id, reasoning_effort, speed, work_location, worktree_path, environment_id, worktree_setup_json, pinned_summary_visible, pending_system_prompt_from, created_at, updated_at FROM sessions WHERE id = ?',
       )
       .get(meta.id) as SessionRow | undefined
 
@@ -1360,11 +1469,11 @@ export class SessionDatabaseService {
 
         this.getStatement(`
           INSERT INTO sessions (
-            id, project_id, schedule_id, parent_session_id, is_subagent, title, branch, pinned, unread, archived_at, right_sidebar_json, first_prompt_at, model_id, reasoning_effort, speed, work_location, worktree_path, environment_id, worktree_setup_json, pinned_summary_visible, created_at, updated_at
+            id, project_id, schedule_id, parent_session_id, is_subagent, title, branch, pinned, unread, archived_at, right_sidebar_json, first_prompt_at, model_id, reasoning_effort, speed, work_location, worktree_path, environment_id, worktree_setup_json, pinned_summary_visible, pending_system_prompt_from, created_at, updated_at
           ) VALUES (
-            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
           )
-        `).run(meta.id, projectId, scheduleId, parentSessionId, isSubagent, title, branch, pinned, unread, archivedAt, rightSidebarJson, firstPromptAt, modelId, reasoningEffort, speed, workLocation, worktreePath, environmentId, worktreeSetupJson, pinnedSummaryVisible, createdAt, updatedAt)
+        `).run(meta.id, projectId, scheduleId, parentSessionId, isSubagent, title, branch, pinned, unread, archivedAt, rightSidebarJson, firstPromptAt, modelId, reasoningEffort, speed, workLocation, worktreePath, environmentId, worktreeSetupJson, pinnedSummaryVisible, meta.pendingSystemPromptFrom ?? null, createdAt, updatedAt)
         if (isSubagent === 0) {
           this.getStatement(`
             INSERT OR IGNORE INTO session_search_docs (session_id, updated_at, content_text, has_unicode_case)

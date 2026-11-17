@@ -3352,4 +3352,41 @@ describe('useAgentStream', () => {
         expect(entries[2]?.kind).toBe('user')
         expect((entries[2] as any)?.content?.[0]?.text).toBe('Second follow-up prompt')
     })
+
+    it('restores composer draft when streamChat fails with system_prompt_enhancement_failed after session acceptance without overwriting newer user input', async () => {
+        service.streamImpl = async function* () {
+            throw new AgentPreflightError(
+                'system_prompt_enhancement_failed',
+                'Synthesis failed after 3 attempts',
+                'agent.preflight.system_prompt_enhancement_failed',
+            )
+        }
+
+        const { result } = renderHook(() => useAgentStream(), {
+            wrapper: wrapperFor(service),
+        })
+
+        let acceptedSid: string | null = null
+        await act(async () => {
+            await result.current.send({
+                text: 'Important unsent prompt',
+                sessionId: '',
+                skillReferences: [{ start: 0, name: 'brainstorming' }],
+                onSessionAccepted: (sid) => {
+                    acceptedSid = sid
+                    // Simulate Composer clearing draft when onSessionAccepted resolves
+                    useUiStore.getState().setComposerDraftForSession(sid, '')
+                },
+            })
+        })
+
+        await waitFor(() => expect(result.current.isStreaming).toBe(false))
+        expect(acceptedSid).toBeTruthy()
+        expect(useUiStore.getState().composerDrafts[`session:${acceptedSid}`]).toBe(
+            'Important unsent prompt',
+        )
+        expect(useUiStore.getState().composerDraftReferences[`session:${acceptedSid}`]).toEqual([
+            { start: 0, name: 'brainstorming' },
+        ])
+    })
 })

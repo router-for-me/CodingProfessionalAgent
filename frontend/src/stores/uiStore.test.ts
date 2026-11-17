@@ -265,4 +265,54 @@ describe('uiStore - right panel tabs', () => {
     const session = useSessionStore.getState().sessions.find((s) => s.id === sessionId)
     expect(session?.pinnedSummaryVisible).toBe(true)
   })
+
+  it('restores per-session draft without mutating global composerDraft fallback', () => {
+    useUiStore.setState({ composerDraft: '', composerDrafts: {}, composerDraftReferences: {} })
+    const store = useUiStore.getState()
+    store.setComposerDraftForSession('session-a', 'Failed session A prompt', [{ start: 0, name: 'demo' }], {
+      preserveLegacyDraft: true,
+    })
+
+    expect(useUiStore.getState().composerDrafts['session:session-a']).toBe('Failed session A prompt')
+    expect(useUiStore.getState().composerDraftReferences['session:session-a']).toEqual([{ start: 0, name: 'demo' }])
+    expect(useUiStore.getState().composerDraft).toBe('')
+  })
+
+  it('clearSessionComposerDraft removes draft text, references, attachments, and restored attachments for deleted session only', () => {
+    useUiStore.setState({
+      composerDraft: '',
+      composerDrafts: {},
+      composerDraftReferences: {},
+      composerDraftAttachments: {},
+      composerRestoredAttachments: {},
+    })
+    const store = useUiStore.getState()
+    store.setComposerDraftForSession('s1', 'Draft 1', [{ start: 0, name: 'skill1' }])
+    store.setComposerDraftForSession('s2', 'Draft 2', [{ start: 0, name: 'skill2' }])
+    store.setComposerDraftAttachments('session:s1', [
+      { id: 'att-1', kind: 'image', name: 'img1.png', mimeType: 'image/png', dataUrl: 'data:image/png;base64,AAA' },
+    ])
+    store.setComposerDraftAttachments('session:s2', [
+      { id: 'att-2', kind: 'image', name: 'img2.png', mimeType: 'image/png', dataUrl: 'data:image/png;base64,BBB' },
+    ])
+    store.setComposerRestoredAttachments('s1', [
+      { id: 'rest-1', name: 'rest-1.png', mimeType: 'image/png', data: 'CCC', width: 10, height: 10 },
+    ])
+    store.setComposerRestoredAttachments('s2', [
+      { id: 'rest-2', name: 'rest-2.png', mimeType: 'image/png', data: 'DDD', width: 10, height: 10 },
+    ])
+
+    store.clearSessionComposerDraft('s1')
+
+    const next = useUiStore.getState()
+    expect(next.composerDrafts['session:s1']).toBeUndefined()
+    expect(next.composerDraftReferences['session:s1']).toBeUndefined()
+    expect(next.composerDraftAttachments['session:s1']).toBeUndefined()
+    expect(next.composerRestoredAttachments['session:s1']).toBeUndefined()
+
+    expect(next.composerDrafts['session:s2']).toBe('Draft 2')
+    expect(next.composerDraftReferences['session:s2']).toEqual([{ start: 0, name: 'skill2' }])
+    expect(next.composerDraftAttachments['session:s2']).toHaveLength(1)
+    expect(next.composerRestoredAttachments['session:s2']).toHaveLength(1)
+  })
 })

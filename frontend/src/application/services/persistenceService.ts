@@ -13,6 +13,7 @@ import {
   DEFAULT_SUBAGENT_SETTINGS,
   DEFAULT_EDITOR_SETTINGS,
   normalizeCompactionThresholdPercent,
+  normalizeSystemPromptEnhancementSettings,
   type AppSettings,
   type CacheWarmingMode,
   type EditorFollowUpMode,
@@ -54,6 +55,7 @@ import { stripHiddenReasoningLevels } from '@/features/models/filteredModels'
 export type PersistVersion = 1 | 2
 
 export interface SessionFilePayload {
+  pendingSystemPromptFrom?: string
   id: string
   version: PersistVersion
   expectedEntriesRevision?: string
@@ -774,6 +776,9 @@ function normalizeSettings(
     worktrees: sanitizeWorktreeSettings(next.worktrees),
     subagents: sanitizeSubagentsSettings(next.subagents),
     editor: sanitizeEditorSettings(next.editor),
+    systemPromptEnhancement: normalizeSystemPromptEnhancementSettings(
+      next.systemPromptEnhancement,
+    ),
   }
 }
 
@@ -2366,6 +2371,7 @@ async function writeSessionData(
     ...(projectId ? { projectId } : {}),
     ...(parentSessionId ? { parentSessionId } : {}),
     ...(session?.scheduleId ? { scheduleId: session.scheduleId } : {}),
+    ...(session?.pendingSystemPromptFrom ? { pendingSystemPromptFrom: session.pendingSystemPromptFrom } : {}),
     ...(isSubagent ? { isSubagent: true } : {}),
     ...(speed === 'standard' || speed === 'fast' || speed === 'max' ? { speed } : {}),
     ...(subAgentRecord?.reasoningEffort ?? session?.reasoningEffort ?? settings?.reasoningLevel
@@ -2570,6 +2576,7 @@ export async function deleteSessionLocalCache(sessionId: string): Promise<void> 
 
     useSubAgentStore.getState().removeAgentsForParent(sessionId)
     useMessageStore.getState().removeSessionMessages(sessionId)
+    useUiStore.getState().clearSessionComposerDraft(sessionId)
 
     if (typeof localStorage !== 'undefined') {
       try {
@@ -2644,6 +2651,7 @@ export async function deleteSessionEntries(sessionId: string): Promise<void> {
   // 5. Remove child subagents from useSubAgentStore & message store
   useSubAgentStore.getState().removeAgentsForParent(sessionId)
   useMessageStore.getState().removeSessionMessages(sessionId)
+  useUiStore.getState().clearSessionComposerDraft(sessionId)
 
   // 6. Delete the parent session file itself
   const bridge = getHostBridge()

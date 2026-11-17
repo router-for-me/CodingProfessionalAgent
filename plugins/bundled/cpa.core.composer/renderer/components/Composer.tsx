@@ -282,7 +282,9 @@ const BaseComposer = memo(function BaseComposer({
         composerDrafts[composerDraftKey] ??
         hostServices?.ui?.getComposerDraft?.(composerDraftKey) ??
         hostServices?.ui?.getComposerDraft?.(effectiveSessionId || 'new-chat') ??
-        (initialComposerDraftKeyRef.current === composerDraftKey ? legacyDraft : '')
+        (composerDraftKey === 'new-chat' && initialComposerDraftKeyRef.current === composerDraftKey
+            ? legacyDraft
+            : '')
 
     const draftReferences =
         uiState?.composerDraftReferences?.[composerDraftKey] ??
@@ -328,7 +330,110 @@ const BaseComposer = memo(function BaseComposer({
     const isWorktreeError = Boolean(worktreeSetup && worktreeSetup.status === 'error')
     const isWorktreeBlocked = isSettingUpWorktree || isWorktreeError
 
-    const [attachments, setAttachments] = useState<ComposerAttachment[]>([])
+    const [localAttachmentsByKey, setLocalAttachmentsByKey] = useState<Record<string, ComposerAttachment[]>>({})
+    const knownSessionDraftKeysRef = useRef<Set<string>>(new Set())
+    const deletedSessionDraftKeysRef = useRef<Set<string>>(new Set())
+    const useHostDraftAttachments =
+        typeof hostServices?.ui?.getComposerDraftAttachments === 'function' &&
+        typeof hostServices?.ui?.setComposerDraftAttachments === 'function'
+    useEffect(() => {
+        const activeKeys = new Set(sessions.map((s) => getComposerDraftKey(s.id)))
+        const newlyDeleted: string[] = []
+        for (const activeKey of activeKeys) {
+            knownSessionDraftKeysRef.current.add(activeKey)
+            deletedSessionDraftKeysRef.current.delete(activeKey)
+        }
+        for (const knownKey of Array.from(knownSessionDraftKeysRef.current)) {
+            if (!activeKeys.has(knownKey)) {
+                knownSessionDraftKeysRef.current.delete(knownKey)
+                deletedSessionDraftKeysRef.current.add(knownKey)
+                newlyDeleted.push(knownKey)
+            }
+        }
+        if (newlyDeleted.length > 0 && !useHostDraftAttachments) {
+            setLocalAttachmentsByKey((prevMap) => {
+                let changed = false
+                const nextMap = { ...prevMap }
+                for (const deletedKey of newlyDeleted) {
+                    if (deletedKey in nextMap) {
+                        delete nextMap[deletedKey]
+                        changed = true
+                    }
+                }
+                return changed ? nextMap : prevMap
+            })
+        }
+    }, [sessions, useHostDraftAttachments])
+    const captureKnownDraftKey = useCallback(
+        (targetKey: string) => {
+            if (!targetKey || targetKey === 'new-chat') return
+            const liveSessions = hostServices?.sessions?.getSnapshot?.() ?? sessions
+            if (
+                Array.isArray(liveSessions) &&
+                liveSessions.some((s) => getComposerDraftKey(s.id) === targetKey)
+            ) {
+                knownSessionDraftKeysRef.current.add(targetKey)
+                deletedSessionDraftKeysRef.current.delete(targetKey)
+            }
+        },
+        [hostServices, sessions],
+    )
+    const isDraftKeyDeleted = useCallback(
+        (targetKey: string): boolean => {
+            if (!targetKey || targetKey === 'new-chat') return false
+            if (deletedSessionDraftKeysRef.current.has(targetKey)) {
+                return true
+            }
+            if (knownSessionDraftKeysRef.current.has(targetKey)) {
+                const liveSessions = hostServices?.sessions?.getSnapshot?.()
+                if (
+                    Array.isArray(liveSessions) &&
+                    !liveSessions.some((s) => getComposerDraftKey(s.id) === targetKey)
+                ) {
+                    return true
+                }
+            }
+            return false
+        },
+        [hostServices],
+    )
+    const attachments: ComposerAttachment[] = useHostDraftAttachments
+        ? ([...(uiState?.composerDraftAttachments?.[composerDraftKey] ??
+              hostServices?.ui?.getComposerDraftAttachments?.(composerDraftKey) ??
+              [])] as ComposerAttachment[])
+        : (localAttachmentsByKey[composerDraftKey] ?? [])
+    const setAttachmentsForKey = useCallback(
+        (
+            targetKey: string,
+            updater:
+                | readonly ComposerAttachment[]
+                | ((prev: ComposerAttachment[]) => ComposerAttachment[]),
+        ) => {
+            if (isDraftKeyDeleted(targetKey)) return
+            if (useHostDraftAttachments) {
+                hostServices?.ui?.setComposerDraftAttachments?.(targetKey, (prev) => {
+                    const mutablePrev = prev.map((att) => ({ ...att }))
+                    return typeof updater === 'function' ? updater(mutablePrev) : [...updater]
+                })
+                return
+            }
+            setLocalAttachmentsByKey((prevMap) => {
+                const current = prevMap[targetKey] ?? []
+                const next = typeof updater === 'function' ? updater(current) : [...updater]
+                if (next.length === 0) {
+                    if (!(targetKey in prevMap)) return prevMap
+                    const remaining = { ...prevMap }
+                    delete remaining[targetKey]
+                    return remaining
+                }
+                return {
+                    ...prevMap,
+                    [targetKey]: next,
+                }
+            })
+        },
+        [hostServices, isDraftKeyDeleted, useHostDraftAttachments],
+    )
     const images: ComposerImage[] = useMemo(
         () =>
             attachments
@@ -519,6 +624,25 @@ const BaseComposer = memo(function BaseComposer({
             unsub()
         }
     }, [focusInput])
+
+    useEffect(() => {
+        const pending = uiState?.composerRestoredAttachments?.[composerDraftKey] as readonly ComposerImage[] | undefined
+        if (!pending?.length || attachments.length > 0) return
+        const restored = hostServices?.ui?.consumeComposerRestoredAttachments?.(composerDraftKey)
+        if (!restored?.length) return
+        setAttachmentsForKey(
+            composerDraftKey,
+            restored.map((img) => ({
+                id: img.id,
+                name: img.name || 'image.png',
+                kind: 'image' as const,
+                mimeType: img.mimeType,
+                data: img.data,
+                width: img.width,
+                height: img.height,
+            })),
+        )
+    }, [composerDraftKey, uiState?.composerRestoredAttachments, attachments.length, hostServices, setAttachmentsForKey])
 
     const prevSessionIdRef = useRef<string | null | undefined>(effectiveSessionId)
     useEffect(() => {
@@ -987,6 +1111,7 @@ const BaseComposer = memo(function BaseComposer({
             ...(isRunning ? { followUpMode: effectiveFollowUpMode } : {}),
         }
 
+        const sendDraftKey = composerDraftKey
         setSending(true)
         try {
             const preprocessed = runSubmitPreprocessors(
@@ -1013,9 +1138,18 @@ const BaseComposer = memo(function BaseComposer({
                 await executeSend(preprocessed as unknown as ComposerSendPayload)
             }
 
+            hostServices?.ui?.setComposerDraft?.(sendDraftKey, '', [])
+            if (effectiveSessionId && `session:${effectiveSessionId}` === sendDraftKey) {
+                hostServices?.ui?.setComposerDraft?.(effectiveSessionId, '', [])
+            }
+            if (useHostDraftAttachments) {
+                setAttachmentsForKey(sendDraftKey, [])
+            }
+
             if (!mountedRef.current) return
-            setComposerDraft('')
-            setAttachments([])
+            if (!useHostDraftAttachments) {
+                setAttachmentsForKey(sendDraftKey, [])
+            }
             setImageError(null)
             setSlashOpen(false)
             setSkillOpen(false)
@@ -1193,13 +1327,15 @@ const BaseComposer = memo(function BaseComposer({
     const processSelectedNativeItems = (
         items: Array<{ name: string; path: string; isDirectory: boolean }>,
     ) => {
+        const targetDraftKey = composerDraftKey
+        captureKnownDraftKey(targetDraftKey)
         processChainRef.current = processChainRef.current
             .then(async () => {
-                if (!mountedRef.current) return
+                if (!mountedRef.current || isDraftKeyDeleted(targetDraftKey)) return
                 setProcessingCount((count) => count + 1)
                 try {
                     for (const item of items) {
-                        if (!mountedRef.current) return
+                        if (!mountedRef.current || isDraftKeyDeleted(targetDraftKey)) return
                         if (item.isDirectory) {
                             const folderAttachment: ComposerAttachment = {
                                 id: createId(),
@@ -1208,7 +1344,7 @@ const BaseComposer = memo(function BaseComposer({
                                 kind: 'folder',
                                 mimeType: 'directory',
                             }
-                            setAttachments((prev) => [...prev, folderAttachment])
+                            setAttachmentsForKey(targetDraftKey, (prev) => [...prev, folderAttachment])
                             continue
                         }
 
@@ -1259,6 +1395,7 @@ const BaseComposer = memo(function BaseComposer({
                                                         })
                                                 }
                                             }
+                                            if (!mountedRef.current || isDraftKeyDeleted(targetDraftKey)) return
                                             if (dimensions) {
                                                 const imageAttachment: ComposerAttachment =
                                                     {
@@ -1271,7 +1408,7 @@ const BaseComposer = memo(function BaseComposer({
                                                         width: dimensions.width,
                                                         height: dimensions.height,
                                                     }
-                                                setAttachments((prev) => [
+                                                setAttachmentsForKey(targetDraftKey, (prev) => [
                                                     ...prev,
                                                     imageAttachment,
                                                 ])
@@ -1286,6 +1423,7 @@ const BaseComposer = memo(function BaseComposer({
                             }
                         }
 
+                        if (!mountedRef.current || isDraftKeyDeleted(targetDraftKey)) return
                         const fileAttachment: ComposerAttachment = {
                             id: createId(),
                             name: item.name,
@@ -1293,7 +1431,7 @@ const BaseComposer = memo(function BaseComposer({
                             kind: 'file',
                             mimeType: getFileMimeOrExt(item.name),
                         }
-                        setAttachments((prev) => [...prev, fileAttachment])
+                        setAttachmentsForKey(targetDraftKey, (prev) => [...prev, fileAttachment])
                     }
                 } finally {
                     if (mountedRef.current) {
@@ -1331,13 +1469,15 @@ const BaseComposer = memo(function BaseComposer({
     }
 
     const enqueueFiles = (list: File[]) => {
+        const targetDraftKey = composerDraftKey
+        captureKnownDraftKey(targetDraftKey)
         processChainRef.current = processChainRef.current
             .then(async () => {
-                if (!mountedRef.current) return
+                if (!mountedRef.current || isDraftKeyDeleted(targetDraftKey)) return
                 setProcessingCount((count) => count + 1)
                 try {
                     for (const file of list) {
-                        if (!mountedRef.current) return
+                        if (!mountedRef.current || isDraftKeyDeleted(targetDraftKey)) return
                         try {
                             const isImgClaimed =
                                 file.type.startsWith('image/') ||
@@ -1430,7 +1570,7 @@ const BaseComposer = memo(function BaseComposer({
                                         probe: dimensionProbeRef.current,
                                     })
                                 }
-                                if (!mountedRef.current) return
+                                if (!mountedRef.current || isDraftKeyDeleted(targetDraftKey)) return
                                 if (!dimensions) {
                                     const message = t(
                                         'composer.imageMissingDimensions',
@@ -1454,7 +1594,7 @@ const BaseComposer = memo(function BaseComposer({
                                     width: dimensions.width,
                                     height: dimensions.height,
                                 }
-                                setAttachments((prev) => [
+                                setAttachmentsForKey(targetDraftKey, (prev) => [
                                     ...prev,
                                     imageAttachment,
                                 ])
@@ -1469,7 +1609,7 @@ const BaseComposer = memo(function BaseComposer({
                                 kind: 'file',
                                 mimeType: file.type || getFileMimeOrExt(file.name),
                             }
-                            setAttachments((prev) => [...prev, fileAttachment])
+                            setAttachmentsForKey(targetDraftKey, (prev) => [...prev, fileAttachment])
                         } catch (error) {
                             if (!mountedRef.current) return
                             const message =
@@ -1490,7 +1630,8 @@ const BaseComposer = memo(function BaseComposer({
     }
 
     const removeAttachment = (id: string) => {
-        setAttachments((prev) => prev.filter((item) => item.id !== id))
+        const targetDraftKey = composerDraftKey
+        setAttachmentsForKey(targetDraftKey, (prev) => prev.filter((item) => item.id !== id))
     }
 
     const hasAnyMenuOpen =

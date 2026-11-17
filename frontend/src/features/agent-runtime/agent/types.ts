@@ -146,8 +146,8 @@ type AgentRunEventPayload =
           sessionId: string
           entry?: CompactionEntry
       }
-    | { type: 'error'; runId: string; sessionId: string; message: string }
-    | { type: 'aborted'; runId: string; sessionId: string }
+    | { type: 'error'; runId: string; sessionId: string; message: string; preflightCode?: string; userEntryId?: string; requestId?: string }
+    | { type: 'aborted'; runId: string; sessionId: string; userEntryId?: string; requestId?: string }
     | {
           type: 'diagnostic'
           runId: string

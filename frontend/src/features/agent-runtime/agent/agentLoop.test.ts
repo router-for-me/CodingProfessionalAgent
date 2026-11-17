@@ -4403,3 +4403,64 @@ it('invalidates cachedContext synchronously at compaction commit before PostComp
     await new Promise((r) => setTimeout(r, 15))
     expect(onTurnCached).toHaveBeenCalledTimes(1)
 })
+
+
+it.each([true, false])('keeps enhanced prompt immutable through tool policy fallback (enhanced=%s)', async (enhanced) => {
+    const client = new FakeCPAClient()
+    const policy = makeTool('exec', async () => ({ content: [] }))
+    policy.prepareToolSet = async () => ({ tools: [], nestedTools: [], systemMessage: 'Executor unavailable; use direct tools.' })
+    client.queue({ kind: 'stream', final: (seed) => doneAssistant(seed, { stopReason: 'stop' }) })
+    const events = await collect(new AgentLoop({ client }).run({
+        runId: 'r', sessionId: 's', model, entries: [], systemPrompt: 'LOCKED',
+        enhancedSystemPrompt: enhanced ? 'LOCKED' : undefined, tools: [policy],
+    }))
+    expect(client.calls[0]?.systemPrompt).toBe(enhanced ? 'LOCKED' : 'LOCKED\n\nExecutor unavailable; use direct tools.')
+    expect((events as AgentRunEvent[]).some((event) => event.type === 'user-entry' && JSON.stringify(event.entry).includes('[System notice]'))).toBe(true)
+})
+
+it('fails closed at dispatch boundary when onRequest middleware mutates locked enhancedSystemPrompt', async () => {
+    const client = new FakeCPAClient()
+    client.queue({ kind: 'stream', final: (seed) => doneAssistant(seed, { stopReason: 'stop' }) })
+
+    const loop = new AgentLoop({
+        client,
+        middlewares: [
+            {
+                id: 'mutating-mw',
+                order: 10,
+                onRequest: (input) => ({
+                    ...input,
+                    systemPrompt: `${input.systemPrompt}\n[Injected Bypass]`,
+                }),
+            },
+        ],
+    })
+
+    const events = await collect(
+        loop.run({
+            runId: 'r-mw-lock',
+            sessionId: 's-mw-lock',
+            model,
+            entries: [],
+            systemPrompt: 'LOCKED_ENHANCED',
+            enhancedSystemPrompt: 'LOCKED_ENHANCED',
+            tools: [],
+        }),
+    )
+
+    expect(client.calls).toHaveLength(0)
+    const errorEvent = (events as AgentRunEvent[]).find((e) => e.type === 'error')
+    expect(errorEvent).toMatchObject({
+        type: 'error',
+        message: 'Locked enhanced system prompt cannot be modified by middleware',
+    })
+    const assistantEnd = (events as AgentRunEvent[]).find((e) => e.type === 'assistant-end')
+    expect(assistantEnd).toBeDefined()
+    if (assistantEnd?.type === 'assistant-end') {
+        expect(assistantEnd.entry.status).toBe('error')
+        expect(assistantEnd.entry.errorMessage).toBe(
+            'Locked enhanced system prompt cannot be modified by middleware',
+        )
+    }
+    expect((events as AgentRunEvent[]).some((e) => e.type === 'agent-end')).toBe(true)
+})

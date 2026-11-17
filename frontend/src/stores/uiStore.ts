@@ -1,8 +1,9 @@
 import { create } from 'zustand'
-import type { SkillReference, Speed } from '@cpa/plugin-api'
+import type { ComposerImage, SkillReference, Speed } from '@cpa/plugin-api'
 import { createId } from '@/lib/id'
 import { isMobileBrowser } from '@/lib/platform'
 import { useSessionStore } from '@/stores/sessionStore'
+import type { ComposerAttachment } from '@cpa/plugin-api'
 import type { SessionRightSidebarState } from '@/types/models'
 
 export const DEFAULT_SIDEBAR_WIDTH = 272
@@ -118,6 +119,19 @@ interface UiState {
   composerDraft: string
   composerDrafts: Record<string, string>
   composerDraftReferences: Record<string, SkillReference[]>
+  composerDraftAttachments: Record<string, ComposerAttachment[]>
+  composerRestoredAttachments: Record<string, readonly ComposerImage[]>
+  deletedSessionDraftKeys: Record<string, true>
+  setComposerDraftAttachments: (
+    key: string,
+    attachments:
+      | readonly ComposerAttachment[]
+      | ((prev: readonly ComposerAttachment[]) => readonly ComposerAttachment[]),
+  ) => void
+  clearComposerDraftAttachments: (key: string) => void
+  setComposerRestoredAttachments: (sessionId: string, images: readonly ComposerImage[]) => void
+  consumeComposerRestoredAttachments: (key: string) => readonly ComposerImage[]
+  clearSessionComposerDraft: (sessionId: string) => void
   pendingSessionContext: PendingSessionContext
   toasts: ToastItem[]
   toggleGroup: (key: string) => void
@@ -146,7 +160,12 @@ interface UiState {
   setSearchOpen: (open: boolean) => void
   toggleSearchOpen: () => void
   setComposerDraft: (draft: string) => void
-  setComposerDraftForSession: (sessionId: string | null, draft: string, references?: readonly SkillReference[]) => void
+  setComposerDraftForSession: (
+    sessionId: string | null,
+    draft: string,
+    references?: readonly SkillReference[],
+    options?: { preserveLegacyDraft?: boolean },
+  ) => void
   setPendingSessionContext: (context: PendingSessionContext) => void
   pushToast: (message: string, action?: ToastItem['action']) => string
   dismissToast: (id: string) => void
@@ -186,6 +205,9 @@ export const useUiStore = create<UiState>((set, get) => ({
   composerDraft: '',
   composerDrafts: {},
   composerDraftReferences: {},
+  composerDraftAttachments: {},
+  composerRestoredAttachments: {},
+  deletedSessionDraftKeys: {},
   pendingSessionContext: { projectId: null, branch: null },
   toasts: [],
 
@@ -394,20 +416,102 @@ export const useUiStore = create<UiState>((set, get) => ({
 
   toggleSearchOpen: () => set((state) => ({ searchOpen: !state.searchOpen })),
 
+  setComposerDraftAttachments: (key, attachmentsOrUpdater) =>
+    set((state) => {
+      const prev = state.composerDraftAttachments[key] ?? []
+      const next =
+        typeof attachmentsOrUpdater === 'function'
+          ? attachmentsOrUpdater(prev)
+          : attachmentsOrUpdater
+      const normalized = next.map((att) => ({ ...att }))
+      if (normalized.length === 0) {
+        if (!(key in state.composerDraftAttachments)) return state
+        const remaining = { ...state.composerDraftAttachments }
+        delete remaining[key]
+        return { composerDraftAttachments: remaining }
+      }
+      return {
+        composerDraftAttachments: {
+          ...state.composerDraftAttachments,
+          [key]: normalized,
+        },
+      }
+    }),
+  clearComposerDraftAttachments: (key) =>
+    set((state) => {
+      if (!(key in state.composerDraftAttachments)) return state
+      const remaining = { ...state.composerDraftAttachments }
+      delete remaining[key]
+      return { composerDraftAttachments: remaining }
+    }),
+  setComposerRestoredAttachments: (sessionId, images) => set((state) => ({
+    composerRestoredAttachments: { ...state.composerRestoredAttachments, [`session:${sessionId}`]: images },
+  })),
+  consumeComposerRestoredAttachments: (key) => {
+    const images = get().composerRestoredAttachments[key] ?? []
+    if (images.length > 0) set((state) => {
+      const remaining = { ...state.composerRestoredAttachments }
+      delete remaining[key]
+      return { composerRestoredAttachments: remaining }
+    })
+    return images
+  },
+  clearSessionComposerDraft: (sessionId) => {
+    if (!sessionId || sessionId === NEW_CHAT_COMPOSER_DRAFT_KEY) return
+    const key = getComposerDraftKey(sessionId)
+    set((state) => {
+      const hasDraft = key in state.composerDrafts
+      const hasRefs = key in state.composerDraftReferences
+      const hasAttachments = key in state.composerDraftAttachments
+      const hasRestored = key in state.composerRestoredAttachments
+      const alreadyMarkedDeleted = state.deletedSessionDraftKeys[key] === true
+      if (!hasDraft && !hasRefs && !hasAttachments && !hasRestored && alreadyMarkedDeleted) {
+        return state
+      }
+      const nextDrafts = hasDraft ? { ...state.composerDrafts } : state.composerDrafts
+      if (hasDraft) delete nextDrafts[key]
+      const nextRefs = hasRefs ? { ...state.composerDraftReferences } : state.composerDraftReferences
+      if (hasRefs) delete nextRefs[key]
+      const nextAttachments = hasAttachments ? { ...state.composerDraftAttachments } : state.composerDraftAttachments
+      if (hasAttachments) delete nextAttachments[key]
+      const nextRestored = hasRestored ? { ...state.composerRestoredAttachments } : state.composerRestoredAttachments
+      if (hasRestored) delete nextRestored[key]
+      let nextDeleted = state.deletedSessionDraftKeys
+      if (!alreadyMarkedDeleted) {
+        nextDeleted = { ...state.deletedSessionDraftKeys, [key]: true }
+        const keys = Object.keys(nextDeleted)
+        if (keys.length > 1000) {
+          delete nextDeleted[keys[0]!]
+        }
+      }
+      return {
+        ...(hasDraft ? { composerDrafts: nextDrafts } : {}),
+        ...(hasRefs ? { composerDraftReferences: nextRefs } : {}),
+        ...(hasAttachments ? { composerDraftAttachments: nextAttachments } : {}),
+        ...(hasRestored ? { composerRestoredAttachments: nextRestored } : {}),
+        ...(!alreadyMarkedDeleted ? { deletedSessionDraftKeys: nextDeleted } : {}),
+      }
+    })
+  },
   setComposerDraft: (draft) => set({ composerDraft: draft }),
 
-  setComposerDraftForSession: (sessionId, draft, references = []) =>
-    set((state) => ({
-      composerDraft: draft,
-      composerDrafts: {
-        ...state.composerDrafts,
-        [getComposerDraftKey(sessionId)]: draft,
-      },
-      composerDraftReferences: {
-        ...state.composerDraftReferences,
-        [getComposerDraftKey(sessionId)]: references.map((ref) => ({ ...ref })),
-      },
-    })),
+  setComposerDraftForSession: (sessionId, draft, references = [], options) =>
+    set((state) => {
+      const key = getComposerDraftKey(sessionId)
+      const shouldUpdateLegacy =
+        !options?.preserveLegacyDraft && key === NEW_CHAT_COMPOSER_DRAFT_KEY
+      return {
+        ...(shouldUpdateLegacy ? { composerDraft: draft } : {}),
+        composerDrafts: {
+          ...state.composerDrafts,
+          [key]: draft,
+        },
+        composerDraftReferences: {
+          ...state.composerDraftReferences,
+          [key]: references.map((ref) => ({ ...ref })),
+        },
+      }
+    }),
 
   setPendingSessionContext: (pendingSessionContext) =>
     set({ pendingSessionContext }),

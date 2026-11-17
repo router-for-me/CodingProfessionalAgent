@@ -259,6 +259,53 @@ describe('settingsStore', () => {
     })
     expect(useSettingsStore.getState().settings.headlessCloseAction).toBe('continue_headless')
   })
+
+  describe('systemPromptEnhancement settings', () => {
+    it('initializes with disabled enhancement and English-only default', () => {
+      const enh = useSettingsStore.getState().settings.systemPromptEnhancement
+      expect(enh).toEqual({
+        enabled: false,
+        multilingualEnabled: false,
+        allowedLanguages: ['en'],
+        modelId: '',
+      })
+    })
+
+    it('normalizes invalid or empty allowedLanguages back to ["en"] on update and hydrate', () => {
+      useSettingsStore.getState().setSystemPromptEnhancement({
+        enabled: true,
+        multilingualEnabled: true,
+        allowedLanguages: ['ja', 'invalid-lang' as any, 'ja', 'de'],
+        modelId: '  gpt-6-astra  ',
+      })
+      expect(useSettingsStore.getState().settings.systemPromptEnhancement).toEqual({
+        enabled: true,
+        multilingualEnabled: true,
+        allowedLanguages: ['ja', 'de'],
+        modelId: 'gpt-6-astra',
+      })
+
+      useSettingsStore.getState().setSystemPromptEnhancement({
+        allowedLanguages: [],
+      })
+      expect(useSettingsStore.getState().settings.systemPromptEnhancement?.allowedLanguages).toEqual(['en'])
+
+      useSettingsStore.getState().hydrate({
+        systemPromptEnhancement: {
+          enabled: 'yes' as any,
+          multilingualEnabled: true,
+          allowedLanguages: ['unknown' as any],
+          modelId: 123 as any,
+        },
+      })
+      expect(useSettingsStore.getState().settings.systemPromptEnhancement).toEqual({
+        enabled: false,
+        multilingualEnabled: true,
+        allowedLanguages: ['en'],
+        modelId: '',
+      })
+    })
+  })
 })
 
 

@@ -675,10 +675,29 @@ describe('createHostServices', () => {
         })
         expect(mockCancelSessionWarmers).toHaveBeenCalledWith(undefined)
 
-        // 2. Deleting a session cancels warmers for that session
+        // 2. Deleting a session cancels warmers for that session and clears its composer draft & attachments
+        useUiStore.getState().setComposerDraftForSession('test-delete-session', 'unsent text', [{ start: 0, name: 's' }])
+        useUiStore.getState().setComposerDraftAttachments('session:test-delete-session', [
+            { id: 'att-del', kind: 'image', name: 'pic.png', mimeType: 'image/png', dataUrl: 'data:image/png;base64,XYZ' },
+        ])
+        useUiStore.getState().setComposerRestoredAttachments('test-delete-session', [
+            { id: 'rest-del', name: 'rest-del.png', mimeType: 'image/png', data: 'XYZ', width: 10, height: 10 },
+        ])
         mockCancelSessionWarmers.mockClear()
         await services.sessions.delete?.('test-delete-session')
         expect(mockCancelSessionWarmers).toHaveBeenCalledWith('test-delete-session')
+        expect(useUiStore.getState().composerDrafts['session:test-delete-session']).toBeUndefined()
+        expect(useUiStore.getState().composerDraftReferences['session:test-delete-session']).toBeUndefined()
+        expect(useUiStore.getState().composerDraftAttachments['session:test-delete-session']).toBeUndefined()
+        expect(useUiStore.getState().composerRestoredAttachments['session:test-delete-session']).toBeUndefined()
+
+        // 3. Late writes to deleted session draft or attachments through HostServices must be ignored
+        services.ui?.setComposerDraftAttachments?.('session:test-delete-session', [
+            { id: 'late-att', kind: 'image', name: 'late.png', mimeType: 'image/png', dataUrl: 'data:image/png;base64,LATE' },
+        ])
+        services.ui?.setComposerDraft?.('session:test-delete-session', 'late ghost text', [])
+        expect(useUiStore.getState().composerDraftAttachments['session:test-delete-session']).toBeUndefined()
+        expect(useUiStore.getState().composerDrafts['session:test-delete-session']).toBeUndefined()
 
         unregister()
     })

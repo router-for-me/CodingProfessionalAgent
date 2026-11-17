@@ -404,6 +404,20 @@ export function createDefaultBindings(): NativeBridgeBindings {
             }
             throw new Error('Host bridge SessionDelegateRun is unavailable')
         },
+        SessionGetSystemPrompt: (sessionId) => {
+            const bridge = ensureHostCapabilityFacade()
+            if (bridge?.SessionGetSystemPrompt) {
+                return bridge.SessionGetSystemPrompt(sessionId)
+            }
+            return Promise.resolve(null)
+        },
+        SessionSetSystemPrompt: (sessionId, systemPrompt) => {
+            const bridge = ensureHostCapabilityFacade()
+            if (bridge?.SessionSetSystemPrompt) {
+                return bridge.SessionSetSystemPrompt(sessionId, systemPrompt)
+            }
+            return Promise.resolve(false)
+        },
         SaveFile: (options) => {
             const bridge = ensureHostCapabilityFacade()
             if (bridge?.SaveFile) {
@@ -710,6 +724,28 @@ export class ElectronNativeBridge implements NativeBridge {
 
     async SessionDelegateRun(req: SessionDelegateRunRequest): Promise<string> {
         return this.bindings.SessionDelegateRun(req)
+    }
+
+    async SessionGetSystemPrompt(sessionId: string): Promise<string | null> {
+        if (typeof this.bindings.SessionGetSystemPrompt === 'function') {
+            return this.bindings.SessionGetSystemPrompt(sessionId)
+        }
+        const bridge = getHostBridge()
+        if (typeof bridge?.SessionGetSystemPrompt === 'function') {
+            return bridge.SessionGetSystemPrompt(sessionId)
+        }
+        return null
+    }
+
+    async SessionSetSystemPrompt(sessionId: string, systemPrompt: string): Promise<boolean> {
+        if (typeof this.bindings.SessionSetSystemPrompt === 'function') {
+            return this.bindings.SessionSetSystemPrompt(sessionId, systemPrompt)
+        }
+        const bridge = getHostBridge()
+        if (typeof bridge?.SessionSetSystemPrompt === 'function') {
+            return bridge.SessionSetSystemPrompt(sessionId, systemPrompt)
+        }
+        return false
     }
 
     async saveFile(options: SaveFileInput): Promise<SaveFileResult> {

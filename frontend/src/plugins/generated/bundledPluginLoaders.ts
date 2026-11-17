@@ -42,6 +42,8 @@ export const bundledManifests: Readonly<Record<string, PluginManifest>> = Object
                 "rpc": [
                         "session:get",
                         "session:set",
+                        "session:getSystemPrompt",
+                        "session:setSystemPrompt",
                         "session:delete",
                         "session:list",
                         "session:listSessions",

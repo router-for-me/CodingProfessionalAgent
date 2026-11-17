@@ -163,6 +163,8 @@ export interface NativeBridge {
     SessionAbortRun(sessionId: string, reason?: string): Promise<void>
     SessionGetActiveRuns(): Promise<ActiveRunInfo[]>
     SessionDelegateRun(req: SessionDelegateRunRequest): Promise<string>
+    SessionGetSystemPrompt?(sessionId: string): Promise<string | null>
+    SessionSetSystemPrompt?(sessionId: string, systemPrompt: string): Promise<boolean>
     saveFile?(options: SaveFileInput): Promise<SaveFileResult>
     startProfiling?(options?: { durationMs?: number; target?: string }): Promise<{ ok: boolean; session?: any; error?: string }>
     stopProfiling?(): Promise<{ ok: boolean; report?: any; rawProfile?: any; error?: string }>
@@ -213,6 +215,8 @@ export interface NativeBridgeBindings {
     SessionAbortRun(sessionId: string, reason?: string): Promise<void>
     SessionGetActiveRuns(): Promise<ActiveRunInfo[]>
     SessionDelegateRun(req: SessionDelegateRunRequest): Promise<string>
+    SessionGetSystemPrompt?(sessionId: string): Promise<string | null>
+    SessionSetSystemPrompt?(sessionId: string, systemPrompt: string): Promise<boolean>
     SaveFile?(options: SaveFileInput): Promise<SaveFileResult>
     saveFile?(options: SaveFileInput): Promise<SaveFileResult>
     startProfiling?(options?: { durationMs?: number; target?: string }): Promise<{ ok: boolean; session?: any; error?: string }>

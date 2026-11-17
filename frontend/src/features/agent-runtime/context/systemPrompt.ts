@@ -39,7 +39,12 @@ export interface BuildSystemPromptOptions {
     personality?: PersonalityTone | string
     /** User's configured Git settings (commit instructions, PR instructions, merge method, force push, draft PR). */
     gitSettings?: Partial<GitSettings> | null
+    /** When true, conditionalizes title and subagent orchestration guidelines for multi-role reuse. */
+    conditionalToolGuidelines?: boolean
 }
+
+export const CONDITIONAL_TITLE_GUIDELINE =
+    'When the title tool is present in the declared tool set for the current request, call it before starting other work to set a concise session title based on user input; if you are running in a delegated sub-task context without that tool, skip it and focus directly on completing your assigned task.'
 
 /**
  * Build a deterministic CPA system prompt from tools, context files, and optional overrides.
@@ -78,7 +83,9 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
         }
         if (toolNames.has('title') || toolNames.has('set_session_title')) {
             customGuidelines.push(
-                'Before starting other work, call the title tool to set a concise session title based on user input',
+                options.conditionalToolGuidelines
+                    ? CONDITIONAL_TITLE_GUIDELINE
+                    : 'Before starting other work, call the title tool to set a concise session title based on user input',
             )
         }
         if (customGuidelines.length > 0) {
@@ -91,6 +98,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
             promptGuidelines,
             languageGuideline,
             personalityGuideline,
+            Boolean(options.conditionalToolGuidelines),
         )
         if (appendSection) {
             prompt += appendSection
@@ -127,6 +135,7 @@ function buildDefaultBasePrompt(
     promptGuidelines: readonly string[],
     languageGuideline?: string,
     personalityGuideline?: string,
+    conditionalToolGuidelines = false,
 ): string {
     const toolsList =
         tools.length > 0
@@ -145,6 +154,7 @@ function buildDefaultBasePrompt(
         promptGuidelines,
         languageGuideline,
         personalityGuideline,
+        conditionalToolGuidelines,
     )
 
     // Closed-world tool list: only the provided tools, never "other custom tools".
@@ -273,6 +283,7 @@ function buildGuidelines(
     promptGuidelines: readonly string[],
     languageGuideline?: string,
     personalityGuideline?: string,
+    conditionalToolGuidelines = false,
 ): string {
     const guidelinesList: string[] = []
     const seen = new Set<string>()
@@ -326,21 +337,35 @@ function buildGuidelines(
 
     if (toolNames.has('title') || toolNames.has('set_session_title')) {
         add(
-            'Before starting other work, call the title tool to set a concise session title based on user input',
+            conditionalToolGuidelines
+                ? CONDITIONAL_TITLE_GUIDELINE
+                : 'Before starting other work, call the title tool to set a concise session title based on user input',
         )
     }
 
     if (toolNames.has('spawn_agent')) {
-        add('Use spawn_agent to delegate independent work to a sub-agent')
+        if (conditionalToolGuidelines) {
+            add('Only when spawn_agent is present in the declared tool set for this request, use it to delegate independent work to a sub-agent (if running in a delegated sub-task without it, skip delegation and complete your assigned task directly)')
+        } else {
+            add('Use spawn_agent to delegate independent work to a sub-agent')
+        }
         add('When calling spawn_agent, choose a short, human-readable name randomly and pass it in the name field')
         add('When calling spawn_agent, pass the catalog model id the sub-agent should use in the model field')
         add('Use a fresh name for each sub-agent and never let sub-agents spawn their own sub-agents')
     }
     if (toolNames.has('send_message')) {
-        add('Use send_message to send follow-up instructions to an existing sub-agent')
+        add(
+            conditionalToolGuidelines
+                ? 'Only when send_message is present in the declared tool set, use it to send follow-up instructions to an existing sub-agent'
+                : 'Use send_message to send follow-up instructions to an existing sub-agent',
+        )
     }
     if (toolNames.has('stop_agent')) {
-        add('Use stop_agent to abort a running sub-agent')
+        add(
+            conditionalToolGuidelines
+                ? 'Only when stop_agent is present in the declared tool set, use it to abort a running sub-agent'
+                : 'Use stop_agent to abort a running sub-agent',
+        )
     }
     if (toolNames.has('ask')) {
         add('Use the ask tool whenever you need to ask the user a question, clarify requirements, confirm choices, or gather user input')

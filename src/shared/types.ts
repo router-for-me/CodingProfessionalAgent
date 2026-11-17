@@ -46,6 +46,8 @@ import type {
   ShortcutsConfig,
   ShortcutsMap,
   Speed,
+  SystemPromptEnhancementSettings,
+  SystemPromptLanguage,
   TerminalPosition,
   ThemeMode,
   ToolStatus,
@@ -113,6 +115,8 @@ export type {
   ShortcutsConfig,
   ShortcutsMap,
   Speed,
+  SystemPromptEnhancementSettings,
+  SystemPromptLanguage,
   TerminalPosition,
   ThemeMode,
   ToolStatus,
@@ -708,6 +712,8 @@ export interface ElectronBridgeApi {
   // Sessions
   SessionGet(sessionId: string): Promise<unknown>
   SessionSet(sessionId: string, data: unknown): Promise<string>
+  SessionGetSystemPrompt(sessionId: string): Promise<string | null>
+  SessionSetSystemPrompt(sessionId: string, systemPrompt: string): Promise<boolean>
   SessionDelete(sessionId: string): Promise<void>
   SessionList(): Promise<string[]>
   SessionListSessions(): Promise<SessionItem[]>

@@ -268,6 +268,7 @@ export class FakeNativeBridge implements NativeBridge {
     private readonly files = new Map<string, Uint8Array>()
     private readonly dirs = new Set<string>()
     private readonly lookPaths = new Map<string, string | null>()
+    private readonly sessionSystemPrompts = new Map<string, string>()
     private readonly live = new Map<string, FakeOperationStream>()
     private readonly held = new Map<string, HeldPayload>()
     private readonly processScripts: FakeProcessScript[] = []
@@ -651,6 +652,20 @@ export class FakeNativeBridge implements NativeBridge {
     async SessionDelegateRun(req: SessionDelegateRunRequest): Promise<string> {
         this.record('SessionDelegateRun', req)
         return (req?.sessionId as string) || ''
+    }
+
+    async SessionGetSystemPrompt(sessionId: string): Promise<string | null> {
+        this.record('SessionGetSystemPrompt', sessionId)
+        return this.sessionSystemPrompts.get(sessionId) ?? null
+    }
+
+    async SessionSetSystemPrompt(sessionId: string, systemPrompt: string): Promise<boolean> {
+        this.record('SessionSetSystemPrompt', sessionId, systemPrompt)
+        if (!sessionId || !systemPrompt) {
+            return false
+        }
+        this.sessionSystemPrompts.set(sessionId, systemPrompt)
+        return true
     }
 
     async saveFile(options: {

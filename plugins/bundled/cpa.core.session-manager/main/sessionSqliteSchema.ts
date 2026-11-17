@@ -27,6 +27,8 @@ export interface SessionRow {
   environment_id?: string | null
   worktree_setup_json?: string | null
   pinned_summary_visible?: number | null
+  system_prompt?: string | null
+  pending_system_prompt_from?: string | null
   created_at: number
   updated_at: number
 }
@@ -95,6 +97,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     environment_id TEXT,
     worktree_setup_json TEXT,
     pinned_summary_visible INTEGER,
+    system_prompt TEXT,
+    pending_system_prompt_from TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
@@ -373,6 +377,7 @@ export function mapSessionRow(row: SessionRow): SessionItem {
     archivedAt: row.archived_at ?? undefined,
     rightSidebar: parseRightSidebar(row.right_sidebar_json),
     firstPromptAt: row.first_prompt_at ?? undefined,
+    pendingSystemPromptFrom: row.pending_system_prompt_from ?? undefined,
     modelId: row.model_id || undefined,
     reasoningEffort: row.reasoning_effort || undefined,
     speed:
@@ -428,6 +433,8 @@ export function applySessionSchemaAndMigrations(db: DatabaseType): void {
     'environment_id TEXT',
     'worktree_setup_json TEXT',
     'pinned_summary_visible INTEGER',
+    'system_prompt TEXT',
+    'pending_system_prompt_from TEXT',
   ]
   for (const col of sessionColumns) {
     try {

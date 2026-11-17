@@ -18,6 +18,7 @@ export function onRemoteSessionDelete(
 
 interface CreateSessionInput {
   id?: string
+  pendingSystemPromptFrom?: string
   title?: string
   projectId?: string
   scheduleId?: string
@@ -131,6 +132,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       projectId: input?.projectId,
       scheduleId: input?.scheduleId,
       parentSessionId: input?.parentSessionId,
+      pendingSystemPromptFrom: input?.pendingSystemPromptFrom,
       branch: input?.branch,
       baseBranch: input?.baseBranch,
       title,

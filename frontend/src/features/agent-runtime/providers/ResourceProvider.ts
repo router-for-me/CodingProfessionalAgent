@@ -83,6 +83,8 @@ export interface ResourceSnapshot {
     readonly searchableSkills?: readonly Skill[]
     readonly prompts: readonly PromptTemplate[]
     readonly systemPrompt: string
+    readonly mutableCoreSystemPrompt?: string
+    readonly verbatimContextPrompt?: string
     readonly systemPromptParts?: readonly ResourcePromptPart[]
     readonly diagnostics: readonly ResourceDiagnostic[]
 }
@@ -157,28 +159,33 @@ export async function loadResourcesFromProviders(
             resourceType: 'system',
             source: 'cpa.core.resources',
         })
+        const fallbackBase = buildSystemPrompt({
+            tools,
+            promptGuidelines: input.promptGuidelines,
+            language: input.language,
+            personality: input.personality,
+            gitSettings: input.gitSettings,
+        })
+        const fallbackMutableCore = buildSystemPrompt({
+            tools,
+            promptGuidelines: input.promptGuidelines,
+            language: input.language,
+            personality: input.personality,
+            gitSettings: input.gitSettings,
+            conditionalToolGuidelines: true,
+        })
         return freezeSnapshot({
             contextFiles: [],
             skills: [],
             searchableSkills: [],
             prompts: [],
-            systemPrompt: buildSystemPrompt({
-                tools,
-                promptGuidelines: input.promptGuidelines,
-                language: input.language,
-                personality: input.personality,
-                gitSettings: input.gitSettings,
-            }),
+            systemPrompt: fallbackBase,
+            mutableCoreSystemPrompt: fallbackMutableCore,
+            verbatimContextPrompt: '',
             systemPromptParts: [
                 {
                     id: 'base',
-                    content: buildSystemPrompt({
-                        tools,
-                        promptGuidelines: input.promptGuidelines,
-                        language: input.language,
-                        personality: input.personality,
-                        gitSettings: input.gitSettings,
-                    }),
+                    content: fallbackBase,
                 },
             ],
             diagnostics,
@@ -402,18 +409,37 @@ export async function loadResourcesFromProviders(
     const gitSection = formatGitSettingsForPrompt(input.gitSettings)
 
     let systemPrompt = basePrompt + skillsSection + rolesSection + gitSection
+    let trailingEnvSection = ''
     if (effectiveCwd) {
-        systemPrompt += `\nCurrent working directory: ${normalizePromptPath(effectiveCwd)}`
+        trailingEnvSection += `\nCurrent working directory: ${normalizePromptPath(effectiveCwd)}`
     }
     if (effectiveProjectPaths.length > 0) {
-        systemPrompt += '\nAllowed project paths:'
+        trailingEnvSection += '\nAllowed project paths:'
         for (const path of effectiveProjectPaths) {
-            systemPrompt += `\n- ${normalizePromptPath(path)}`
+            trailingEnvSection += `\n- ${normalizePromptPath(path)}`
         }
     }
     if (input.worktreePolicy) {
-        systemPrompt += `\n${formatWorktreeModePrompt(input.worktreePolicy)}`
+        trailingEnvSection += `\n${formatWorktreeModePrompt(input.worktreePolicy)}`
     }
+    systemPrompt += trailingEnvSection
+
+    const mutableBasePrompt = buildSystemPrompt({
+        customPrompt: system?.content,
+        appendSystemPrompt: combinedAppendSystemPrompt || undefined,
+        contextFiles: [],
+        tools,
+        promptGuidelines: effectivePromptGuidelines,
+        language: input.language,
+        personality: input.personality,
+        conditionalToolGuidelines: true,
+    })
+    const mutableCoreSystemPrompt =
+        mutableBasePrompt + skillsSection + rolesSection + gitSection + trailingEnvSection
+    const verbatimContextPrompt = contextFiles
+        .map((file) => file.content)
+        .filter((content) => content.length > 0)
+        .join('\n\n')
 
     // Build structured systemPromptParts array for inspection and rendering stability
     const seenPartIds = new Set<string>()
@@ -494,6 +520,8 @@ export async function loadResourcesFromProviders(
         searchableSkills,
         prompts,
         systemPrompt,
+        mutableCoreSystemPrompt,
+        verbatimContextPrompt,
         systemPromptParts,
         diagnostics,
     })
@@ -571,6 +599,8 @@ function freezeSnapshot(snapshot: {
     searchableSkills: Skill[]
     prompts: PromptTemplate[]
     systemPrompt: string
+    mutableCoreSystemPrompt?: string
+    verbatimContextPrompt?: string
     systemPromptParts?: ResourcePromptPart[]
     diagnostics: ResourceDiagnostic[]
 }): ResourceSnapshot {
@@ -609,6 +639,12 @@ function freezeSnapshot(snapshot: {
         searchableSkills: Object.freeze([...snapshot.searchableSkills]),
         prompts: Object.freeze([...snapshot.prompts]),
         systemPrompt: snapshot.systemPrompt,
+        ...(snapshot.mutableCoreSystemPrompt !== undefined
+            ? { mutableCoreSystemPrompt: snapshot.mutableCoreSystemPrompt }
+            : {}),
+        ...(snapshot.verbatimContextPrompt !== undefined
+            ? { verbatimContextPrompt: snapshot.verbatimContextPrompt }
+            : {}),
         ...(snapshot.systemPromptParts ? { systemPromptParts: Object.freeze([...snapshot.systemPromptParts]) } : {}),
         diagnostics: Object.freeze([...snapshot.diagnostics]),
     }

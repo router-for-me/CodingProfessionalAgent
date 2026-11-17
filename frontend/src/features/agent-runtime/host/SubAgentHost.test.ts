@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type {
     AgentTool,
     AssistantEntry,
@@ -1787,5 +1787,317 @@ describe('SubAgentHost', () => {
         expect(childSystemPrompt).toContain('Commit instructions: Prefix with subagent task ID')
         expect(childSystemPrompt).toContain('Pull request instructions: List changes clearly')
         expect(childSystemPrompt).toContain('</git>')
+    })
+
+    it('reuses parent session enhancedSystemPrompt for sub-agent turns and strips English Role boilerplate from developerPrompt', async () => {
+        const requests: SubAgentRunRequest[] = []
+        const host = new SubAgentHost({
+            generateId: (() => {
+                let n = 0
+                return () => `id-${++n}`
+            })(),
+            now: () => 1000,
+            run: async function* (request) {
+                requests.push(request)
+                const done: AssistantEntry = {
+                    id: 'a-sub',
+                    sessionId: request.sessionId,
+                    kind: 'assistant',
+                    model: request.model.id,
+                    content: [{ type: 'text', text: 'done' }],
+                    status: 'done',
+                    stopReason: 'stop',
+                    createdAt: 1001,
+                }
+                yield { type: 'assistant-end', runId: request.runId, sessionId: request.sessionId, entry: done }
+                yield { type: 'agent-end', runId: request.runId, sessionId: request.sessionId, entries: [request.userEntry, done] }
+            },
+        })
+
+        const prepared = preparedRun()
+        host.configure({
+            prepared,
+            codingTools: [readTool],
+            models: [model],
+            subagentsSettings: {
+                enabled: true,
+                concurrency: 5,
+                maxPerSession: 5,
+                maxDepth: 2,
+                roles: [
+                    {
+                        id: 'role-reviewer',
+                        name: 'Reviewer',
+                        description: 'Check bugs carefully.',
+                        modelId: model.id,
+                        reasoningEffort: 'medium',
+                    },
+                ],
+            },
+            getEnhancedSystemPrompt: (parentId: string) =>
+                parentId === 'session-1' ? 'PARENT_ENHANCED_PROMPT' : undefined,
+        } as any, 'session-1')
+        host.setParentContext({ sessionId: 'session-1', runId: 'run-1' })
+
+        await host.spawn('Review code', {
+            name: 'rev-1',
+            modelId: 'parent-model',
+            role: 'role-reviewer',
+        })
+        await host.sendMessage('rev-1', 'Follow up review')
+
+        expect(requests).toHaveLength(2)
+        expect(requests[0]?.systemPrompt).toBe('PARENT_ENHANCED_PROMPT')
+        expect(requests[1]?.systemPrompt).toBe('PARENT_ENHANCED_PROMPT')
+        expect(requests[0]?.enhancedSystemPrompt).toBe('PARENT_ENHANCED_PROMPT')
+        expect(requests[1]?.enhancedSystemPrompt).toBe('PARENT_ENHANCED_PROMPT')
+        expect(requests[0]?.developerPrompt).toBe('[Reviewer]\nCheck bugs carefully.')
+        expect(requests[0]?.developerPrompt).not.toContain('You must strictly act according to the following role prompt instructions:')
+    })
+
+    it('resolves parent enhanced system prompt asynchronously on resumeSubAgent and fails closed on error', async () => {
+        const requests: SubAgentRunRequest[] = []
+        const host = new SubAgentHost({
+            generateId: (() => { let n = 0; return () => `async-id-${++n}` })(),
+            now: () => 1000,
+            run: async function* (request) {
+                requests.push(request)
+                const done: AssistantEntry = {
+                    id: 'done-async',
+                    sessionId: request.sessionId,
+                    kind: 'assistant',
+                    content: [{ type: 'text', text: 'Resumed ok' }],
+                    status: 'done',
+                    stopReason: 'stop',
+                    createdAt: 1001,
+                }
+                yield { type: 'assistant-end', runId: request.runId, sessionId: request.sessionId, entry: done }
+                yield { type: 'agent-end', runId: request.runId, sessionId: request.sessionId, entries: [request.userEntry, done] }
+            },
+        })
+
+        const resolveEnhancedSystemPrompt = vi.fn(async (parentId: string) =>
+            parentId === 'session-1' ? 'PERSISTED_PARENT_ENHANCED_PROMPT' : undefined,
+        )
+        host.configure({
+            prepared: preparedRun(),
+            codingTools: [readTool],
+            models: [model],
+            resolveEnhancedSystemPrompt,
+        } as any, 'session-1')
+        host.hydrate([
+            {
+                id: 'sa-1',
+                sessionId: 'child-1',
+                parentSessionId: 'session-1',
+                name: 'Worker',
+                color: '#3dd68c',
+                icon: 'atom',
+                status: 'aborted',
+                modelId: model.id,
+                createdAt: 100,
+                updatedAt: 200,
+            },
+        ])
+
+        const userEntry: UserEntry = {
+            id: 'u-child-1',
+            sessionId: 'child-1',
+            kind: 'user',
+            content: [{ type: 'text', text: 'Continue work' }],
+            createdAt: 101,
+        }
+
+        const okRes = await host.resumeSubAgent('sa-1', { entries: [userEntry] })
+        expect(okRes.isError).toBeFalsy()
+        expect(resolveEnhancedSystemPrompt).toHaveBeenCalledWith(
+            'session-1',
+            expect.any(AbortSignal),
+        )
+        expect(requests).toHaveLength(1)
+        expect(requests[0]?.systemPrompt).toBe('PERSISTED_PARENT_ENHANCED_PROMPT')
+        expect(requests[0]?.enhancedSystemPrompt).toBe('PERSISTED_PARENT_ENHANCED_PROMPT')
+
+        // Fail closed when reading persisted parent prompt fails
+        const failHost = new SubAgentHost({
+            generateId: (() => { let n = 0; return () => `fail-id-${++n}` })(),
+            now: () => 1000,
+            run: async function* (request) {
+                requests.push(request)
+                yield { type: 'agent-end', runId: request.runId, sessionId: request.sessionId, entries: [] }
+            },
+        })
+        failHost.configure({
+            prepared: preparedRun(),
+            codingTools: [readTool],
+            models: [model],
+            resolveEnhancedSystemPrompt: vi.fn(async () => {
+                throw new Error('SQLite read failed')
+            }),
+        } as any, 'session-1')
+        failHost.hydrate([
+            {
+                id: 'sa-fail',
+                sessionId: 'child-fail',
+                parentSessionId: 'session-1',
+                name: 'Worker',
+                color: '#3dd68c',
+                icon: 'atom',
+                status: 'aborted',
+                modelId: model.id,
+                createdAt: 100,
+                updatedAt: 200,
+            },
+        ])
+        const failRes = await failHost.resumeSubAgent('sa-fail', { entries: [userEntry] })
+        expect(failRes.isError).toBe(true)
+        expect(requests).toHaveLength(1)
+        expect(failHost.list().find((a) => a.id === 'sa-fail')?.status).toBe('error')
+    })
+
+    it('fails closed instead of falling back to buildSubAgentSystemPrompt when enhancement is enabled and parent enhanced prompt is missing', async () => {
+        const requests: SubAgentRunRequest[] = []
+        const host = new SubAgentHost({
+            generateId: () => 'fail-closed-sub',
+            now: () => 1000,
+            run: async function* (request) {
+                requests.push(request)
+                yield { type: 'agent-end', runId: request.runId, sessionId: request.sessionId, entries: [] }
+            },
+        })
+
+        host.configure({
+            prepared: {
+                ...preparedRun(),
+                systemPromptEnhancement: {
+                    enabled: true,
+                    multilingualEnabled: false,
+                    allowedLanguages: ['en'],
+                    modelId: '',
+                },
+            },
+            codingTools: [readTool],
+            models: [model],
+            resolveEnhancedSystemPrompt: vi.fn(async () => undefined),
+        }, 'session-1')
+        host.hydrate([
+            {
+                id: 'sa-no-prompt',
+                sessionId: 'child-no-prompt',
+                parentSessionId: 'session-1',
+                name: 'Worker',
+                color: '#3dd68c',
+                icon: 'atom',
+                status: 'aborted',
+                modelId: model.id,
+                createdAt: 100,
+                updatedAt: 200,
+            },
+        ])
+
+        const res = await host.resumeSubAgent('sa-no-prompt', {
+            entries: [
+                {
+                    id: 'u-child-np',
+                    sessionId: 'child-no-prompt',
+                    kind: 'user',
+                    content: [{ type: 'text', text: 'Resume' }],
+                    createdAt: 101,
+                },
+            ],
+        })
+
+        expect(res.isError).toBe(true)
+        expect(requests).toHaveLength(0)
+        expect(host.list().find((a) => a.id === 'sa-no-prompt')?.status).toBe('error')
+    })
+
+    it('forwards runtime AbortSignal to resolveEnhancedSystemPrompt and cancels when stop() is called during prompt synthesis', async () => {
+        const requests: SubAgentRunRequest[] = []
+        const host = new SubAgentHost({
+            generateId: () => 'stop-during-synth',
+            now: () => 1000,
+            run: async function* (request) {
+                requests.push(request)
+                yield { type: 'agent-end', runId: request.runId, sessionId: request.sessionId, entries: [] }
+            },
+        })
+
+        let capturedSignal: AbortSignal | undefined
+        let synthesisStarted!: () => void
+        const synthesisStartedPromise = new Promise<void>((resolve) => {
+            synthesisStarted = resolve
+        })
+
+        host.configure({
+            prepared: {
+                ...preparedRun(),
+                systemPromptEnhancement: {
+                    enabled: true,
+                    multilingualEnabled: false,
+                    allowedLanguages: ['en'],
+                    modelId: '',
+                },
+            },
+            codingTools: [readTool],
+            models: [model],
+            resolveEnhancedSystemPrompt: vi.fn(async (_parentId: string, signal?: AbortSignal) => {
+                capturedSignal = signal
+                synthesisStarted()
+                return await new Promise<string | undefined>((_resolve, reject) => {
+                    if (signal?.aborted) {
+                        const err = new Error('Aborted')
+                        err.name = 'AbortError'
+                        reject(err)
+                        return
+                    }
+                    signal?.addEventListener('abort', () => {
+                        const err = new Error('Aborted')
+                        err.name = 'AbortError'
+                        reject(err)
+                    }, { once: true })
+                })
+            }) as any,
+        }, 'session-1')
+
+        host.hydrate([
+            {
+                id: 'sa-stop-synth',
+                sessionId: 'child-stop-synth',
+                parentSessionId: 'session-1',
+                name: 'Worker',
+                color: '#3dd68c',
+                icon: 'atom',
+                status: 'aborted',
+                modelId: model.id,
+                createdAt: 100,
+                updatedAt: 200,
+            },
+        ])
+
+        const resumePromise = host.resumeSubAgent('sa-stop-synth', {
+            entries: [
+                {
+                    id: 'u-child-stop',
+                    sessionId: 'child-stop-synth',
+                    kind: 'user',
+                    content: [{ type: 'text', text: 'Resume' }],
+                    createdAt: 101,
+                },
+            ],
+        })
+
+        await synthesisStartedPromise
+        expect(capturedSignal).toBeInstanceOf(AbortSignal)
+        expect(capturedSignal?.aborted).toBe(false)
+
+        const stopRes = host.stop('sa-stop-synth')
+        expect(stopRes.isError).toBeFalsy()
+        expect(capturedSignal?.aborted).toBe(true)
+
+        const res = await resumePromise
+        expect(res.isError).toBe(true)
+        expect(requests).toHaveLength(0)
+        expect(host.list().find((a) => a.id === 'sa-stop-synth')?.status).toBe('aborted')
     })
 })

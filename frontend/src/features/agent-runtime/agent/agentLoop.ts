@@ -111,6 +111,8 @@ export interface AgentRunInput {
     userEntry?: UserEntry
     model: ModelCatalogEntry
     systemPrompt: string
+    /** Locked enhanced session system prompt passed into compaction paths when present. */
+    enhancedSystemPrompt?: string
     developerPrompt?: string
     tools: readonly AgentTool[]
     /** No provider request or pending tool may run without this policy. */
@@ -993,6 +995,7 @@ export class AgentLoop {
 
         const model = input.model
         let systemPrompt = input.systemPrompt
+        const enhancedSystemPrompt = input.enhancedSystemPrompt
         let tools = input.tools
         let toolDefs = toolDefinitionsOf(tools)
         let toolsByName = new Map(tools.map((t) => [t.name, t]))
@@ -1052,7 +1055,7 @@ export class AgentLoop {
                 toolsByName = new Map(tools.map((tool) => [tool.name, tool]))
                 toolDefs = toolDefinitionsOf(tools)
                 if (prepared.systemMessage) {
-                    systemPrompt += `\n\n${prepared.systemMessage}`
+                    if (!enhancedSystemPrompt) systemPrompt += `\n\n${prepared.systemMessage}`
                     const entry: UserEntry = { id: this.generateId(), sessionId: input.sessionId, createdAt: this.now(), kind: 'user', content: [{ type: 'text', text: `[System notice] ${prepared.systemMessage}` }] }
                     stableEntries.push(entry)
                     yield { type: 'user-entry', ...scope, entry }
@@ -1074,6 +1077,7 @@ export class AgentLoop {
                 fastContextCompaction,
                 force: false,
                 trigger: 'auto',
+                sessionSystemPrompt: enhancedSystemPrompt,
                 cachedContext: fastContextCompaction
                     ? undefined
                     : runCacheState.cachedContext,
@@ -1129,6 +1133,7 @@ export class AgentLoop {
                     fastContextCompaction,
                     force: false,
                     trigger: 'auto',
+                    sessionSystemPrompt: enhancedSystemPrompt,
                     cachedContext: fastContextCompaction
                         ? undefined
                         : runCacheState.cachedContext,
@@ -1153,6 +1158,7 @@ export class AgentLoop {
                     assistantId,
                     model,
                     systemPrompt,
+                    enhancedSystemPrompt,
                     developerPrompt: input.developerPrompt,
                     toolDefs,
                     reasoningEffort: activeReasoningEffort,
@@ -1310,6 +1316,7 @@ export class AgentLoop {
                     fastContextCompaction,
                     force: false,
                     trigger: 'auto',
+                    sessionSystemPrompt: enhancedSystemPrompt,
                     cachedContext: fastContextCompaction
                         ? undefined
                         : runCacheState.cachedContext,
@@ -1363,6 +1370,7 @@ export class AgentLoop {
             fastContextCompaction: boolean
             force: boolean
             trigger?: 'auto' | 'manual' | 'overflow'
+            sessionSystemPrompt?: string
             cachedContext?: CachedCompactionContext | null
             runCacheState?: {
                 readonly token: number
@@ -1439,6 +1447,7 @@ export class AgentLoop {
                     settings: args.settings,
                     force: args.force,
                     trigger: args.trigger ?? (args.force ? 'overflow' : 'auto'),
+                    sessionSystemPrompt: args.sessionSystemPrompt,
                     cachedContext: args.cachedContext,
                     now: this.now,
                     generateId: this.generateId,
@@ -1518,6 +1527,7 @@ export class AgentLoop {
         assistantId: string
         model: ModelCatalogEntry
         systemPrompt: string
+        enhancedSystemPrompt?: string
         developerPrompt?: string
         toolDefs: ProtocolToolDefinition[] | undefined
         reasoningEffort?: string
@@ -1630,6 +1640,19 @@ export class AgentLoop {
                     'aborted',
                 )
                 return { kind: 'aborted', entry }
+            }
+
+            // Fail closed if any onRequest middleware altered a locked enhanced system prompt.
+            if (
+                args.enhancedSystemPrompt !== undefined &&
+                effectiveInput.systemPrompt !== args.enhancedSystemPrompt
+            ) {
+                const entry = finalizeErrorAssistant(
+                    seed,
+                    'Locked enhanced system prompt cannot be modified by middleware',
+                    'error',
+                )
+                return { kind: 'error', entry }
             }
 
             let streamError: unknown
@@ -1826,6 +1849,7 @@ export class AgentLoop {
                         settings: null,
                         fastContextCompaction,
                         force: true,
+                        sessionSystemPrompt: args.enhancedSystemPrompt,
                         runCacheState: args.runCacheState,
                         resetBaseReasoningOnCommit: false,
                         scope,
@@ -1913,6 +1937,7 @@ export class AgentLoop {
                         settings: null,
                         fastContextCompaction,
                         force: true,
+                        sessionSystemPrompt: args.enhancedSystemPrompt,
                         runCacheState: args.runCacheState,
                         resetBaseReasoningOnCommit: false,
                         scope,

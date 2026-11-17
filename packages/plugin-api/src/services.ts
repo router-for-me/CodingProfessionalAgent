@@ -6,6 +6,7 @@
 import type {
     ChatRendererContribution,
     ChatRendererTarget,
+    ComposerAttachment,
     HookEventName,
     NavigationContribution,
 } from './contributions.js'
@@ -178,6 +179,8 @@ export interface WorktreeSessionSetup {
 
 export interface SessionItem {
     id: string
+    /** Persisted inheritance barrier, resolved atomically before any prompt is returned. */
+    pendingSystemPromptFrom?: string
     projectId?: string
     scheduleId?: string
     parentSessionId?: string
@@ -315,6 +318,89 @@ export interface EditorSettings {
   followUpMode: EditorFollowUpMode
 }
 
+export type SystemPromptLanguage =
+  | 'en'
+  | 'zh-CN'
+  | 'zh-TW'
+  | 'ja'
+  | 'de'
+  | 'es'
+  | 'pt'
+  | 'it'
+
+export const ALL_SYSTEM_PROMPT_LANGUAGES: readonly SystemPromptLanguage[] = Object.freeze([
+  'en',
+  'zh-CN',
+  'zh-TW',
+  'ja',
+  'de',
+  'es',
+  'pt',
+  'it',
+])
+
+const VALID_SYSTEM_PROMPT_LANGUAGES = new Set<string>(ALL_SYSTEM_PROMPT_LANGUAGES)
+
+export interface SystemPromptEnhancementSettings {
+  /** Whether per-session unique system prompt enhancement is enabled. */
+  enabled: boolean
+  /** Whether multilingual construction is allowed; when false only English ('en') is used. */
+  multilingualEnabled: boolean
+  /** Allowed target languages sampled when multilingual construction is enabled (minimum 1 item). */
+  allowedLanguages: SystemPromptLanguage[]
+  /** Model ID used to synthesize the enhanced system prompt; empty falls back to default enabled model. */
+  modelId: string
+}
+
+export const DEFAULT_SYSTEM_PROMPT_ENHANCEMENT_SETTINGS: SystemPromptEnhancementSettings = Object.freeze({
+  enabled: false,
+  multilingualEnabled: false,
+  allowedLanguages: Object.freeze(['en']) as SystemPromptLanguage[],
+  modelId: '',
+}) as SystemPromptEnhancementSettings
+
+export function normalizeSystemPromptEnhancementSettings(raw: unknown): SystemPromptEnhancementSettings {
+  if (typeof raw !== 'object' || raw === null) {
+    return {
+      ...DEFAULT_SYSTEM_PROMPT_ENHANCEMENT_SETTINGS,
+      allowedLanguages: [...DEFAULT_SYSTEM_PROMPT_ENHANCEMENT_SETTINGS.allowedLanguages],
+    }
+  }
+  const value = raw as Partial<Record<keyof SystemPromptEnhancementSettings, unknown>>
+  const enabled = typeof value.enabled === 'boolean'
+    ? value.enabled
+    : DEFAULT_SYSTEM_PROMPT_ENHANCEMENT_SETTINGS.enabled
+  const multilingualEnabled = typeof value.multilingualEnabled === 'boolean'
+    ? value.multilingualEnabled
+    : DEFAULT_SYSTEM_PROMPT_ENHANCEMENT_SETTINGS.multilingualEnabled
+
+  const allowedLanguages: SystemPromptLanguage[] = []
+  const seen = new Set<SystemPromptLanguage>()
+  if (Array.isArray(value.allowedLanguages)) {
+    for (const item of value.allowedLanguages) {
+      if (typeof item === 'string' && VALID_SYSTEM_PROMPT_LANGUAGES.has(item)) {
+        const lang = item as SystemPromptLanguage
+        if (!seen.has(lang)) {
+          seen.add(lang)
+          allowedLanguages.push(lang)
+        }
+      }
+    }
+  }
+  if (allowedLanguages.length === 0) {
+    allowedLanguages.push('en')
+  }
+
+  const modelId = typeof value.modelId === 'string' ? value.modelId.trim() : ''
+
+  return {
+    enabled,
+    multilingualEnabled,
+    allowedLanguages,
+    modelId,
+  }
+}
+
 export interface AppSettings {
   toolMode?: 'direct' | 'code' | 'code-only'
   defaultExecYieldMs?: number
@@ -365,6 +451,7 @@ export interface AppSettings {
   subagents?: SubagentsSettings
   skills?: SkillsSettings
   editor?: EditorSettings
+  systemPromptEnhancement?: SystemPromptEnhancementSettings
 }
 
 export interface WorktreeSetupInput {
@@ -571,6 +658,15 @@ export interface UiService {
     getComposerDraftReferences?(key: string): SkillReference[] | undefined
     setComposerDraft?(key: string, draft: string, references?: readonly SkillReference[]): void
     clearComposerDraft?(key: string): void
+    getComposerDraftAttachments?(key: string): readonly ComposerAttachment[] | undefined
+    setComposerDraftAttachments?(
+        key: string,
+        attachments:
+            | readonly ComposerAttachment[]
+            | ((prev: readonly ComposerAttachment[]) => readonly ComposerAttachment[]),
+    ): void
+    clearComposerDraftAttachments?(key: string): void
+    consumeComposerRestoredAttachments?(key: string): readonly ComposerImage[]
     openRightPanelTab?(tabId: string, options?: { activate?: boolean; params?: Record<string, unknown> }): void
     closeRightPanelTab?(tabId: string): void
     toggleRightSidebarCollapsed?(): void
@@ -698,6 +794,7 @@ export interface SettingsService {
     setSubagentSettings?(partial: Partial<SubagentsSettings>): void
     setSkillsSettings?(partial: Partial<SkillsSettings>): void
     setEditorSettings?(partial: Partial<EditorSettings>): void
+    setSystemPromptEnhancement?(partial: Partial<SystemPromptEnhancementSettings>): void
     setAppearance?(partial: Partial<AppSettings>): void
     hydrate?(partial: Partial<AppSettings>): void
 }

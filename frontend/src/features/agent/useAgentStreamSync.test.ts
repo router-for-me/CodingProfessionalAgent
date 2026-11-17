@@ -5,6 +5,7 @@ import type { SubAgentRecord, UserEntry } from '@cpa/plugin-api'
 import type { ModelCatalogEntry } from '@/features/models/types'
 import type { AgentRunEvent } from '@/features/agent-runtime/agent/types'
 import type { AgentService } from './AgentService'
+import { AgentPreflightError } from './types'
 import type {
     AgentCompactInput,
     AgentCompactResult,
@@ -39,7 +40,8 @@ import {
     bindPersistence,
     flushPendingPersistence,
 } from '@/application/services/persistenceService'
-import { setHostBridge } from '@/application/services/hostTransport'
+import { getHostBridge, setHostBridge } from '@/application/services/hostTransport'
+import { forkSession, waitForForkedSessionPrompt } from '@/features/agent-runtime/session/forkSession'
 
 const model: ModelCatalogEntry = {
     id: 'test-model',
@@ -308,6 +310,270 @@ describe('useAgentStreamSync', () => {
             )
         }
     }
+
+
+    it.each(['prepare', 'stream'] as const)('broadcasts delegated enhancement failure from %s with originating entry id', async (phase) => {
+        const failure = new AgentPreflightError('system_prompt_enhancement_failed', 'Build failed', 'agent.preflight.system_prompt_enhancement_failed')
+        if (phase === 'prepare') service.prepareImpl = async () => { throw failure }
+        else service.streamChat = async function* () { throw failure }
+        const id = useSessionStore.getState().createSession({ id: `delegated-failure-${phase}` })
+        renderHook(() => useAgentStream(), { wrapper: createWrapper(service) })
+        await act(async () => {
+            for (const listener of nativeEventListeners) listener({ kind: 'session:delegate-run', data: JSON.stringify({ sessionId: id, text: 'original', userEntryId: 'origin-user' }) })
+        })
+        await waitFor(() => expect(broadcastStreamEventMock.mock.calls.some((call: any[]) => {
+            const event = call[2]
+            return event.type === 'error' && event.preflightCode === 'system_prompt_enhancement_failed' && event.userEntryId === 'origin-user'
+        })).toBe(true))
+    })
+
+    it.each([false, true])('recovers originating browser draft, references and attachments after switching sessions without overwriting new input (%s)', async (newDraft) => {
+        Object.defineProperty(navigator, 'userAgent', { value: 'Mozilla/5.0 Chrome/120.0.0.0 Safari/537.36', configurable: true })
+        const id = useSessionStore.getState().createSession({ id: `browser-failure-${newDraft}` })
+        const { result } = renderHook(() => useAgentStream(), { wrapper: createWrapper(service) })
+        const image = { id: 'original-image', name: 'original.png', data: 'YWJj', mimeType: 'image/png', width: 10, height: 20 }
+        const refs = [{ start: 0, name: 'review' }]
+        await act(async () => {
+            await result.current.send({ sessionId: id, text: 'original prompt', images: [image], skillReferences: refs,
+                onSessionAccepted: () => useUiStore.getState().setComposerDraftForSession(id, '') })
+            useSessionStore.getState().createSession({ id: 'other-session' })
+            if (newDraft) useUiStore.getState().setComposerDraftForSession(id, 'new input')
+            for (const listener of nativeEventListeners) listener({ kind: 'session:stream-event', data: JSON.stringify({
+                sessionId: id, runId: 'host-run', event: { type: 'error', sessionId: id, runId: 'host-run', message: 'Build failed',
+                    preflightCode: 'system_prompt_enhancement_failed', userEntryId: delegateRunMock.mock.calls[0][0].userEntryId },
+            }) })
+        })
+        expect(useUiStore.getState().composerDrafts[`session:${id}`]).toBe(newDraft ? 'new input' : 'original prompt')
+        expect(useUiStore.getState().composerDraft).toBe('')
+        if (!newDraft) {
+            expect(useUiStore.getState().composerDraftReferences[`session:${id}`]).toEqual(refs)
+            expect((useUiStore.getState() as any).composerRestoredAttachments[`session:${id}`]).toEqual([image])
+        } else expect((useUiStore.getState() as any).composerRestoredAttachments?.[`session:${id}`]).toBeUndefined()
+        expect(useUiStore.getState().toasts.length).toBeGreaterThan(0)
+        expect(useMessageStore.getState().getEntries(id).some((entry) => entry.kind === 'assistant' && entry.status === 'error')).toBe(true)
+    })
+
+
+    it('does not delegate browser sends until the local fork prompt barrier completes', async () => {
+        Object.defineProperty(navigator, 'userAgent', { value: 'Mozilla/5.0 Chrome/120 Safari/537.36', configurable: true })
+        let release!: (prompt: string) => void
+        const sourcePrompt = new Promise<string>((resolve) => { release = resolve })
+        const bridge = getHostBridge() as any
+        bridge.SessionGetSystemPrompt = vi.fn(async () => sourcePrompt)
+        bridge.SessionSetSystemPrompt = vi.fn(async () => true)
+        useSessionStore.getState().createSession({ id: 'browser-fork-source' })
+        const id = forkSession({ sessionId: 'browser-fork-source' })!
+        const { result } = renderHook(() => useAgentStream(), { wrapper: createWrapper(service) })
+        let sending!: Promise<string | null>
+        let delegatedBeforeCopy = false
+        await act(async () => {
+            sending = result.current.send({ sessionId: id, text: 'fork follow-up' })
+            await new Promise((resolve) => setTimeout(resolve, 0))
+            delegatedBeforeCopy = delegateRunMock.mock.calls.length > 0
+            release('SOURCE_PROMPT')
+            await sending
+            await waitForForkedSessionPrompt(id)
+        })
+        expect(delegatedBeforeCopy).toBe(false)
+        expect(delegateRunMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('keeps the latest delegated draft recoverable when an older queued run completes', async () => {
+        Object.defineProperty(navigator, 'userAgent', { value: 'Mozilla/5.0 Chrome/120 Safari/537.36', configurable: true })
+        const id = useSessionStore.getState().createSession({ id: 'queued-origin' })
+        const { result } = renderHook(() => useAgentStream(), { wrapper: createWrapper(service) })
+        await act(async () => {
+            await result.current.send({ sessionId: id, text: 'queued prompt' })
+            useUiStore.getState().setComposerDraftForSession(id, '')
+            for (const listener of nativeEventListeners) listener({ kind: 'session:stream-event', data: JSON.stringify({
+                sessionId: id, runId: 'older-run', event: { type: 'agent-end', sessionId: id, runId: 'older-run' },
+            }) })
+            for (const listener of nativeEventListeners) listener({ kind: 'session:stream-event', data: JSON.stringify({
+                sessionId: id, runId: 'newer-run', event: { type: 'error', sessionId: id, runId: 'newer-run', message: 'Build failed', preflightCode: 'system_prompt_enhancement_failed', userEntryId: delegateRunMock.mock.calls[0][0].userEntryId },
+            }) })
+        })
+        expect(useUiStore.getState().composerDrafts[`session:${id}`]).toBe('queued prompt')
+    })
+
+    it('cleans up browser delegatedDrafts image payloads on terminal run completion without deleting newer queued drafts', async () => {
+        Object.defineProperty(navigator, 'userAgent', { value: 'Mozilla/5.0 Chrome/120 Safari/537.36', configurable: true })
+        const id = useSessionStore.getState().createSession({ id: 'browser-cleanup' })
+        const otherId = useSessionStore.getState().createSession({ id: 'other-view' })
+        const { result } = renderHook(() => useAgentStream(), { wrapper: createWrapper(service) })
+        const img1 = { id: 'img-1', name: 'a.png', data: 'BASE64_PAYLOAD_1', mimeType: 'image/png', width: 10, height: 10 }
+        const img2 = { id: 'img-2', name: 'b.png', data: 'BASE64_PAYLOAD_2', mimeType: 'image/png', width: 10, height: 10 }
+
+        await act(async () => {
+            await result.current.send({ sessionId: id, text: 'first prompt', images: [img1] })
+            await result.current.send({ sessionId: id, text: 'second queued prompt', images: [img2] })
+            // Switch to a different session so background cleanup must still occur
+            useSessionStore.getState().setCurrentSession(otherId)
+        })
+
+        const firstUserEntryId = delegateRunMock.mock.calls[0][0].userEntryId
+        const secondUserEntryId = delegateRunMock.mock.calls[1][0].userEntryId
+        expect(getRuntime(service).delegatedDrafts.size).toBe(2)
+
+        await act(async () => {
+            // Host starts run-1 with first userEntryId
+            for (const listener of nativeEventListeners) {
+                listener({
+                    kind: 'session:stream-event',
+                    data: JSON.stringify({
+                        sessionId: id,
+                        runId: 'run-1',
+                        event: {
+                            type: 'user-entry',
+                            sessionId: id,
+                            runId: 'run-1',
+                            entry: { id: firstUserEntryId, sessionId: id, kind: 'user', createdAt: 1, content: [] },
+                        },
+                    }),
+                })
+            }
+            // run-1 reaches terminal agent-end
+            for (const listener of nativeEventListeners) {
+                listener({
+                    kind: 'session:stream-event',
+                    data: JSON.stringify({
+                        sessionId: id,
+                        runId: 'run-1',
+                        event: { type: 'agent-end', sessionId: id, runId: 'run-1' },
+                    }),
+                })
+            }
+        })
+
+        // First draft is freed while second queued draft remains recoverable
+        expect(getRuntime(service).delegatedDrafts.size).toBe(1)
+
+        await act(async () => {
+            for (const listener of nativeEventListeners) {
+                listener({
+                    kind: 'session:stream-event',
+                    data: JSON.stringify({
+                        sessionId: id,
+                        runId: 'run-2',
+                        event: {
+                            type: 'user-entry',
+                            sessionId: id,
+                            runId: 'run-2',
+                            entry: { id: secondUserEntryId, sessionId: id, kind: 'user', createdAt: 2, content: [] },
+                        },
+                    }),
+                })
+            }
+            for (const listener of nativeEventListeners) {
+                listener({
+                    kind: 'session:run-status',
+                    data: JSON.stringify({ sessionId: id, status: 'idle', runId: 'run-2' }),
+                })
+            }
+        })
+
+        expect(getRuntime(service).delegatedDrafts.size).toBe(0)
+    })
+
+    it('evicts delegatedDrafts on non-enhancement preflight failure and pre-start abort without clobbering newer queued drafts', async () => {
+        Object.defineProperty(navigator, 'userAgent', { value: 'Mozilla/5.0 Chrome/120 Safari/537.36', configurable: true })
+        const id = useSessionStore.getState().createSession({ id: 'browser-preflight-evict' })
+        const { result } = renderHook(() => useAgentStream(), { wrapper: createWrapper(service) })
+        const img1 = { id: 'img-pf-1', name: 'a.png', data: 'BASE64_PF_1', mimeType: 'image/png', width: 10, height: 10 }
+        const img2 = { id: 'img-pf-2', name: 'b.png', data: 'BASE64_PF_2', mimeType: 'image/png', width: 10, height: 10 }
+
+        await act(async () => {
+            await result.current.send({ sessionId: id, text: 'first failing prompt', images: [img1] })
+            await result.current.send({ sessionId: id, text: 'second queued prompt', images: [img2] })
+        })
+
+        const firstReq = delegateRunMock.mock.calls[0][0]
+        const secondReq = delegateRunMock.mock.calls[1][0]
+        expect(getRuntime(service).delegatedDrafts.size).toBe(2)
+
+        // 1. Non-enhancement preflight error emitted before user-entry
+        await act(async () => {
+            for (const listener of nativeEventListeners) {
+                listener({
+                    kind: 'session:stream-event',
+                    data: JSON.stringify({
+                        sessionId: id,
+                        runId: 'preflight-err-run-1',
+                        event: {
+                            type: 'error',
+                            sessionId: id,
+                            runId: 'preflight-err-run-1',
+                            message: 'Missing API key',
+                            preflightCode: 'missing_api_key',
+                            userEntryId: firstReq.userEntryId,
+                            requestId: firstReq.requestId,
+                        },
+                    }),
+                })
+            }
+        })
+
+        expect(getRuntime(service).delegatedDrafts.size).toBe(1)
+        expect(getRuntime(service).delegatedDrafts.has(secondReq.userEntryId)).toBe(true)
+
+        // 2. Pre-start cancellation (aborted event before user-entry) on second draft
+        await act(async () => {
+            for (const listener of nativeEventListeners) {
+                listener({
+                    kind: 'session:stream-event',
+                    data: JSON.stringify({
+                        sessionId: id,
+                        runId: 'preflight-abort-run-2',
+                        event: {
+                            type: 'aborted',
+                            sessionId: id,
+                            runId: 'preflight-abort-run-2',
+                            userEntryId: secondReq.userEntryId,
+                            requestId: secondReq.requestId,
+                        },
+                    }),
+                })
+            }
+        })
+
+        expect(getRuntime(service).delegatedDrafts.size).toBe(0)
+    })
+
+    it('Desktop broadcasts request-scoped stream event on non-enhancement delegated preflight failure before user-entry', async () => {
+        service.prepareImpl = async () => {
+            throw new AgentPreflightError('missing_api_key', 'CLIProxyAPI API key is required', 'agent.preflight.missing_api_key')
+        }
+        const id = useSessionStore.getState().createSession({ id: 'host-non-enh-preflight' })
+        renderHook(() => useAgentStream(), { wrapper: createWrapper(service) })
+
+        await act(async () => {
+            for (const listener of nativeEventListeners) {
+                listener({
+                    kind: 'session:delegate-run',
+                    data: JSON.stringify({
+                        requestId: 'req-non-enh-1',
+                        sessionId: id,
+                        text: 'prompt',
+                        userEntryId: 'user-non-enh-1',
+                    }),
+                })
+            }
+        })
+
+        await waitFor(() => {
+            expect(
+                broadcastStreamEventMock.mock.calls.some((call: any[]) => {
+                    const event = call[2]
+                    return (
+                        call[0] === id &&
+                        event?.type === 'error' &&
+                        event?.preflightCode === 'missing_api_key' &&
+                        event?.userEntryId === 'user-non-enh-1' &&
+                        event?.requestId === 'req-non-enh-1'
+                    )
+                }),
+            ).toBe(true)
+        })
+    })
 
     it('Host mode broadcasts SessionBroadcastRunStatus and SessionBroadcastStreamEvent', async () => {
         service.streamEvents = [
@@ -5971,6 +6237,16 @@ describe('useAgentStreamSync', () => {
             createdAt: Date.now() - 5000,
             updatedAt: Date.now() - 5000,
         })
+        useUiStore.getState().setComposerDraftForSession(doomedSessionId, 'Doomed draft', [{ start: 0, name: 'sk' }])
+        useUiStore.getState().setComposerDraftAttachments(`session:${doomedSessionId}`, [
+            { id: 'att-doomed', kind: 'image', name: 'doomed.png', mimeType: 'image/png', dataUrl: 'data:image/png;base64,AAA' },
+        ])
+        useUiStore.getState().setComposerRestoredAttachments(doomedSessionId, [
+            { id: 'rest-doomed', name: 'rest-doomed.png', mimeType: 'image/png', data: 'BBB', width: 10, height: 10 },
+        ])
+        useUiStore.getState().setComposerDraftAttachments('session:other-session', [
+            { id: 'att-other', kind: 'image', name: 'other.png', mimeType: 'image/png', dataUrl: 'data:image/png;base64,CCC' },
+        ])
 
         const { result, unmount } = renderHook(() => useAgentStream(doomedSessionId), {
             wrapper: createWrapper(delService),
@@ -6043,9 +6319,14 @@ describe('useAgentStreamSync', () => {
             expect(ackMock).toHaveBeenCalledWith('ghost-req')
         })
 
-        // Session must NOT be recreated in session store
+        // Session must NOT be recreated in session store and composer draft/attachments must be cleared
         const recreated = useSessionStore.getState().sessions.find((s) => s.id === doomedSessionId)
         expect(recreated).toBeUndefined()
+        expect(useUiStore.getState().composerDrafts[`session:${doomedSessionId}`]).toBeUndefined()
+        expect(useUiStore.getState().composerDraftReferences[`session:${doomedSessionId}`]).toBeUndefined()
+        expect(useUiStore.getState().composerDraftAttachments[`session:${doomedSessionId}`]).toBeUndefined()
+        expect(useUiStore.getState().composerRestoredAttachments[`session:${doomedSessionId}`]).toBeUndefined()
+        expect(useUiStore.getState().composerDraftAttachments['session:other-session']).toHaveLength(1)
 
         await act(async () => {
             holdResolve()
@@ -6590,6 +6871,959 @@ describe('useAgentStreamSync', () => {
 
         const finalSession = useSessionStore.getState().sessions.find((s) => s.id === sessionId)
         expect(finalSession?.title).toBe('User Manual Title')
+
+        unmount()
+    })
+
+    it('ignores late enhancement failure stream-event after session:deleted without recreating message cache, toasts, or drafts', async () => {
+        Object.defineProperty(navigator, 'userAgent', {
+            value: 'Mozilla/5.0 Chrome/120.0.0.0 Safari/537.36',
+            configurable: true,
+        })
+        const id = useSessionStore.getState().createSession({ id: 'deleted-enh-failure-session' })
+        const { result, unmount } = renderHook(() => useAgentStream(), {
+            wrapper: createWrapper(service),
+        })
+        const image = {
+            id: 'deleted-img',
+            name: 'deleted.png',
+            data: 'YWJj',
+            mimeType: 'image/png',
+            width: 10,
+            height: 20,
+        }
+        const refs = [{ start: 0, name: 'review' }]
+
+        await act(async () => {
+            await result.current.send({
+                sessionId: id,
+                text: 'original prompt',
+                images: [image],
+                skillReferences: refs,
+                onSessionAccepted: () => useUiStore.getState().setComposerDraftForSession(id, ''),
+            })
+        })
+
+        const req = delegateRunMock.mock.calls[0][0]
+        expect(getRuntime(service).delegatedDrafts.size).toBe(1)
+
+        // Delete session and clear its message cache as application deletion handling does
+        act(() => {
+            for (const listener of nativeEventListeners) {
+                listener({
+                    kind: 'session:deleted',
+                    data: JSON.stringify({ sessionId: id }),
+                })
+            }
+            useMessageStore.getState().removeSessionMessages(id)
+        })
+
+        expect(getRuntime(service).deletedSessionIds.has(id)).toBe(true)
+        expect(getRuntime(service).delegatedDrafts.size).toBe(0)
+        expect(useMessageStore.getState().getEntries(id)).toEqual([])
+        expect(useUiStore.getState().toasts).toEqual([])
+
+        // Late enhancement failure arrives after session deletion
+        act(() => {
+            for (const listener of nativeEventListeners) {
+                listener({
+                    kind: 'session:stream-event',
+                    data: JSON.stringify({
+                        sessionId: id,
+                        runId: 'late-host-run',
+                        event: {
+                            type: 'error',
+                            sessionId: id,
+                            runId: 'late-host-run',
+                            message: 'Build failed',
+                            preflightCode: 'system_prompt_enhancement_failed',
+                            userEntryId: req.userEntryId,
+                            requestId: req.requestId,
+                        },
+                    }),
+                })
+            }
+        })
+
+        expect(useMessageStore.getState().getEntries(id)).toEqual([])
+        expect(useUiStore.getState().toasts).toEqual([])
+        expect(getRuntime(service).delegatedDrafts.size).toBe(0)
+        expect(useUiStore.getState().composerDrafts[`session:${id}`]).toBeUndefined()
+        expect(useUiStore.getState().composerDraftReferences[`session:${id}`]).toBeUndefined()
+        expect(useUiStore.getState().composerRestoredAttachments[`session:${id}`]).toBeUndefined()
+
+        unmount()
+    })
+
+    it('preserves browser draft, skillReferences, and attachments when early enhancement failure arrives before SessionDelegateRun settles', async () => {
+        Object.defineProperty(navigator, 'userAgent', {
+            value: 'Mozilla/5.0 Chrome/120.0.0.0 Safari/537.36',
+            configurable: true,
+        })
+        const id = useSessionStore.getState().createSession({ id: 'early-enh-failure-race' })
+        const refs = [{ start: 0, name: 'review' }]
+        const image = {
+            id: 'early-img',
+            name: 'early.png',
+            data: 'YWJj',
+            mimeType: 'image/png',
+            width: 10,
+            height: 20,
+        }
+        useUiStore.getState().setComposerDraftForSession(id, 'original prompt', refs)
+        useUiStore.getState().setComposerDraftAttachments(`session:${id}`, [
+            {
+                id: image.id,
+                name: image.name,
+                kind: 'image',
+                mimeType: image.mimeType,
+                data: image.data,
+                width: image.width,
+                height: image.height,
+            },
+        ])
+
+        let releaseDelegate!: (sid: string) => void
+        const delegateHold = new Promise<string>((resolve) => {
+            releaseDelegate = resolve
+        })
+        delegateRunMock.mockImplementationOnce(async () => delegateHold)
+
+        const { result, unmount } = renderHook(() => useAgentStream(), {
+            wrapper: createWrapper(service),
+        })
+
+        // Simulate Composer clearing draft only if send() resolves without rejecting
+        let sendSettledRejected = false
+        let sendPromise!: Promise<string | null>
+        act(() => {
+            sendPromise = result.current
+                .send({
+                    sessionId: id,
+                    text: 'original prompt',
+                    images: [image],
+                    skillReferences: refs,
+                })
+                .then((sid) => {
+                    useUiStore.getState().setComposerDraftForSession(id, '', [])
+                    useUiStore.getState().setComposerDraftAttachments(`session:${id}`, [])
+                    return sid
+                })
+                .catch((err) => {
+                    sendSettledRejected = true
+                    throw err
+                })
+        })
+
+        await waitFor(() => {
+            expect(delegateRunMock).toHaveBeenCalledTimes(1)
+        })
+        const req = delegateRunMock.mock.calls[0][0]
+
+        // Host emits enhancement failure BEFORE SessionDelegateRun settles
+        act(() => {
+            for (const listener of nativeEventListeners) {
+                listener({
+                    kind: 'session:stream-event',
+                    data: JSON.stringify({
+                        sessionId: id,
+                        runId: 'early-host-run',
+                        event: {
+                            type: 'error',
+                            sessionId: id,
+                            runId: 'early-host-run',
+                            message: 'Build failed',
+                            preflightCode: 'system_prompt_enhancement_failed',
+                            userEntryId: req.userEntryId,
+                            requestId: req.requestId,
+                        },
+                    }),
+                })
+            }
+        })
+
+        // Now SessionDelegateRun settles
+        await act(async () => {
+            releaseDelegate(id)
+            try {
+                await sendPromise
+            } catch {
+                // Expected when send rejects with AgentPreflightError
+            }
+        })
+
+        expect(sendSettledRejected).toBe(true)
+        expect(useUiStore.getState().composerDrafts[`session:${id}`]).toBe('original prompt')
+        expect(useUiStore.getState().composerDraftReferences[`session:${id}`]).toEqual(refs)
+        expect(
+            (useUiStore.getState().composerDraftAttachments[`session:${id}`]?.length ?? 0) > 0 ||
+                (useUiStore.getState().composerRestoredAttachments[`session:${id}`]?.length ?? 0) > 0,
+        ).toBe(true)
+        expect(getRuntime(service).delegatedDrafts.size).toBe(0)
+
+        // Also verify case where onSessionAccepted cleared the draft asynchronously while SessionDelegateRun was pending after early failure
+        const id2 = useSessionStore.getState().createSession({ id: 'early-enh-failure-accepted' })
+        useUiStore.getState().setComposerDraftForSession(id2, 'accepted prompt', refs)
+        useUiStore.getState().setComposerDraftAttachments(`session:${id2}`, [
+            {
+                id: image.id,
+                name: image.name,
+                kind: 'image',
+                mimeType: image.mimeType,
+                data: image.data,
+                width: image.width,
+                height: image.height,
+            },
+        ])
+        let releaseDelegate2!: (sid: string) => void
+        delegateRunMock.mockImplementationOnce(
+            async () =>
+                new Promise<string>((resolve) => {
+                    releaseDelegate2 = resolve
+                }),
+        )
+        let sendPromise2!: Promise<string | null>
+        act(() => {
+            sendPromise2 = result.current.send({
+                sessionId: id2,
+                text: 'accepted prompt',
+                images: [image],
+                skillReferences: refs,
+            })
+        })
+        await waitFor(() => {
+            expect(delegateRunMock).toHaveBeenCalledTimes(2)
+        })
+        const req2 = delegateRunMock.mock.calls[1][0]
+
+        // 1. Early enhancement failure arrives while original draft is still present
+        act(() => {
+            for (const listener of nativeEventListeners) {
+                listener({
+                    kind: 'session:stream-event',
+                    data: JSON.stringify({
+                        sessionId: id2,
+                        runId: 'early-host-run-2',
+                        event: {
+                            type: 'error',
+                            sessionId: id2,
+                            runId: 'early-host-run-2',
+                            message: 'Build failed',
+                            preflightCode: 'system_prompt_enhancement_failed',
+                            userEntryId: req2.userEntryId,
+                            requestId: req2.requestId,
+                        },
+                    }),
+                })
+            }
+        })
+        // 2. Composer clears the draft (simulating onSessionAccepted clearing before SessionDelegateRun returns)
+        act(() => {
+            useUiStore.getState().setComposerDraftForSession(id2, '', [])
+            useUiStore.getState().setComposerDraftAttachments(`session:${id2}`, [])
+        })
+        // 3. SessionDelegateRun finally resolves -> draft, references, and attachments must be restored
+        await act(async () => {
+            releaseDelegate2(id2)
+            try {
+                await sendPromise2
+            } catch {
+                // Expected
+            }
+        })
+        expect(useUiStore.getState().composerDrafts[`session:${id2}`]).toBe('accepted prompt')
+        expect(useUiStore.getState().composerDraftReferences[`session:${id2}`]).toEqual(refs)
+        expect(useUiStore.getState().composerRestoredAttachments[`session:${id2}`]).toEqual([image])
+        expect(getRuntime(service).delegatedDrafts.size).toBe(0)
+
+        unmount()
+    })
+
+    it('broadcasts enhancement failure from resumeSession (runPreparedChat) and compact paths with preflightCode and durable error state', async () => {
+        const resumeId = useSessionStore.getState().createSession({ id: 'resume-enh-fail-sess' })
+        useMessageStore.getState().replaceSessionEntries(resumeId, [
+            {
+                id: 'u-res-1',
+                sessionId: resumeId,
+                createdAt: 1000,
+                kind: 'user',
+                content: [{ type: 'text', text: 'Resume me' }],
+            },
+            {
+                id: 'a-res-1',
+                sessionId: resumeId,
+                createdAt: 1100,
+                kind: 'assistant',
+                status: 'aborted',
+                stopReason: 'aborted',
+                content: [{ type: 'text', text: 'Partial' }],
+            },
+        ])
+        service.streamChat = async function* () {
+            throw new AgentPreflightError(
+                'system_prompt_enhancement_failed',
+                'Enhancement synthesis failed',
+                'agent.preflight.system_prompt_enhancement_failed',
+            )
+        }
+
+        const { result, unmount } = renderHook(() => useAgentStream(), {
+            wrapper: createWrapper(service),
+        })
+
+        await act(async () => {
+            await result.current.resumeSession(resumeId)
+        })
+
+        await waitFor(() => {
+            expect(
+                broadcastStreamEventMock.mock.calls.some((call: any[]) => {
+                    const ev = call[2]
+                    return (
+                        call[0] === resumeId &&
+                        ev?.type === 'error' &&
+                        ev?.preflightCode === 'system_prompt_enhancement_failed'
+                    )
+                }),
+            ).toBe(true)
+        })
+        expect(
+            useMessageStore
+                .getState()
+                .getEntries(resumeId)
+                .some((e) => e.kind === 'assistant' && e.status === 'error'),
+        ).toBe(true)
+
+        // Compact preflight enhancement failure must also broadcast error with preflightCode and record durable error entry
+        const compactId = useSessionStore.getState().createSession({ id: 'compact-enh-fail-sess' })
+        useMessageStore.getState().replaceSessionEntries(compactId, [
+            {
+                id: 'u-cmp-1',
+                sessionId: compactId,
+                createdAt: 1000,
+                kind: 'user',
+                content: [{ type: 'text', text: 'Compact me' }],
+            },
+        ])
+        service.prepareImpl = async () => {
+            throw new AgentPreflightError(
+                'system_prompt_enhancement_no_model',
+                'No enhancement model',
+                'agent.preflight.system_prompt_enhancement_no_model',
+            )
+        }
+
+        await act(async () => {
+            await expect(result.current.compact('', compactId)).rejects.toMatchObject({
+                code: 'system_prompt_enhancement_no_model',
+            })
+        })
+
+        expect(
+            broadcastStreamEventMock.mock.calls.some((call: any[]) => {
+                const ev = call[2]
+                return (
+                    call[0] === compactId &&
+                    ev?.type === 'error' &&
+                    ev?.preflightCode === 'system_prompt_enhancement_no_model'
+                )
+            }),
+        ).toBe(true)
+        expect(
+            useMessageStore
+                .getState()
+                .getEntries(compactId)
+                .some((e) => e.kind === 'assistant' && e.status === 'error'),
+        ).toBe(true)
+
+        // Browser receiving broadcast enhancement failure for compact/resume shows toast and error entry without touching composerDrafts
+        unmount()
+        Object.defineProperty(navigator, 'userAgent', {
+            value: 'Mozilla/5.0 Chrome/120.0.0.0 Safari/537.36',
+            configurable: true,
+        })
+        const browserCompactId = useSessionStore.getState().createSession({ id: 'browser-compact-sync-err' })
+        useUiStore.setState({ toasts: [], composerDrafts: {}, composerRestoredAttachments: {} })
+        const browserService = new FakeSyncService()
+        __resetAgentStreamForTests(browserService)
+        const { unmount: unmountBrowser } = renderHook(() => useAgentStream(), {
+            wrapper: createWrapper(browserService),
+        })
+
+        act(() => {
+            for (const listener of nativeEventListeners) {
+                listener({
+                    kind: 'session:stream-event',
+                    data: JSON.stringify({
+                        sessionId: browserCompactId,
+                        runId: 'host-compact-run',
+                        event: {
+                            type: 'error',
+                            sessionId: browserCompactId,
+                            runId: 'host-compact-run',
+                            message: 'Enhancement failed',
+                            preflightCode: 'system_prompt_enhancement_failed',
+                        },
+                    }),
+                })
+            }
+        })
+
+        expect(useUiStore.getState().toasts.length).toBeGreaterThan(0)
+        expect(
+            useMessageStore
+                .getState()
+                .getEntries(browserCompactId)
+                .some((e) => e.kind === 'assistant' && e.status === 'error'),
+        ).toBe(true)
+        expect(useUiStore.getState().composerDrafts[`session:${browserCompactId}`]).toBeUndefined()
+        unmountBrowser()
+    })
+
+    it('does not push a stale toast from outer executeDelegateRun when session is deleted during delegated preflight', async () => {
+        const deletedSessionId = useSessionStore.getState().createSession({ id: 'delegated-deleted-toast' })
+        let markPrepareStarted!: () => void
+        const prepareStarted = new Promise<void>((resolve) => {
+            markPrepareStarted = resolve
+        })
+        let rejectPrepare!: (err: unknown) => void
+        service.prepareImpl = async () => {
+            markPrepareStarted()
+            return new Promise((_, reject) => {
+                rejectPrepare = reject
+            })
+        }
+
+        const { unmount } = renderHook(() => useAgentStream(), {
+            wrapper: createWrapper(service),
+        })
+
+        act(() => {
+            for (const listener of nativeEventListeners) {
+                listener({
+                    kind: 'session:delegate-run',
+                    data: JSON.stringify({
+                        requestId: 'req-deleted-toast',
+                        sessionId: deletedSessionId,
+                        text: 'Hello before delete',
+                        userEntryId: 'u-del-toast-1',
+                    }),
+                })
+            }
+        })
+
+        await prepareStarted
+
+        // Delete session while preflight is in flight, then reject preflight
+        await act(async () => {
+            for (const listener of nativeEventListeners) {
+                listener({
+                    kind: 'session:deleted',
+                    data: JSON.stringify({ sessionId: deletedSessionId }),
+                })
+            }
+            rejectPrepare(new Error('Preflight failed after delete'))
+            await new Promise((resolve) => setTimeout(resolve, 20))
+        })
+
+        expect(useUiStore.getState().toasts).toEqual([])
+        unmount()
+    })
+
+    it('broadcasts enhancement failure from delegated compact result and pre-stream runPreparedChat failure', async () => {
+        const delegatedCompactId = useSessionStore.getState().createSession({ id: 'delegated-compact-enh-fail' })
+        useMessageStore.getState().replaceSessionEntries(delegatedCompactId, [
+            {
+                id: 'u-dc-1',
+                sessionId: delegatedCompactId,
+                createdAt: 1000,
+                kind: 'user',
+                content: [{ type: 'text', text: 'Delegated compact prompt' }],
+            },
+        ])
+        service.compact = async (input) => ({
+            ok: false,
+            message: 'Builder failed',
+            code: 'system_prompt_enhancement_failed',
+            events: [
+                { type: 'agent-start', runId: input.runId, sessionId: input.sessionId },
+                { type: 'compaction-start', runId: input.runId, sessionId: input.sessionId },
+                {
+                    type: 'error',
+                    runId: input.runId,
+                    sessionId: input.sessionId,
+                    message: 'Builder failed',
+                    preflightCode: 'system_prompt_enhancement_failed',
+                },
+                { type: 'agent-end', runId: input.runId, sessionId: input.sessionId },
+            ],
+        })
+
+        const ackMock = vi.fn().mockResolvedValue(undefined)
+        setHostBridge({
+            SessionBroadcastRunStatus: broadcastRunStatusMock,
+            SessionBroadcastStreamEvent: broadcastStreamEventMock,
+            SessionAbortRun: abortRunMock,
+            SessionDelegateRun: delegateRunMock,
+            SessionClaimPendingDelegateRuns: vi.fn().mockResolvedValue([]),
+            SessionAckDelegateRun: ackMock,
+            onNativeEvent: vi.fn((cb: (event: any) => void) => {
+                nativeEventListeners.push(cb)
+                return () => {
+                    const idx = nativeEventListeners.indexOf(cb)
+                    if (idx >= 0) nativeEventListeners.splice(idx, 1)
+                }
+            }),
+        } as any)
+
+        const { result, unmount } = renderHook(() => useAgentStream(), {
+            wrapper: createWrapper(service),
+        })
+
+        await act(async () => {
+            nativeEventListeners[0]!({
+                kind: 'session:delegate-run',
+                data: JSON.stringify({
+                    requestId: 'delegated-compact-enh-req',
+                    sessionId: delegatedCompactId,
+                    text: '',
+                    action: 'compact',
+                }),
+            })
+        })
+
+        await waitFor(() => {
+            expect(ackMock).toHaveBeenCalledWith('delegated-compact-enh-req')
+        })
+        expect(
+            broadcastStreamEventMock.mock.calls.some((call: any[]) => {
+                const ev = call[2]
+                return (
+                    call[0] === delegatedCompactId &&
+                    ev?.type === 'error' &&
+                    ev?.preflightCode === 'system_prompt_enhancement_failed'
+                )
+            }),
+        ).toBe(true)
+        expect(
+            useMessageStore
+                .getState()
+                .getEntries(delegatedCompactId)
+                .some((e) => e.kind === 'assistant' && e.status === 'error'),
+        ).toBe(true)
+
+        // Pre-stream prepare failure during resumeSession (runPreparedChat) also broadcasts and records durable error
+        const resumePreId = useSessionStore.getState().createSession({ id: 'resume-prepare-enh-fail' })
+        useMessageStore.getState().replaceSessionEntries(resumePreId, [
+            {
+                id: 'u-rp-1',
+                sessionId: resumePreId,
+                createdAt: 1000,
+                kind: 'user',
+                content: [{ type: 'text', text: 'Resume preflight fail' }],
+            },
+            {
+                id: 'a-rp-1',
+                sessionId: resumePreId,
+                createdAt: 1100,
+                kind: 'assistant',
+                status: 'aborted',
+                stopReason: 'aborted',
+                content: [{ type: 'text', text: 'Partial' }],
+            },
+        ])
+        service.prepareImpl = async () => {
+            throw new AgentPreflightError(
+                'system_prompt_enhancement_no_model',
+                'No enhancement model',
+                'agent.preflight.system_prompt_enhancement_no_model',
+            )
+        }
+
+        await act(async () => {
+            await expect(result.current.resumeSession(resumePreId)).rejects.toMatchObject({
+                code: 'system_prompt_enhancement_no_model',
+            })
+        })
+
+        expect(
+            broadcastStreamEventMock.mock.calls.some((call: any[]) => {
+                const ev = call[2]
+                return (
+                    call[0] === resumePreId &&
+                    ev?.type === 'error' &&
+                    ev?.preflightCode === 'system_prompt_enhancement_no_model'
+                )
+            }),
+        ).toBe(true)
+        expect(
+            useMessageStore
+                .getState()
+                .getEntries(resumePreId)
+                .some((e) => e.kind === 'assistant' && e.status === 'error'),
+        ).toBe(true)
+
+        unmount()
+    })
+
+    it.each(['resolve', 'reject'] as const)(
+        'does not restore browser draft, references, attachments, or push stale toast when SessionDelegateRun settles (%s) after early enhancement failure and session deletion',
+        async (settlement) => {
+            Object.defineProperty(navigator, 'userAgent', {
+                value: 'Mozilla/5.0 Chrome/120.0.0.0 Safari/537.36',
+                configurable: true,
+            })
+            const id = useSessionStore.getState().createSession({ id: `early-enh-delete-${settlement}` })
+            const refs = [{ start: 0, name: 'review' }]
+            const image = {
+                id: 'early-del-img',
+                name: 'early-del.png',
+                data: 'YWJj',
+                mimeType: 'image/png',
+                width: 10,
+                height: 20,
+            }
+            useUiStore.getState().setComposerDraftForSession(id, 'original prompt', refs)
+            useUiStore.getState().setComposerDraftAttachments(`session:${id}`, [
+                {
+                    id: image.id,
+                    name: image.name,
+                    kind: 'image',
+                    mimeType: image.mimeType,
+                    data: image.data,
+                    width: image.width,
+                    height: image.height,
+                },
+            ])
+
+            let resolveDelegate!: (sid: string) => void
+            let rejectDelegate!: (err: Error) => void
+            const delegateHold = new Promise<string>((resolve, reject) => {
+                resolveDelegate = resolve
+                rejectDelegate = reject
+            })
+            delegateRunMock.mockImplementationOnce(async () => delegateHold)
+
+            const { result, unmount } = renderHook(() => useAgentStream(), {
+                wrapper: createWrapper(service),
+            })
+
+            let sendPromise!: Promise<string | null>
+            act(() => {
+                sendPromise = result.current.send({
+                    sessionId: id,
+                    text: 'original prompt',
+                    images: [image],
+                    skillReferences: refs,
+                    onSessionAccepted: () => {
+                        useUiStore.getState().setComposerDraftForSession(id, '', [])
+                        useUiStore.getState().setComposerDraftAttachments(`session:${id}`, [])
+                    },
+                })
+            })
+
+            await waitFor(() => {
+                expect(delegateRunMock).toHaveBeenCalledTimes(1)
+            })
+            const req = delegateRunMock.mock.calls[0][0]
+
+            // 1. Early enhancement failure arrives before SessionDelegateRun settles
+            act(() => {
+                for (const listener of nativeEventListeners) {
+                    listener({
+                        kind: 'session:stream-event',
+                        data: JSON.stringify({
+                            sessionId: id,
+                            runId: 'early-del-run',
+                            event: {
+                                type: 'error',
+                                sessionId: id,
+                                runId: 'early-del-run',
+                                message: 'Build failed',
+                                preflightCode: 'system_prompt_enhancement_failed',
+                                userEntryId: req.userEntryId,
+                                requestId: req.requestId,
+                            },
+                        }),
+                    })
+                }
+            })
+
+            // 2. Session is deleted while SessionDelegateRun is still pending
+            act(() => {
+                useUiStore.setState({ toasts: [] })
+                for (const listener of nativeEventListeners) {
+                    listener({
+                        kind: 'session:deleted',
+                        data: JSON.stringify({ sessionId: id }),
+                    })
+                }
+            })
+
+            expect(useUiStore.getState().composerDrafts[`session:${id}`]).toBeUndefined()
+            expect(useUiStore.getState().composerDraftReferences[`session:${id}`]).toBeUndefined()
+            expect(useUiStore.getState().composerDraftAttachments[`session:${id}`]).toBeUndefined()
+            expect(useUiStore.getState().composerRestoredAttachments[`session:${id}`]).toBeUndefined()
+
+            // 3. Late SessionDelegateRun settlement must NOT restore draft or push stale toast
+            await act(async () => {
+                if (settlement === 'resolve') {
+                    resolveDelegate(id)
+                } else {
+                    rejectDelegate(new Error('Late delegation failure after delete'))
+                }
+                try {
+                    await sendPromise
+                } catch {
+                    // Ignore if rejected
+                }
+            })
+
+            expect(useUiStore.getState().composerDrafts[`session:${id}`]).toBeUndefined()
+            expect(useUiStore.getState().composerDraftReferences[`session:${id}`]).toBeUndefined()
+            expect(useUiStore.getState().composerDraftAttachments[`session:${id}`]).toBeUndefined()
+            expect(useUiStore.getState().composerRestoredAttachments[`session:${id}`]).toBeUndefined()
+            expect(useUiStore.getState().toasts).toEqual([])
+            expect(getRuntime(service).delegatedDrafts.size).toBe(0)
+
+            unmount()
+        },
+    )
+
+    it('does not broadcast a late aborted stream event when session is deleted while ensureSessionLoaded is pending in executeDelegateRun', async () => {
+        const deletedSessionId = 'delegated-delete-during-load'
+        let markSessionGetStarted!: () => void
+        const sessionGetStarted = new Promise<void>((resolve) => {
+            markSessionGetStarted = resolve
+        })
+        let resolveSessionGet!: (data: any) => void
+        const sessionGetMock = vi.fn().mockImplementation(
+            () =>
+                new Promise((resolve) => {
+                    resolveSessionGet = resolve
+                    markSessionGetStarted()
+                }),
+        )
+        const ackMock = vi.fn().mockResolvedValue(undefined)
+        setHostBridge({
+            SessionBroadcastRunStatus: broadcastRunStatusMock,
+            SessionBroadcastStreamEvent: broadcastStreamEventMock,
+            SessionAbortRun: abortRunMock,
+            SessionDelegateRun: delegateRunMock,
+            SessionGet: sessionGetMock,
+            SessionClaimPendingDelegateRuns: vi.fn().mockResolvedValue([]),
+            SessionAckDelegateRun: ackMock,
+            onNativeEvent: vi.fn((cb: (event: any) => void) => {
+                nativeEventListeners.push(cb)
+                return () => {
+                    const idx = nativeEventListeners.indexOf(cb)
+                    if (idx >= 0) nativeEventListeners.splice(idx, 1)
+                }
+            }),
+        } as any)
+
+        const { unmount } = renderHook(() => useAgentStream(), {
+            wrapper: createWrapper(service),
+        })
+
+        act(() => {
+            for (const listener of nativeEventListeners) {
+                listener({
+                    kind: 'session:delegate-run',
+                    data: JSON.stringify({
+                        requestId: 'req-del-during-load',
+                        sessionId: deletedSessionId,
+                        text: 'Hello during load',
+                        userEntryId: 'u-del-during-load-1',
+                    }),
+                })
+            }
+        })
+
+        await sessionGetStarted
+
+        // Delete session while ensureSessionLoaded is still pending, then let ensureSessionLoaded resolve normally
+        await act(async () => {
+            for (const listener of nativeEventListeners) {
+                listener({
+                    kind: 'session:deleted',
+                    data: JSON.stringify({ sessionId: deletedSessionId }),
+                })
+            }
+            resolveSessionGet({ entries: [] })
+            await new Promise((resolve) => setTimeout(resolve, 20))
+        })
+
+        expect(ackMock).toHaveBeenCalledWith('req-del-during-load')
+        expect(
+            broadcastStreamEventMock.mock.calls.some(
+                (call: any[]) => call[0] === deletedSessionId && call[2]?.type === 'aborted',
+            ),
+        ).toBe(false)
+        expect(service.streamChatCalls).toHaveLength(0)
+
+        unmount()
+    })
+
+    it('does not broadcast a late aborted stream event when session:deleted arrives while delegated run is inside streamChat', async () => {
+        const deletedSessionId = 'delegated-delete-during-streamchat'
+        let markStreamEntered!: () => void
+        const streamEntered = new Promise<void>((resolve) => {
+            markStreamEntered = resolve
+        })
+
+        const streamService = new FakeSyncService()
+        streamService.streamChat = async function* (input: AgentStreamChatInput) {
+            streamService.streamChatCalls.push(input)
+            markStreamEntered()
+            await new Promise<void>((_, reject) => {
+                if (input.signal?.aborted) {
+                    reject(new DOMException('Aborted', 'AbortError'))
+                    return
+                }
+                input.signal?.addEventListener(
+                    'abort',
+                    () => reject(new DOMException('Aborted', 'AbortError')),
+                    { once: true },
+                )
+            })
+        }
+
+        const ackMock = vi.fn().mockResolvedValue(undefined)
+        setHostBridge({
+            SessionBroadcastRunStatus: broadcastRunStatusMock,
+            SessionBroadcastStreamEvent: broadcastStreamEventMock,
+            SessionAbortRun: abortRunMock,
+            SessionDelegateRun: delegateRunMock,
+            SessionGet: vi.fn().mockResolvedValue({ entries: [] }),
+            SessionClaimPendingDelegateRuns: vi.fn().mockResolvedValue([]),
+            SessionAckDelegateRun: ackMock,
+            onNativeEvent: vi.fn((cb: (event: any) => void) => {
+                nativeEventListeners.push(cb)
+                return () => {
+                    const idx = nativeEventListeners.indexOf(cb)
+                    if (idx >= 0) nativeEventListeners.splice(idx, 1)
+                }
+            }),
+        } as any)
+
+        const { unmount } = renderHook(() => useAgentStream(), {
+            wrapper: createWrapper(streamService),
+        })
+
+        act(() => {
+            for (const listener of nativeEventListeners) {
+                listener({
+                    kind: 'session:delegate-run',
+                    data: JSON.stringify({
+                        requestId: 'req-del-during-stream',
+                        sessionId: deletedSessionId,
+                        text: 'Hello during streamChat',
+                        userEntryId: 'u-del-during-stream-1',
+                    }),
+                })
+            }
+        })
+
+        await streamEntered
+
+        await act(async () => {
+            for (const listener of nativeEventListeners) {
+                listener({
+                    kind: 'session:deleted',
+                    data: JSON.stringify({ sessionId: deletedSessionId }),
+                })
+            }
+            await new Promise((resolve) => setTimeout(resolve, 20))
+        })
+
+        expect(ackMock).toHaveBeenCalledWith('req-del-during-stream')
+        expect(
+            broadcastStreamEventMock.mock.calls.some(
+                (call: any[]) => call[0] === deletedSessionId && call[2]?.type === 'aborted',
+            ),
+        ).toBe(false)
+
+        unmount()
+    })
+
+    it('does not broadcast a late aborted stream event when session is deleted locally while delegated run is inside streamChat', async () => {
+        const deletedSessionId = useSessionStore.getState().createSession({
+            id: 'delegated-local-delete-during-streamchat',
+            title: 'Local Delete Target',
+        })
+        let markStreamEntered!: () => void
+        const streamEntered = new Promise<void>((resolve) => {
+            markStreamEntered = resolve
+        })
+
+        const streamService = new FakeSyncService()
+        streamService.streamChat = async function* (input: AgentStreamChatInput) {
+            streamService.streamChatCalls.push(input)
+            markStreamEntered()
+            await new Promise<void>((_, reject) => {
+                if (input.signal?.aborted) {
+                    reject(new DOMException('Aborted', 'AbortError'))
+                    return
+                }
+                input.signal?.addEventListener(
+                    'abort',
+                    () => reject(new DOMException('Aborted', 'AbortError')),
+                    { once: true },
+                )
+            })
+        }
+
+        const ackMock = vi.fn().mockResolvedValue(undefined)
+        setHostBridge({
+            SessionBroadcastRunStatus: broadcastRunStatusMock,
+            SessionBroadcastStreamEvent: broadcastStreamEventMock,
+            SessionAbortRun: abortRunMock,
+            SessionDelegateRun: delegateRunMock,
+            SessionGet: vi.fn().mockResolvedValue({ entries: [] }),
+            SessionClaimPendingDelegateRuns: vi.fn().mockResolvedValue([]),
+            SessionAckDelegateRun: ackMock,
+            onNativeEvent: vi.fn((cb: (event: any) => void) => {
+                nativeEventListeners.push(cb)
+                return () => {
+                    const idx = nativeEventListeners.indexOf(cb)
+                    if (idx >= 0) nativeEventListeners.splice(idx, 1)
+                }
+            }),
+        } as any)
+
+        const { unmount } = renderHook(() => useAgentStream(), {
+            wrapper: createWrapper(streamService),
+        })
+
+        act(() => {
+            for (const listener of nativeEventListeners) {
+                listener({
+                    kind: 'session:delegate-run',
+                    data: JSON.stringify({
+                        requestId: 'req-local-del-during-stream',
+                        sessionId: deletedSessionId,
+                        text: 'Hello before local delete',
+                        userEntryId: 'u-local-del-during-stream-1',
+                    }),
+                })
+            }
+        })
+
+        await streamEntered
+
+        await act(async () => {
+            useSessionStore.getState().removeSession(deletedSessionId)
+            await new Promise((resolve) => setTimeout(resolve, 20))
+        })
+
+        expect(getRuntime(streamService).deletedSessionIds.has(deletedSessionId)).toBe(true)
+        expect(ackMock).toHaveBeenCalledWith('req-local-del-during-stream')
+        expect(
+            broadcastStreamEventMock.mock.calls.some(
+                (call: any[]) => call[0] === deletedSessionId && call[2]?.type === 'aborted',
+            ),
+        ).toBe(false)
 
         unmount()
     })

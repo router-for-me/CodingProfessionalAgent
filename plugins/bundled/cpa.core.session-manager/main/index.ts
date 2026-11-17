@@ -85,6 +85,21 @@ export const sessionManagerMainEntry = definePluginEntry({
                 },
             },
             {
+                method: 'session:getSystemPrompt',
+                aliases: ['SessionGetSystemPrompt'],
+                ipcChannel: 'session:getSystemPrompt',
+                capability: 'sessions.read',
+                invoke: async (_rpcCtx, args) => sessionService.getSystemPrompt(args[0] as string),
+            },
+            {
+                method: 'session:setSystemPrompt',
+                aliases: ['SessionSetSystemPrompt'],
+                ipcChannel: 'session:setSystemPrompt',
+                capability: 'sessions.write',
+                invoke: async (_rpcCtx, args) =>
+                    sessionService.setSystemPrompt(args[0] as string, args[1] as string),
+            },
+            {
                 method: 'session:delete',
                 aliases: ['SessionDelete'],
                 ipcChannel: 'session:delete',

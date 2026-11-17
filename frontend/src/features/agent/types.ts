@@ -4,7 +4,15 @@
  */
 
 import type { ModelCatalogEntry } from '@/features/models/types'
-import type { GitSettings, ModelSettingsConfig, PersonalityTone, SkillsSettings, Speed, SubagentsSettings } from '@/types/models'
+import type {
+    GitSettings,
+    ModelSettingsConfig,
+    PersonalityTone,
+    SkillsSettings,
+    Speed,
+    SubagentsSettings,
+    SystemPromptEnhancementSettings,
+} from '@/types/models'
 import type { CompactionSettings } from '@/features/agent-runtime/context/tokenEstimate'
 import type { AgentRunEvent, AgentTool } from '@/features/agent-runtime/agent/types'
 import type { WorktreeRunPolicy } from '@/features/agent-runtime/context/worktreeMode'
@@ -38,6 +46,8 @@ export type AgentPreflightErrorCode =
     | 'stale_prepare'
     | 'service_busy'
     | 'config_change_during_run'
+    | 'system_prompt_enhancement_no_model'
+    | 'system_prompt_enhancement_failed'
 
 export class AgentPreflightError extends Error {
     readonly code: AgentPreflightErrorCode
@@ -59,6 +69,8 @@ export interface AgentPrepareInput {
     baseUrl: string
     apiKey: string
     modelId: string
+    /** Global default model ID used for fallback resolution when enhancement.modelId is empty. */
+    defaultModelId?: string
     models: readonly ModelCatalogEntry[]
     reasoningLevel: string
     speed: Speed
@@ -101,6 +113,8 @@ export interface AgentPrepareInput {
     gitSettings?: Partial<GitSettings>
     /** Optional model and cache warming settings. */
     modelSettings?: ModelSettingsConfig
+    /** Optional per-session unique system prompt enhancement settings. */
+    systemPromptEnhancement?: SystemPromptEnhancementSettings
 }
 
 /**
@@ -111,6 +125,8 @@ export interface PreparedAgentRun {
     readonly baseUrl: string
     readonly apiKey: string
     readonly model: ModelCatalogEntry
+    /** Global default model ID captured during prepare for enhancement fallback resolution. */
+    readonly defaultModelId?: string
     /** Immutable authorized model catalog captured during prepare. */
     readonly models?: readonly ModelCatalogEntry[]
     /** Mapped catalog requestValue; omitted when model has no reasoning options. */
@@ -142,6 +158,7 @@ export interface PreparedAgentRun {
     readonly gitSettings?: Partial<GitSettings>
     readonly skillsSettings?: Partial<SkillsSettings>
     readonly modelSettings?: ModelSettingsConfig
+    readonly systemPromptEnhancement?: SystemPromptEnhancementSettings
     /** Frozen snapshot of providers, tools, resources, hooks, middleware, and lease for this run. */
     readonly generationSnapshot?: AgentGenerationSnapshot
 }

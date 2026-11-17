@@ -34,12 +34,21 @@ export class SessionService {
     worktreePath?: string
     environmentId?: string | null
     worktreeSetup?: WorktreeSessionSetup
+    systemPrompt?: string
   } | null> {
     return this.dbService.get(sessionId)
   }
 
   async set(sessionId: string, data: unknown): Promise<string> {
     return this.dbService.set(sessionId, data)
+  }
+
+  async getSystemPrompt(sessionId: string): Promise<string | null> {
+    return this.dbService.getSystemPrompt(sessionId)
+  }
+
+  async setSystemPrompt(sessionId: string, systemPrompt: string): Promise<boolean> {
+    return this.dbService.setSystemPrompt(sessionId, systemPrompt)
   }
 
   async delete(sessionId: string): Promise<void> {

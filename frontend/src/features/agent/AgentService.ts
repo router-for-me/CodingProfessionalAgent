@@ -40,6 +40,9 @@ export interface AgentService {
     /** Cancel and clear any background cache warmers for a session (or all sessions if omitted). */
     cancelSessionWarmers?(sessionId?: string): Promise<void> | void
 
+    /** Evict cached per-session prompt/runtime state when a session is deleted. */
+    evictSessionCache?(sessionId: string): void
+
     /**
      * Manual /compact — isolated Task14 compaction using the prepared snapshot/model.
      * Does not append a user entry. Rejects when a run is already active.

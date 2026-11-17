@@ -7,7 +7,14 @@ import type {
   UserProfileSettings,
   WorktreeSettings,
 } from '@cpa/plugin-api'
-import { getAppConfigDirName, DEFAULT_SUBAGENT_ROLES, DEFAULT_SKILLS_SETTINGS } from '@cpa/plugin-api'
+import {
+  getAppConfigDirName,
+  DEFAULT_SUBAGENT_ROLES,
+  DEFAULT_SKILLS_SETTINGS,
+  ALL_SYSTEM_PROMPT_LANGUAGES,
+  DEFAULT_SYSTEM_PROMPT_ENHANCEMENT_SETTINGS,
+  normalizeSystemPromptEnhancementSettings,
+} from '@cpa/plugin-api'
 
 export type {
   ActionPlatform,
@@ -67,6 +74,8 @@ export type {
   Speed,
   SubagentRole,
   SubagentsSettings,
+  SystemPromptEnhancementSettings,
+  SystemPromptLanguage,
   TerminalPosition,
   ThemeMode,
   ToolStatus,
@@ -169,7 +178,13 @@ export const DEFAULT_SUBAGENT_SETTINGS: SubagentsSettings = {
   roles: [...DEFAULT_SUBAGENT_ROLES],
 }
 
-export { DEFAULT_SUBAGENT_ROLES, DEFAULT_SKILLS_SETTINGS }
+export {
+  DEFAULT_SUBAGENT_ROLES,
+  DEFAULT_SKILLS_SETTINGS,
+  ALL_SYSTEM_PROMPT_LANGUAGES,
+  DEFAULT_SYSTEM_PROMPT_ENHANCEMENT_SETTINGS,
+  normalizeSystemPromptEnhancementSettings,
+}
 
 export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   showContextUsage: true,
@@ -224,6 +239,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   subagents: DEFAULT_SUBAGENT_SETTINGS,
   skills: DEFAULT_SKILLS_SETTINGS,
   editor: DEFAULT_EDITOR_SETTINGS,
+  systemPromptEnhancement: {
+    ...DEFAULT_SYSTEM_PROMPT_ENHANCEMENT_SETTINGS,
+    allowedLanguages: [...DEFAULT_SYSTEM_PROMPT_ENHANCEMENT_SETTINGS.allowedLanguages],
+  },
 }
 
 export const MOCK_MODELS: readonly { id: string; label: string }[] = []

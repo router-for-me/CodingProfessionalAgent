@@ -2306,4 +2306,132 @@ describe('cached compaction (pi-cached-compaction semantics)', () => {
         expect(calls.length).toBeGreaterThanOrEqual(1)
         expect(result.entry.summary).toContain('from-legacy-fast')
     })
+
+    it('uses sessionSystemPrompt instead of SUMMARIZATION_SYSTEM_PROMPT on isolated and split-turn summarization when provided', async () => {
+        const entries: ConversationEntry[] = [
+            user('u0', 'H'.repeat(20_000)),
+            assistant('a0', 'A'.repeat(20_000), { model: model.id }),
+            user('u1', 'X'.repeat(20_000)),
+            assistant('a1', 'recent answer', { model: model.id }),
+        ]
+
+        const { client, calls } = makeClient((call) => {
+            const isPrefix = promptTextOf(call).includes('PREFIX of a turn')
+            return assistant(
+                isPrefix ? 'split-prefix' : 'split-history',
+                isPrefix ? validTurnPrefix('from-enhanced') : validSummary('from-enhanced'),
+                {
+                    model: model.id,
+                    usage: usage(50),
+                },
+            )
+        })
+
+        const result = await compactConversation(entries, {
+            client,
+            model,
+            sessionId: 's1',
+            fastContextCompaction: true,
+            sessionSystemPrompt: 'LOCKED_ENHANCED_PROMPT',
+            settings: { ...DEFAULT_COMPACTION_SETTINGS, keepRecentTokens: 5 },
+            now: () => 1_000,
+        })
+
+        expect(calls.length).toBeGreaterThanOrEqual(1)
+        for (const call of calls) {
+            expect(call.input.systemPrompt).toBe('LOCKED_ENHANCED_PROMPT')
+            expect(call.input.systemPrompt).not.toBe(SUMMARIZATION_SYSTEM_PROMPT)
+        }
+        expect(result.entry.summary).toContain('from-enhanced')
+    })
+
+    it('rejects cached compaction when cachedContext.systemPrompt differs from sessionSystemPrompt and falls back to isolated summary', async () => {
+        const entries: ConversationEntry[] = [
+            user('u0', 'H'.repeat(8_000)),
+            assistant('a0', 'A'.repeat(8_000), { model: model.id }),
+            user('u1', 'recent question'),
+            assistant('a1', 'recent answer', { model: model.id }),
+        ]
+
+        const { client, calls } = makeClient((call) => {
+            const isPrefix = promptTextOf(call).includes('PREFIX of a turn')
+            return assistant(
+                isPrefix ? 'iso-prefix' : 'iso-hist',
+                isPrefix ? validTurnPrefix('from-isolated-enhanced') : validSummary('from-isolated-enhanced'),
+                { model: model.id, usage: usage(30) },
+            )
+        })
+
+        const result = await compactConversation(entries, {
+            client,
+            model,
+            sessionId: 's-cache-mismatch',
+            fastContextCompaction: false,
+            sessionSystemPrompt: 'NEW_ENHANCED_PROMPT',
+            cachedContext: {
+                systemPrompt: 'OLD_RAW_PROMPT',
+                modelId: model.id,
+                requestEntries: entries.slice(0, 2),
+                lastCachedAt: 500,
+                cacheExpiresAt: 60_000,
+            },
+            settings: { ...DEFAULT_COMPACTION_SETTINGS, keepRecentTokens: 5 },
+            now: () => 1_000,
+        })
+
+        expect(calls.length).toBeGreaterThanOrEqual(1)
+        for (const call of calls) {
+            expect(call.input.systemPrompt).toBe('NEW_ENHANCED_PROMPT')
+            expect(call.options?.promptCacheKey).not.toBe('s-cache-mismatch')
+        }
+        expect(result.entry.summary).toContain('from-isolated-enhanced')
+    })
+
+    it('accounts for sessionSystemPrompt length and Context Checkpoint Task prefix in standalone and split-turn compaction budgets', async () => {
+        const smallWindowModel: ModelCatalogEntry = {
+            ...model,
+            contextWindow: 8_192,
+            maxTokens: 2_048,
+        }
+        const longSessionSystemPrompt = 'Enhanced instruction detail '.repeat(850) // ~23,800 chars (~5,950 tokens)
+        const entries: ConversationEntry[] = [
+            user('u0', 'History user message '.repeat(400)),
+            assistant('a0', 'History assistant reply '.repeat(400), { model: smallWindowModel.id }),
+            user('u1', 'Split turn user prompt '.repeat(350)),
+            assistant('a1', 'recent answer', { model: smallWindowModel.id }),
+        ]
+
+        const { client, calls } = makeClient((call) => {
+            const isPrefix = promptTextOf(call).includes('PREFIX of a turn')
+            return assistant(
+                isPrefix ? 'split-prefix' : 'split-history',
+                isPrefix ? validTurnPrefix('small-win-ok') : validSummary('small-win-ok'),
+                { model: smallWindowModel.id, usage: usage(20) },
+            )
+        })
+
+        const result = await compactConversation(entries, {
+            client,
+            model: smallWindowModel,
+            sessionId: 's-small-win',
+            fastContextCompaction: true,
+            sessionSystemPrompt: longSessionSystemPrompt,
+            settings: { ...DEFAULT_COMPACTION_SETTINGS, reserveTokens: 512, keepRecentTokens: 10 },
+            now: () => 1_000,
+        })
+
+        expect(calls.length).toBeGreaterThanOrEqual(1)
+        for (const call of calls) {
+            expect(call.input.systemPrompt).toBe(longSessionSystemPrompt)
+            const promptText = promptTextOf(call)
+            expect(promptText.startsWith('[Context Checkpoint Task]')).toBe(true)
+            const estimatedTotalInputTokens =
+                Math.ceil((longSessionSystemPrompt.length + promptText.length) / 4) + 512
+            const maxOut = call.options?.maxOutputTokens ?? 0
+            expect(estimatedTotalInputTokens).toBeLessThan(smallWindowModel.contextWindow!)
+            expect(maxOut).toBeGreaterThan(0)
+            expect(estimatedTotalInputTokens + maxOut).toBeLessThanOrEqual(smallWindowModel.contextWindow!)
+        }
+        expect(result.entry.summary).toContain('small-win-ok')
+    })
 })

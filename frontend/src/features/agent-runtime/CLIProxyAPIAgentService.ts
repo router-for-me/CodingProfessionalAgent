@@ -69,8 +69,17 @@ import {
 } from './context/worktreeMode'
 import {
     augmentSystemPromptForSessionTitle,
+    CONDITIONAL_TITLE_GUIDELINE,
     SET_SESSION_TITLE_TOOL_NAME,
 } from './context/systemPrompt'
+import {
+    resolveEnhancementModel,
+    synthesizeEnhancedSystemPrompt,
+} from './context/systemPromptEnhancer'
+import {
+    clearForkedSessionPromptState,
+    waitForForkedSessionPrompt,
+} from './session/forkSession'
 import {
     SubAgentHost,
     codingToolsOnly,
@@ -86,6 +95,13 @@ import {
     type AgentGenerationSnapshot,
 } from './providers/generationSnapshot'
 import { CacheWarmer } from './agent/cacheWarmer.js'
+import { ProtocolMiddlewarePipeline } from '@/plugins/protocol/ProtocolMiddlewarePipeline'
+
+interface InFlightPromptBuild {
+    promise: Promise<string>
+    controller: AbortController
+    activeWaiters: Set<symbol>
+}
 
 export interface ProtocolConnectionManager {
     dispose(): Promise<void> | void
@@ -595,6 +611,35 @@ export function redactSecrets(
 }
 
 /**
+ * Redact secrets from an error while preserving AgentPreflightError metadata and Error names (e.g. AbortError).
+ */
+function redactErrorWithSecrets(
+    error: unknown,
+    secrets: readonly string[],
+): Error {
+    if (error instanceof AgentPreflightError) {
+        return new AgentPreflightError(
+            error.code,
+            redactSecrets(error.message, secrets),
+            error.i18nKey,
+        )
+    }
+    if (error instanceof Error) {
+        const redacted = new Error(redactSecrets(error.message, secrets))
+        redacted.name = error.name
+        return redacted
+    }
+    return new Error(
+        redactSecrets(
+            typeof error === 'string'
+                ? error
+                : String(error ?? 'System prompt enhancement failed'),
+            secrets,
+        ),
+    )
+}
+
+/**
  * Cycle-safe / shared-ref-safe deep redaction for arbitrary non-event payloads.
  * Prefer sanitizeEvent for AgentRunEvent — it is schema-aware and will not
  * rewrite structural fields or normal assistant/tool content.
@@ -976,6 +1021,12 @@ export class CLIProxyAPIAgentService implements AgentService {
     private latestSnapshot: PreparedAgentRun | null = null
     /** Immutable subagent configuration associated with each prepared run. */
     private readonly subAgentConfigs = new WeakMap<PreparedAgentRun, SubAgentHostConfig>()
+    /** Per-session locked enhanced system prompt cache. */
+    private readonly sessionSystemPrompts = new Map<string, string>()
+    /** Single-flight lock preventing duplicate concurrent prompt synthesis per session. */
+    private readonly inFlightPromptBuilds = new Map<string, InFlightPromptBuild>()
+    /** Abort controllers for sub-agent initiated parent prompt enhancement builds. */
+    private readonly pendingSubAgentPromptControllers = new Set<AbortController>()
 
     constructor(deps: CLIProxyAPIAgentServiceDependencies) {
         this.bridge = deps.bridge
@@ -1152,6 +1203,38 @@ export class CLIProxyAPIAgentService implements AgentService {
 
             const models = (input.models ?? (input.model ? [input.model] : []))
                 .map(applyModelSettingsOverrides)
+            if (input.systemPromptEnhancement?.enabled) {
+                const builderModel = resolveEnhancementModel(
+                    models,
+                    input.systemPromptEnhancement,
+                    input.defaultModelId ?? input.modelId,
+                    input.modelSettings,
+                )
+                if (!builderModel) {
+                    const sessionId = input.sessionId?.trim()
+                    let existingLockedPrompt: string | undefined
+                    if (sessionId) {
+                        try {
+                            existingLockedPrompt =
+                                await this.resolvePersistedEnhancedPrompt(
+                                    sessionId,
+                                    signal,
+                                )
+                        } catch (error) {
+                            throw redactErrorWithSecrets(error, [apiKey])
+                        }
+                    }
+                    throwIfAborted(signal)
+                    this.assertNotDisposed()
+                    if (!existingLockedPrompt) {
+                        throw new AgentPreflightError(
+                            'system_prompt_enhancement_no_model',
+                            'No available model to build enhanced system prompt',
+                            'agent.preflight.system_prompt_enhancement_no_model',
+                        )
+                    }
+                }
+            }
             const rawFound = input.model ?? models.find((entry) => entry.id === input.modelId)
             const model = rawFound ? applyModelSettingsOverrides(rawFound) : undefined
             if (!model) {
@@ -1334,6 +1417,7 @@ export class CLIProxyAPIAgentService implements AgentService {
                 baseUrl,
                 apiKey,
                 model: modelSnapshot,
+                ...(input.defaultModelId ? { defaultModelId: input.defaultModelId } : {}),
                 models: deepFreezeData(deepCloneData(models)) as readonly ModelCatalogEntry[],
                 reasoningEffort,
                 speed,
@@ -1367,6 +1451,13 @@ export class CLIProxyAPIAgentService implements AgentService {
                 modelSettings: input.modelSettings
                     ? (deepFreezeData(deepCloneData(input.modelSettings)) as ModelSettingsConfig)
                     : undefined,
+                ...(input.systemPromptEnhancement
+                    ? {
+                          systemPromptEnhancement: deepFreezeData(
+                              deepCloneData(input.systemPromptEnhancement),
+                          ),
+                      }
+                    : {}),
                 ...(worktreePolicy ? { worktreePolicy } : {}),
                 generationSnapshot,
             }) as PreparedAgentRun
@@ -1382,6 +1473,18 @@ export class CLIProxyAPIAgentService implements AgentService {
                 ) as ModelCatalogEntry[],
                 extensionRegistry: this.extensionRegistry,
                 getEntries: input.getEntries,
+                getEnhancedSystemPrompt: (parentSessionId: string) =>
+                    this.sessionSystemPrompts.get(parentSessionId),
+                resolveEnhancedSystemPrompt: (
+                    parentSessionId: string,
+                    signal?: AbortSignal,
+                ) =>
+                    this.resolveSubAgentParentEnhancedPrompt(
+                        prepared,
+                        parentSessionId,
+                        input.getEntries,
+                        signal,
+                    ),
             }
             this.subAgentConfigs.set(prepared, subAgentConfig)
 
@@ -1559,6 +1662,18 @@ export class CLIProxyAPIAgentService implements AgentService {
             gitSettings: prepared.gitSettings,
             models: prepared.models ?? [prepared.model],
             extensionRegistry: this.extensionRegistry,
+            getEnhancedSystemPrompt: (parentSessionId: string) =>
+                this.sessionSystemPrompts.get(parentSessionId),
+            resolveEnhancedSystemPrompt: (
+                parentSessionId: string,
+                signal?: AbortSignal,
+            ) =>
+                this.resolveSubAgentParentEnhancedPrompt(
+                    prepared,
+                    parentSessionId,
+                    () => [...input.entries],
+                    signal,
+                ),
         }
         this.subAgents.setParentContext(
             {
@@ -1757,65 +1872,24 @@ export class CLIProxyAPIAgentService implements AgentService {
                 activeRecord.client = client
             }
 
-            const baseTools = prepared.tools as AgentTool[]
-            const hasSessionTitleTool = baseTools.some(
-                (t) => t.name === SET_SESSION_TITLE_TOOL_NAME,
-            )
-            let effectiveTools: AgentTool[] = baseTools
-            if (!hasSessionTitleTool) {
-                const titleFactory =
-                    this.extensionRegistry.getToolFactory(
-                        SET_SESSION_TITLE_TOOL_NAME,
-                    ) ??
-                    (this.extensionRegistry !== rendererRegistry
-                        ? rendererRegistry.getToolFactory(SET_SESSION_TITLE_TOOL_NAME)
-                        : undefined)
-                if (titleFactory) {
-                    const dynamicTitleTool = await titleFactory.create({
-                        platform: 'darwin',
-                        services: {} as any,
-                        sessionId,
-                    })
-                    if (dynamicTitleTool) {
-                        effectiveTools = [dynamicTitleTool, ...baseTools]
-                    }
-                }
-            }
-            let effectiveSystemPrompt = augmentSystemPromptForSessionTitle(
-                prepared.systemPrompt,
-            )
+            const { effectiveTools, additionalContexts } =
+                await this.resolveSessionPromptInputs({
+                    prepared,
+                    sessionId,
+                    entries: input.entries,
+                    signal: controller.signal,
+                })
 
-            const isResume = input.entries.some(
-                (entry) => entry.kind === 'assistant',
-            )
-            try {
-                const sessionStartOutcome = await HookProvider.execute(
-                    'SessionStart',
-                    {
-                        event: 'SessionStart',
-                        sessionId,
-                        payload: {
-                            hook_event_name: 'SessionStart',
-                            session_id: sessionId,
-                            cwd: prepared.projectCwd ?? '',
-                            model: prepared.model.id,
-                            permission_mode: prepared.requestApproval ? 'default' : 'bypassPermissions',
-                            source: isResume ? 'resume' : 'startup',
-                        },
-                        signal: input.signal,
-                    },
-                    {
-                        hooks: prepared.generationSnapshot?.hooks,
-                        extensionRegistry: this.extensionRegistry,
-                    },
-                )
-                if (sessionStartOutcome.additionalContexts && sessionStartOutcome.additionalContexts.length > 0) {
-                    effectiveSystemPrompt +=
-                        '\n\n' + sessionStartOutcome.additionalContexts.join('\n\n')
-                }
-            } catch {
-                // Fail open on session-start hook error
-            }
+            const { systemPrompt: effectiveSystemPrompt, isEnhanced } =
+                await this.resolveEffectiveSessionSystemPrompt({
+                    prepared,
+                    sessionId,
+                    client,
+                    entries: input.entries,
+                    additionalContexts,
+                    effectiveTools,
+                    signal: controller.signal,
+                })
 
             const runInput: AgentRunInput = {
                 runId,
@@ -1829,6 +1903,7 @@ export class CLIProxyAPIAgentService implements AgentService {
                     : input.userEntry,
                 model: prepared.model,
                 systemPrompt: effectiveSystemPrompt,
+                ...(isEnhanced ? { enhancedSystemPrompt: effectiveSystemPrompt } : {}),
                 tools: effectiveTools,
                 requestApproval: prepared.requestApproval,
                 requiredToolPolicy: prepared.requiredToolPolicy,
@@ -2032,6 +2107,44 @@ export class CLIProxyAPIAgentService implements AgentService {
                     }
                 }
 
+                let persistedSessionPrompt = await this.resolvePersistedEnhancedPrompt(
+                    sessionId,
+                    controller.signal,
+                )
+                if (!persistedSessionPrompt && prepared.systemPromptEnhancement?.enabled) {
+                    const promptInputs = await this.resolveSessionPromptInputs({
+                        prepared,
+                        sessionId,
+                        entries: input.entries,
+                        signal: controller.signal,
+                    })
+                    const effectivePrompt = await this.resolveEffectiveSessionSystemPrompt({
+                        prepared,
+                        sessionId,
+                        client,
+                        entries: input.entries,
+                        additionalContexts: promptInputs.additionalContexts,
+                        effectiveTools: promptInputs.effectiveTools,
+                        signal: controller.signal,
+                    })
+                    persistedSessionPrompt = effectivePrompt.isEnhanced
+                        ? effectivePrompt.systemPrompt
+                        : undefined
+                }
+                const rawCachedContext = prepared.fastContextCompaction
+                    ? undefined
+                    : this.getValidCachedContext(
+                          sessionId,
+                          namespace,
+                          effectiveProviderId,
+                      )
+                const cachedContext =
+                    persistedSessionPrompt &&
+                    rawCachedContext &&
+                    rawCachedContext.systemPrompt !== persistedSessionPrompt
+                        ? undefined
+                        : rawCachedContext
+
                 const result = await this.compactFn(
                     expandUserSkillEntries(input.entries, prepared.skills),
                     {
@@ -2042,13 +2155,10 @@ export class CLIProxyAPIAgentService implements AgentService {
                         speed: prepared.speed,
                         fastContextCompaction: prepared.fastContextCompaction,
                         trigger: 'manual',
-                        cachedContext: prepared.fastContextCompaction
-                            ? undefined
-                            : this.getValidCachedContext(
-                                  sessionId,
-                                  namespace,
-                                  effectiveProviderId,
-                              ),
+                        ...(persistedSessionPrompt
+                            ? { sessionSystemPrompt: persistedSessionPrompt }
+                            : {}),
+                        cachedContext,
                         signal: controller.signal,
                         customInstructions: input.customInstructions,
                         force: true,
@@ -2119,6 +2229,8 @@ export class CLIProxyAPIAgentService implements AgentService {
             } catch (error) {
                 const aborted =
                     controller.signal.aborted ||
+                    (error instanceof AgentPreflightError &&
+                        error.code === 'aborted') ||
                     (error instanceof Error &&
                         (error.name === 'AbortError' ||
                             /abort/i.test(error.message)))
@@ -2134,6 +2246,10 @@ export class CLIProxyAPIAgentService implements AgentService {
                         ),
                     }
                 }
+                const preflightCode =
+                    error instanceof AgentPreflightError
+                        ? error.code
+                        : undefined
                 const message = redactSecrets(
                     error instanceof Error
                         ? error.message
@@ -2145,12 +2261,13 @@ export class CLIProxyAPIAgentService implements AgentService {
                     runId,
                     sessionId,
                     message,
+                    ...(preflightCode ? { preflightCode } : {}),
                 })
                 events.push({ type: 'agent-end', runId, sessionId })
                 return {
                     ok: false as const,
                     message,
-                    code: 'compact_failed',
+                    code: preflightCode ?? 'compact_failed',
                     events: events.map((e) =>
                         this.sanitizeOutgoing(e, prepared.apiKey),
                     ),
@@ -2227,6 +2344,7 @@ export class CLIProxyAPIAgentService implements AgentService {
                     userEntry: request.userEntry,
                     model: request.model,
                     systemPrompt: request.systemPrompt,
+                    enhancedSystemPrompt: request.enhancedSystemPrompt,
                     developerPrompt: request.developerPrompt,
                     tools: request.tools as AgentTool[],
                     requestApproval: false,
@@ -2381,6 +2499,602 @@ export class CLIProxyAPIAgentService implements AgentService {
         return record.context
     }
 
+    evictSessionCache(sessionId: string): void {
+        if (!sessionId) return
+        this.sessionSystemPrompts.delete(sessionId)
+        this.sessionCachedContexts.delete(sessionId)
+        const inFlight = this.inFlightPromptBuilds.get(sessionId)
+        if (inFlight) {
+            this.inFlightPromptBuilds.delete(sessionId)
+            inFlight.controller.abort()
+        }
+        clearForkedSessionPromptState(sessionId)
+    }
+
+    private getActiveInFlightPromptBuild(
+        sessionId: string,
+    ): InFlightPromptBuild | undefined {
+        const entry = this.inFlightPromptBuilds.get(sessionId)
+        if (!entry) return undefined
+        if (entry.controller.signal.aborted) {
+            this.inFlightPromptBuilds.delete(sessionId)
+            return undefined
+        }
+        return entry
+    }
+
+    private awaitInFlightPromptBuild(
+        sessionId: string,
+        entry: InFlightPromptBuild,
+        signal?: AbortSignal,
+    ): Promise<string> {
+        if (signal?.aborted) {
+            // Cancel orphaned single-flight builds when a pre-aborted caller leaves no active waiters.
+            if (entry.activeWaiters.size === 0) {
+                if (this.inFlightPromptBuilds.get(sessionId) === entry) {
+                    this.inFlightPromptBuilds.delete(sessionId)
+                }
+                entry.controller.abort()
+            }
+            return Promise.reject(
+                new AgentPreflightError(
+                    'aborted',
+                    'System prompt enhancement aborted',
+                    'agent.preflight.aborted',
+                ),
+            )
+        }
+        const waiterToken = Symbol('prompt-build-waiter')
+        entry.activeWaiters.add(waiterToken)
+
+        return new Promise<string>((resolve, reject) => {
+            let settled = false
+            const releaseWaiter = (): void => {
+                entry.activeWaiters.delete(waiterToken)
+                signal?.removeEventListener('abort', onAbort)
+            }
+            const onAbort = (): void => {
+                if (settled) return
+                settled = true
+                releaseWaiter()
+                // Only cancel the shared synthesis controller when all active waiters have aborted.
+                if (entry.activeWaiters.size === 0) {
+                    if (this.inFlightPromptBuilds.get(sessionId) === entry) {
+                        this.inFlightPromptBuilds.delete(sessionId)
+                    }
+                    entry.controller.abort()
+                }
+                reject(
+                    new AgentPreflightError(
+                        'aborted',
+                        'System prompt enhancement aborted',
+                        'agent.preflight.aborted',
+                    ),
+                )
+            }
+            signal?.addEventListener('abort', onAbort, { once: true })
+            entry.promise.then(
+                (built) => {
+                    if (settled) return
+                    settled = true
+                    releaseWaiter()
+                    resolve(built)
+                },
+                (err: unknown) => {
+                    if (settled) return
+                    settled = true
+                    releaseWaiter()
+                    reject(err)
+                },
+            )
+        })
+    }
+
+    private async resolveSessionPromptInputs(params: {
+        prepared: PreparedAgentRun
+        sessionId: string
+        entries: readonly ConversationEntry[]
+        signal?: AbortSignal
+    }): Promise<{
+        effectiveTools: AgentTool[]
+        additionalContexts: string[]
+    }> {
+        const { prepared, sessionId, entries, signal } = params
+        const baseTools = prepared.tools as AgentTool[]
+        const hasSessionTitleTool = baseTools.some(
+            (t) => t.name === SET_SESSION_TITLE_TOOL_NAME,
+        )
+        let effectiveTools: AgentTool[] = baseTools
+        if (!hasSessionTitleTool) {
+            const titleFactory =
+                this.extensionRegistry.getToolFactory(
+                    SET_SESSION_TITLE_TOOL_NAME,
+                ) ??
+                (this.extensionRegistry !== rendererRegistry
+                    ? rendererRegistry.getToolFactory(SET_SESSION_TITLE_TOOL_NAME)
+                    : undefined)
+            if (titleFactory) {
+                const dynamicTitleTool = await titleFactory.create({
+                    platform: 'darwin',
+                    services: {} as any,
+                    sessionId,
+                })
+                if (dynamicTitleTool) {
+                    effectiveTools = [dynamicTitleTool, ...baseTools]
+                }
+            }
+        }
+        const isResume = entries.some((entry) => entry.kind === 'assistant')
+        const additionalContexts: string[] = []
+        try {
+            const sessionStartOutcome = await HookProvider.execute(
+                'SessionStart',
+                {
+                    event: 'SessionStart',
+                    sessionId,
+                    payload: {
+                        hook_event_name: 'SessionStart',
+                        session_id: sessionId,
+                        cwd: prepared.projectCwd ?? '',
+                        model: prepared.model.id,
+                        permission_mode: prepared.requestApproval ? 'default' : 'bypassPermissions',
+                        source: isResume ? 'resume' : 'startup',
+                    },
+                    signal,
+                },
+                {
+                    hooks: prepared.generationSnapshot?.hooks,
+                    extensionRegistry: this.extensionRegistry,
+                },
+            )
+            if (sessionStartOutcome.additionalContexts && sessionStartOutcome.additionalContexts.length > 0) {
+                additionalContexts.push(...sessionStartOutcome.additionalContexts)
+            }
+        } catch {
+            // Fail open on session-start hook error
+        }
+        return { effectiveTools, additionalContexts }
+    }
+
+    private async resolvePersistedEnhancedPrompt(
+        sessionId: string,
+        signal?: AbortSignal,
+    ): Promise<string | undefined> {
+        if (signal?.aborted) {
+            throw new AgentPreflightError(
+                'aborted',
+                'System prompt enhancement aborted',
+                'agent.preflight.aborted',
+            )
+        }
+        const cached = this.sessionSystemPrompts.get(sessionId)
+        if (cached) {
+            return cached
+        }
+        const inFlight = this.getActiveInFlightPromptBuild(sessionId)
+        if (inFlight) {
+            return await this.awaitInFlightPromptBuild(sessionId, inFlight, signal)
+        }
+        try {
+            await abortablePromise(waitForForkedSessionPrompt(sessionId), signal)
+        } catch (error) {
+            if (signal?.aborted || (error instanceof Error && error.name === 'AbortError')) {
+                throw new AgentPreflightError(
+                    'aborted',
+                    'System prompt enhancement aborted',
+                    'agent.preflight.aborted',
+                )
+            }
+            throw new AgentPreflightError(
+                'system_prompt_enhancement_failed',
+                error instanceof Error ? error.message : String(error ?? 'Failed to copy forked system prompt'),
+                'agent.preflight.system_prompt_enhancement_failed',
+            )
+        }
+        if (typeof this.bridge.SessionGetSystemPrompt === 'function') {
+            let persisted: string | null | undefined
+            try {
+                persisted = await abortablePromise(
+                    this.bridge.SessionGetSystemPrompt(sessionId),
+                    signal,
+                )
+            } catch (error) {
+                if (signal?.aborted || (error instanceof Error && error.name === 'AbortError')) {
+                    throw new AgentPreflightError(
+                        'aborted',
+                        'System prompt enhancement aborted',
+                        'agent.preflight.aborted',
+                    )
+                }
+                throw new AgentPreflightError(
+                    'system_prompt_enhancement_failed',
+                    error instanceof Error ? error.message : String(error ?? 'Failed to load persisted session system prompt'),
+                    'agent.preflight.system_prompt_enhancement_failed',
+                )
+            }
+            if (typeof persisted === 'string' && persisted.length > 0) {
+                this.sessionSystemPrompts.set(sessionId, persisted)
+                return persisted
+            }
+        }
+        return undefined
+    }
+
+    private async synthesizeAndPersistEnhancedPrompt(params: {
+        prepared: PreparedAgentRun
+        sessionId: string
+        client: ProtocolClient
+        entries?: readonly ConversationEntry[]
+        additionalContexts: readonly string[]
+        effectiveTools: readonly AgentTool[]
+        signal: AbortSignal
+    }): Promise<string> {
+        const {
+            prepared,
+            sessionId,
+            client,
+            entries = [],
+            additionalContexts,
+            effectiveTools,
+            signal,
+        } = params
+        try {
+            const enhancement = prepared.systemPromptEnhancement!
+            const builderModel = resolveEnhancementModel(
+                prepared.models ?? [prepared.model],
+                enhancement,
+                prepared.defaultModelId ?? prepared.model.id,
+                prepared.modelSettings,
+            )
+            if (!builderModel) {
+                throw new AgentPreflightError(
+                    'system_prompt_enhancement_no_model',
+                    'No available model to build enhanced system prompt',
+                    'agent.preflight.system_prompt_enhancement_no_model',
+                )
+            }
+
+            let mutableCore =
+                prepared.snapshot.mutableCoreSystemPrompt ?? prepared.systemPrompt
+            const hasTitleTool = effectiveTools.some(
+                (tool) => tool.name === SET_SESSION_TITLE_TOOL_NAME,
+            )
+            if (
+                hasTitleTool &&
+                !mutableCore.includes(CONDITIONAL_TITLE_GUIDELINE) &&
+                !mutableCore.includes('call the title tool')
+            ) {
+                mutableCore += `\n\n${CONDITIONAL_TITLE_GUIDELINE}`
+            }
+            if (additionalContexts.length > 0) {
+                mutableCore += `\n\n${additionalContexts.join('\n\n')}`
+            }
+
+            const middlewares =
+                prepared.generationSnapshot?.middleware ??
+                this.extensionRegistry.getProtocolMiddlewares()
+            if (middlewares.some((mw) => typeof mw.onRequest === 'function')) {
+                const pipeline = new ProtocolMiddlewarePipeline(middlewares)
+                const probed = await pipeline.executeRequest(
+                    {
+                        model: prepared.model,
+                        systemPrompt: mutableCore,
+                        entries: [...entries],
+                        tools: effectiveTools.map((t) => ({
+                            name: t.name,
+                            description: t.description,
+                            parameters: t.parameters,
+                        })),
+                        reasoningEffort: prepared.reasoningEffort,
+                        speed: prepared.speed,
+                        seed: {
+                            id: this.generateId(),
+                            sessionId,
+                            createdAt: this.now(),
+                            kind: 'assistant',
+                            model: prepared.model.id,
+                            content: [],
+                            status: 'streaming',
+                            stopReason: 'pending',
+                        },
+                    },
+                    { signal },
+                )
+                if (signal.aborted) {
+                    throw new AgentPreflightError(
+                        'aborted',
+                        'System prompt enhancement aborted',
+                        'agent.preflight.aborted',
+                    )
+                }
+                if (typeof probed.systemPrompt === 'string' && probed.systemPrompt.length > 0) {
+                    mutableCore = probed.systemPrompt
+                }
+            }
+
+            let built = await synthesizeEnhancedSystemPrompt({
+                client,
+                model: builderModel,
+                mutableCorePrompt: mutableCore,
+                verbatimContextPrompt: prepared.snapshot.verbatimContextPrompt ?? '',
+                enhancement,
+                requiredToolNames: effectiveTools.map((tool) => tool.name),
+                requiredCwd: prepared.projectCwd,
+                hadGitSection: Boolean(prepared.gitSettings),
+                sessionId,
+                signal,
+                generateId: this.generateId,
+                now: this.now,
+            })
+
+            if (signal.aborted) {
+                throw new AgentPreflightError(
+                    'aborted',
+                    'System prompt enhancement aborted',
+                    'agent.preflight.aborted',
+                )
+            }
+
+            try {
+                if (typeof this.bridge.SessionSetSystemPrompt === 'function') {
+                    if (signal.aborted) {
+                        throw new AgentPreflightError(
+                            'aborted',
+                            'System prompt enhancement aborted',
+                            'agent.preflight.aborted',
+                        )
+                    }
+                    const saved = await this.bridge.SessionSetSystemPrompt(sessionId, built)
+                    if (saved === false || signal.aborted) {
+                        throw new AgentPreflightError(
+                            signal.aborted ? 'aborted' : 'session_gone',
+                            signal.aborted
+                                ? 'System prompt enhancement aborted'
+                                : 'Session was removed during system prompt enhancement',
+                            signal.aborted ? 'agent.preflight.aborted' : 'agent.preflight.session_gone',
+                        )
+                    }
+                    if (typeof this.bridge.SessionGetSystemPrompt === 'function') {
+                        const authoritative = await this.bridge.SessionGetSystemPrompt(sessionId)
+                        if (!authoritative) throw new Error('Persisted enhanced system prompt is unavailable')
+                        built = authoritative
+                    }
+                }
+            } catch (error) {
+                if (error instanceof AgentPreflightError && (error.code === 'aborted' || error.code === 'session_gone')) throw error
+                if (signal.aborted || (error instanceof Error && error.name === 'AbortError')) {
+                    throw new AgentPreflightError('aborted', 'System prompt enhancement aborted', 'agent.preflight.aborted')
+                }
+                throw new AgentPreflightError(
+                    'system_prompt_enhancement_failed',
+                    error instanceof Error ? error.message : String(error),
+                    'agent.preflight.system_prompt_enhancement_failed',
+                )
+            }
+            if (signal.aborted) {
+                throw new AgentPreflightError(
+                    'aborted',
+                    'System prompt enhancement aborted',
+                    'agent.preflight.aborted',
+                )
+            }
+            this.sessionSystemPrompts.set(sessionId, built)
+            return built
+        } catch (error) {
+            throw redactErrorWithSecrets(error, [prepared.apiKey])
+        }
+    }
+
+    private async resolveSubAgentParentEnhancedPrompt(
+        prepared: PreparedAgentRun,
+        parentSessionId: string,
+        getEntries?: (sessionId: string) => Promise<ConversationEntry[]> | ConversationEntry[],
+        signal?: AbortSignal,
+    ): Promise<string | undefined> {
+        try {
+            if (signal?.aborted) {
+                throw new AgentPreflightError(
+                    'aborted',
+                    'System prompt enhancement aborted',
+                    'agent.preflight.aborted',
+                )
+            }
+            const existing = await this.resolvePersistedEnhancedPrompt(
+                parentSessionId,
+                signal,
+            )
+            if (existing) {
+                return existing
+            }
+            if (!prepared.systemPromptEnhancement?.enabled) {
+                return undefined
+            }
+            this.assertNotDisposed()
+            if (signal?.aborted) {
+                throw new AgentPreflightError(
+                    'aborted',
+                    'System prompt enhancement aborted',
+                    'agent.preflight.aborted',
+                )
+            }
+
+            const inFlight = this.getActiveInFlightPromptBuild(parentSessionId)
+            if (inFlight) {
+                return await this.awaitInFlightPromptBuild(
+                    parentSessionId,
+                    inFlight,
+                    signal,
+                )
+            }
+
+            const buildController = new AbortController()
+            this.pendingSubAgentPromptControllers.add(buildController)
+            const buildPromise = (async (): Promise<string> => {
+                try {
+                    const entries = getEntries ? await getEntries(parentSessionId) : []
+                    throwIfAborted(buildController.signal)
+                    this.assertNotDisposed()
+
+                    const { manager, namespace } = await this.ensureConnectionManager(
+                        prepared,
+                        buildController.signal,
+                    )
+                    throwIfAborted(buildController.signal)
+                    this.assertNotDisposed()
+
+                    const effectiveProviderId = this.resolveEffectiveProtocolProviderId(
+                        prepared.protocolProviderId,
+                    )
+                    const client = this.createClientInstance({
+                        bridge: this.bridge,
+                        apiKey: prepared.apiKey,
+                        baseUrl: prepared.baseUrl,
+                        sessionId: parentSessionId,
+                        protocolProviderId: effectiveProviderId,
+                        now: this.now,
+                        generateRequestId: this.generateId,
+                        connectionManager: manager ?? undefined,
+                        connectionNamespace: namespace,
+                    })
+
+                    const { effectiveTools, additionalContexts } =
+                        await this.resolveSessionPromptInputs({
+                            prepared,
+                            sessionId: parentSessionId,
+                            entries,
+                            signal: buildController.signal,
+                        })
+                    throwIfAborted(buildController.signal)
+
+                    const built = await this.synthesizeAndPersistEnhancedPrompt({
+                        prepared,
+                        sessionId: parentSessionId,
+                        client,
+                        entries,
+                        additionalContexts,
+                        effectiveTools,
+                        signal: buildController.signal,
+                    })
+                    if (!built.trim()) {
+                        throw new AgentPreflightError(
+                            'system_prompt_enhancement_failed',
+                            'Enhanced system prompt is unavailable for sub-agent execution',
+                            'agent.preflight.system_prompt_enhancement_failed',
+                        )
+                    }
+                    return built
+                } catch (error) {
+                    throw redactErrorWithSecrets(error, [prepared.apiKey])
+                }
+            })()
+            observePromise(buildPromise)
+
+            const entry: InFlightPromptBuild = {
+                promise: buildPromise,
+                controller: buildController,
+                activeWaiters: new Set(),
+            }
+            this.inFlightPromptBuilds.set(parentSessionId, entry)
+            const cleanup = (): void => {
+                this.pendingSubAgentPromptControllers.delete(buildController)
+                if (this.inFlightPromptBuilds.get(parentSessionId) === entry) {
+                    this.inFlightPromptBuilds.delete(parentSessionId)
+                }
+            }
+            void buildPromise.then(cleanup, cleanup)
+
+            return await this.awaitInFlightPromptBuild(parentSessionId, entry, signal)
+        } catch (error) {
+            throw redactErrorWithSecrets(error, [prepared.apiKey])
+        }
+    }
+
+    private async resolveEffectiveSessionSystemPrompt(params: {
+        prepared: PreparedAgentRun
+        sessionId: string
+        client: ProtocolClient
+        entries?: readonly ConversationEntry[]
+        additionalContexts: readonly string[]
+        effectiveTools: readonly AgentTool[]
+        signal: AbortSignal
+    }): Promise<{ systemPrompt: string; isEnhanced: boolean }> {
+        const {
+            prepared,
+            sessionId,
+            client,
+            entries,
+            additionalContexts,
+            effectiveTools,
+            signal,
+        } = params
+
+        const existing = await this.resolvePersistedEnhancedPrompt(sessionId, signal)
+        if (existing) {
+            return { systemPrompt: existing, isEnhanced: true }
+        }
+        if (signal.aborted) {
+            throw new AgentPreflightError(
+                'aborted',
+                'System prompt enhancement aborted',
+                'agent.preflight.aborted',
+            )
+        }
+
+        const enhancement = prepared.systemPromptEnhancement
+        if (!enhancement?.enabled) {
+            let fallback = augmentSystemPromptForSessionTitle(prepared.systemPrompt)
+            if (additionalContexts.length > 0) {
+                fallback += '\n\n' + additionalContexts.join('\n\n')
+            }
+            return { systemPrompt: fallback, isEnhanced: false }
+        }
+
+        const inFlight = this.getActiveInFlightPromptBuild(sessionId)
+        if (inFlight) {
+            const built = await this.awaitInFlightPromptBuild(
+                sessionId,
+                inFlight,
+                signal,
+            )
+            return { systemPrompt: built, isEnhanced: true }
+        }
+        if (signal.aborted) {
+            throw new AgentPreflightError(
+                'aborted',
+                'System prompt enhancement aborted',
+                'agent.preflight.aborted',
+            )
+        }
+
+        const buildController = new AbortController()
+        const buildPromise = this.synthesizeAndPersistEnhancedPrompt({
+            prepared,
+            sessionId,
+            client,
+            entries,
+            additionalContexts,
+            effectiveTools,
+            signal: buildController.signal,
+        })
+        observePromise(buildPromise)
+
+        const entry: InFlightPromptBuild = {
+            promise: buildPromise,
+            controller: buildController,
+            activeWaiters: new Set(),
+        }
+        this.inFlightPromptBuilds.set(sessionId, entry)
+        const cleanup = (): void => {
+            if (this.inFlightPromptBuilds.get(sessionId) === entry) {
+                this.inFlightPromptBuilds.delete(sessionId)
+            }
+        }
+        void buildPromise.then(cleanup, cleanup)
+
+        const built = await this.awaitInFlightPromptBuild(sessionId, entry, signal)
+        return { systemPrompt: built, isEnhanced: true }
+    }
+
     private abortChildOps(): void {
         for (const child of this.childOps.values()) {
             if (child.loop) {
@@ -2408,6 +3122,10 @@ export class CLIProxyAPIAgentService implements AgentService {
         )
         this.subAgents.abortAll()
         this.subAgents.setParentContext(null)
+        for (const controller of this.pendingSubAgentPromptControllers) {
+            controller.abort()
+        }
+        this.pendingSubAgentPromptControllers.clear()
         this.abortChildOps()
         for (const active of this.activeOps.values()) {
             if (active.kind === 'stream' && active.loop) {
@@ -2419,6 +3137,11 @@ export class CLIProxyAPIAgentService implements AgentService {
         this.activeOps.clear()
         this.approvals.abortAll()
         this.sessionCachedContexts.clear()
+        this.sessionSystemPrompts.clear()
+        for (const entry of this.inFlightPromptBuilds.values()) {
+            entry.controller.abort()
+        }
+        this.inFlightPromptBuilds.clear()
         await this.cancelSessionWarmers()
         while (this.drainingWarmers.size > 0) {
             await Promise.allSettled(Array.from(this.drainingWarmers))

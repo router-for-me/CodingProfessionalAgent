@@ -266,6 +266,7 @@ export interface SubAgentRunRequest {
     reasoningEffort?: string
     speed?: 'standard' | 'fast' | string
     systemPrompt: string
+    enhancedSystemPrompt?: string
     developerPrompt?: string
     tools: readonly AgentTool[]
     signal: AbortSignal
@@ -286,6 +287,11 @@ export interface SubAgentHostConfig {
     extensionRegistry?: any
     hookEngine?: any
     getEntries?: (sessionId: string) => Promise<ConversationEntry[]> | ConversationEntry[]
+    getEnhancedSystemPrompt?: (parentSessionId: string) => string | undefined
+    resolveEnhancedSystemPrompt?: (
+        parentSessionId: string,
+        signal?: AbortSignal,
+    ) => Promise<string | undefined>
 }
 
 export interface SubAgentParentContext {
@@ -1549,10 +1555,33 @@ export class SubAgentHost {
             record.roleName ||
             this.findMatchingRole(record.roleId || record.name, config)?.name
 
-        const developerPrompt = buildSubAgentDeveloperPrompt(
-            effectiveRoleName,
-            effectiveRolePrompt,
-        )
+        const parentEnhancedPrompt = config.resolveEnhancedSystemPrompt
+            ? await config.resolveEnhancedSystemPrompt(
+                  record.parentSessionId,
+                  runtime.controller.signal,
+              )
+            : config.getEnhancedSystemPrompt?.(record.parentSessionId)
+        if (runtime.controller.signal.aborted) {
+            const abortErr = new Error('Sub-agent aborted')
+            abortErr.name = 'AbortError'
+            throw abortErr
+        }
+        const hasParentEnhancedPrompt =
+            typeof parentEnhancedPrompt === 'string' && parentEnhancedPrompt.trim().length > 0
+        if (config.prepared?.systemPromptEnhancement?.enabled && !hasParentEnhancedPrompt) {
+            throw new Error('Enhanced system prompt is unavailable for sub-agent execution')
+        }
+        const trimmedRolePrompt = (effectiveRolePrompt || '').trim()
+        const developerPrompt = hasParentEnhancedPrompt
+            ? trimmedRolePrompt
+                ? effectiveRoleName
+                    ? `[${effectiveRoleName}]\n${trimmedRolePrompt}`
+                    : trimmedRolePrompt
+                : ''
+            : buildSubAgentDeveloperPrompt(
+                  effectiveRoleName,
+                  effectiveRolePrompt,
+              )
         const request: SubAgentRunRequest = {
             agentId,
             sessionId: record.sessionId,
@@ -1563,16 +1592,19 @@ export class SubAgentHost {
             model,
             reasoningEffort: record.reasoningEffort,
             speed: config.prepared.speed,
-            systemPrompt: buildSubAgentSystemPrompt(
-                config.prepared,
-                effectiveTools,
-                record.name,
-                {
-                    extensionRegistry: config.extensionRegistry,
-                    allowSubagents: canSpawnChildren,
-                    roles: canSpawnChildren ? config.subagentsSettings?.roles : undefined,
-                },
-            ),
+            systemPrompt: hasParentEnhancedPrompt
+                ? parentEnhancedPrompt!
+                : buildSubAgentSystemPrompt(
+                      config.prepared,
+                      effectiveTools,
+                      record.name,
+                      {
+                          extensionRegistry: config.extensionRegistry,
+                          allowSubagents: canSpawnChildren,
+                          roles: canSpawnChildren ? config.subagentsSettings?.roles : undefined,
+                      },
+                  ),
+            enhancedSystemPrompt: hasParentEnhancedPrompt ? parentEnhancedPrompt! : undefined,
             developerPrompt: developerPrompt || undefined,
             tools: effectiveTools,
             signal: runtime.controller.signal,

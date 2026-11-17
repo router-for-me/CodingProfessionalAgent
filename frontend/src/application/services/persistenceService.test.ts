@@ -5070,6 +5070,55 @@ describe('persist pure helpers', () => {
 
       expect(writtenState?.settings?.headlessCloseAction).toBe('quit')
     })
+
+    it('persists and normalizes systemPromptEnhancement settings including invalid/empty allowedLanguages', async () => {
+      let writtenState: any = null
+      const KVStoreSet = vi.fn(async (key: string, value: unknown) => {
+        if (key === 'app-state') {
+          writtenState = value
+        }
+      })
+      setHostBridge({
+        KVStoreGet: vi.fn(async () => ({
+          settings: {
+            systemPromptEnhancement: {
+              enabled: true,
+              multilingualEnabled: true,
+              allowedLanguages: ['invalid-lang'],
+              modelId: '  gpt-6-astra  ',
+            },
+          },
+        })),
+        KVStoreSet,
+      } as any)
+
+      const loaded = await loadPersistedState()
+      expect(loaded).not.toBeNull()
+      applyPersistedState(loaded!)
+      expect(useSettingsStore.getState().settings.systemPromptEnhancement).toEqual({
+        enabled: true,
+        multilingualEnabled: true,
+        allowedLanguages: ['en'],
+        modelId: 'gpt-6-astra',
+      })
+
+      useSettingsStore.getState().setSystemPromptEnhancement({
+        enabled: true,
+        multilingualEnabled: true,
+        allowedLanguages: ['zh-CN', 'ja', 'zh-CN'],
+        modelId: 'gpt-6-astra',
+      })
+
+      await flushPendingPersistence()
+      await flushWrites()
+
+      expect(writtenState?.settings?.systemPromptEnhancement).toEqual({
+        enabled: true,
+        multilingualEnabled: true,
+        allowedLanguages: ['zh-CN', 'ja'],
+        modelId: 'gpt-6-astra',
+      })
+    })
   })
 })
 
