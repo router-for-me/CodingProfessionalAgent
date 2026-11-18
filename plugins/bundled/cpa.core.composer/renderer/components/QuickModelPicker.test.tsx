@@ -137,8 +137,9 @@ describe('QuickModelPicker', () => {
         ])
     })
 
-    it('groups Gemini 4 models into a single Gemini 4 option when enableGemini4Grouping is true', () => {
+    it('includes Gemini 4 periodic table entry while preserving the complete expanded model list when enableGemini4Grouping is true', () => {
         const onOpenGemini4Group = vi.fn()
+        const onSelect = vi.fn()
         const withGemini4: ModelCatalogEntry[] = [
             ...mockModels,
             {
@@ -175,17 +176,22 @@ describe('QuickModelPicker', () => {
                 currentModelId="gemini-4-argon-high"
                 activeIndex={0}
                 onActiveIndexChange={vi.fn()}
-                onSelect={vi.fn()}
+                onSelect={onSelect}
                 onClose={vi.fn()}
                 enableGemini4Grouping
                 onOpenGemini4Group={onOpenGemini4Group}
             />,
         )
 
-        const geminiOption = screen.getByRole('option', { name: /Gemini 4/i })
+        const geminiOption = screen.getByRole('option', { name: /Gemini 4.*Periodic table/i })
         expect(geminiOption).toBeInTheDocument()
-        expect(screen.queryByRole('option', { name: 'Gemini 4 Argon' })).not.toBeInTheDocument()
-        expect(screen.queryByRole('option', { name: 'Gemini 4 Carbon' })).not.toBeInTheDocument()
+        const argonOption = screen.getByRole('option', { name: /Gemini 4 Argon/i })
+        const carbonOption = screen.getByRole('option', { name: /Gemini 4 Carbon/i })
+        expect(argonOption).toBeInTheDocument()
+        expect(carbonOption).toBeInTheDocument()
+
+        fireEvent.mouseDown(argonOption)
+        expect(onSelect).toHaveBeenCalledWith(withGemini4[3])
 
         fireEvent.mouseDown(geminiOption)
         expect(onOpenGemini4Group).toHaveBeenCalledTimes(1)

@@ -393,39 +393,33 @@ export function buildQuickModelPickerItems(options: {
     } = options
     const q = searchQuery.trim().toLowerCase()
     const grouped = groupGemini4Models(models)
-    const canGroup =
+    const canShowPeriodicEntry =
         enableGemini4Grouping &&
         grouped.gemini4Models.length > 0 &&
         shouldGroupGemini4InQuickPicker(searchQuery)
 
-    if (!canGroup) {
-        const sorted = [...models].sort(compareModelsByName)
-        const filtered = !q
-            ? sorted
-            : sorted.filter((model) => {
-                  const labelMatch = (model.label || model.id).toLowerCase().includes(q)
-                  const idMatch = model.id.toLowerCase().includes(q)
-                  const descMatch = model.description?.toLowerCase().includes(q) ?? false
-                  return labelMatch || idMatch || descMatch
-              })
-        return filtered.map((model) => ({
-            kind: 'model',
-            id: model.id,
-            label: model.label || model.id,
-            description: model.description || model.id,
-            model,
-        }))
-    }
-
-    const sortedNonGemini4 = [...grouped.nonGemini4Models].sort(compareModelsByName)
-    const filteredNonGemini4 = !q
-        ? sortedNonGemini4
-        : sortedNonGemini4.filter((model) => {
+    // Always retain the complete expanded model list in QuickModelPicker even when the periodic table entry is shown
+    const sorted = [...models].sort(compareModelsByName)
+    const filtered = !q
+        ? sorted
+        : sorted.filter((model) => {
               const labelMatch = (model.label || model.id).toLowerCase().includes(q)
               const idMatch = model.id.toLowerCase().includes(q)
               const descMatch = model.description?.toLowerCase().includes(q) ?? false
               return labelMatch || idMatch || descMatch
           })
+
+    const items: QuickModelPickerItem[] = filtered.map((model) => ({
+        kind: 'model',
+        id: model.id,
+        label: model.label || model.id,
+        description: model.description || model.id,
+        model,
+    }))
+
+    if (!canShowPeriodicEntry) {
+        return items
+    }
 
     const groupItem: QuickModelPickerItem = {
         kind: 'gemini4-group',
@@ -436,14 +430,6 @@ export function buildQuickModelPickerItems(options: {
         releasedCount: grouped.releasedCount,
         containsCurrentModel: grouped.gemini4Models.some((m) => m.id === currentModelId),
     }
-
-    const items: QuickModelPickerItem[] = filteredNonGemini4.map((model) => ({
-        kind: 'model',
-        id: model.id,
-        label: model.label || model.id,
-        description: model.description || model.id,
-        model,
-    }))
 
     const insertIndex = items.findIndex(
         (item) =>

@@ -199,6 +199,8 @@ describe('gemini4PeriodicTable utils', () => {
         expect(defaultItems.map((i) => i.id)).toEqual([
             'claude-opus-4.6',
             '__gemini4_group__',
+            'gemini-4-argon-high',
+            'gemini-4-carbon-high',
             'gpt-5.4',
         ])
         expect(defaultItems[1]).toMatchObject({
@@ -206,6 +208,18 @@ describe('gemini4PeriodicTable utils', () => {
             containsCurrentModel: true,
             releasedCount: 2,
         })
+
+        const geminiSearchItems = buildQuickModelPickerItems({
+            models,
+            currentModelId: 'gpt-5.4',
+            searchQuery: 'gemini',
+            enableGemini4Grouping: true,
+        })
+        expect(geminiSearchItems.map((i) => i.id)).toEqual([
+            '__gemini4_group__',
+            'gemini-4-argon-high',
+            'gemini-4-carbon-high',
+        ])
 
         const periodicSearchItems = buildQuickModelPickerItems({
             models,
@@ -271,6 +285,6 @@ describe('gemini4PeriodicTable utils', () => {
                 searchQuery: '',
                 enableGemini4Grouping: true,
             }).map((i) => i.id),
-        ).toEqual(['__gemini4_group__', 'gemini-10-pro'])
+        ).toEqual(['__gemini4_group__', 'gemini-4-tantalum', 'gemini-10-pro'])
     })
 })

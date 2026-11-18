@@ -2230,15 +2230,17 @@ describe('QuickModelPicker in Composer', () => {
             rendererPluginRuntime.eventBus.emit('composer:toggle-model-selector')
         })
 
-        const geminiGroupOption = screen.getByRole('option', { name: /Gemini 4/i })
+        const geminiGroupOption = screen.getByRole('option', { name: /Gemini 4.*Periodic table/i })
         expect(geminiGroupOption).toBeInTheDocument()
-        expect(screen.queryByRole('option', { name: /Gemini 4 Argon/i })).not.toBeInTheDocument()
+        expect(screen.getByRole('option', { name: /Gemini 4 Argon/i })).toBeInTheDocument()
+        expect(screen.getByRole('option', { name: /Gemini 4 Carbon/i })).toBeInTheDocument()
 
         await user.type(textarea, 'argon')
         expect(screen.getByRole('option', { name: /Gemini 4 Argon/i })).toBeInTheDocument()
+        expect(screen.queryByRole('option', { name: /Gemini 4.*Periodic table/i })).not.toBeInTheDocument()
 
         await user.clear(textarea)
-        fireEvent.mouseDown(screen.getByRole('option', { name: /Gemini 4/i }))
+        fireEvent.mouseDown(screen.getByRole('option', { name: /Gemini 4.*Periodic table/i }))
 
         const dialog = screen.getByRole('dialog', { name: 'Model periodic table' })
         expect(dialog).toBeInTheDocument()
@@ -2252,7 +2254,7 @@ describe('QuickModelPicker in Composer', () => {
         act(() => {
             rendererPluginRuntime.eventBus.emit('composer:toggle-model-selector')
         })
-        fireEvent.mouseDown(screen.getByRole('option', { name: /Gemini 4/i }))
+        fireEvent.mouseDown(screen.getByRole('option', { name: /Gemini 4.*Periodic table/i }))
 
         const dialog2 = screen.getByRole('dialog', { name: 'Model periodic table' })
         const carbonBtn = dialog2.querySelector('[data-periodic-element="6"]') as HTMLButtonElement
@@ -2377,7 +2379,7 @@ describe('QuickModelPicker in Composer', () => {
         act(() => {
             rendererPluginRuntime.eventBus.emit('composer:toggle-model-selector')
         })
-        fireEvent.mouseDown(screen.getByRole('option', { name: /Gemini 4/i }))
+        fireEvent.mouseDown(screen.getByRole('option', { name: /Gemini 4.*Periodic table/i }))
         expect(screen.getByRole('dialog', { name: 'Model periodic table' })).toBeInTheDocument()
         expect(textarea).toHaveAttribute('contenteditable', 'false')
 
