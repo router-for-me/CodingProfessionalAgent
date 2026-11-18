@@ -4075,4 +4075,232 @@ describe('CodexClient', () => {
             }),
         ).rejects.toThrow(/disposed/i)
     })
+
+    it('preserves previous_response_id continuation and resets on developer prefix change for gpt-* requests without instructions', async () => {
+        const bridge = new FakeNativeBridge()
+        const manager = new CodexConnectionManager(bridge, {
+            now: () => 1_000,
+            generateRequestId: () => 'op',
+        })
+        bridge.queueWebSocket({
+            frames: [{ kind: 'websocket-open' }, ...completedTextFrames('resp_gpt_1', 'ok1')],
+        })
+
+        const developerSystemItem = {
+            type: 'message' as const,
+            role: 'developer' as const,
+            content: [{ type: 'input_text' as const, text: 'Enhanced GPT-6.2 system prompt' }],
+        }
+        const gptTurn1: CodexResponseCreate = {
+            type: 'response.create',
+            model: 'gpt-6.2-sol',
+            store: false,
+            stream: true,
+            input: [
+                developerSystemItem,
+                { role: 'user', content: [{ type: 'input_text', text: 'hi' }] },
+            ],
+            text: { verbosity: 'low' },
+            include: ['reasoning.encrypted_content'],
+            prompt_cache_key: 'session-gpt-cont',
+        }
+
+        const lease1 = await manager.acquire('session-gpt-cont', {
+            apiKey: 'k',
+            baseUrl: 'http://127.0.0.1:8317/backend-api/',
+            request: gptTurn1,
+            signal: new AbortController().signal,
+            mode: 'session',
+        })
+        for await (const _ of lease1.events) {
+            // drain
+        }
+        lease1.commit({
+            fullRequestBody: gptTurn1,
+            responseId: 'resp_gpt_1',
+            responseItems: [assistantMessageItem('ok1')],
+        })
+        await lease1.release()
+
+        const opId = String(
+            (
+                bridge.calls.find((c) => c.method === 'openWebSocket')?.args[0] as {
+                    operationId: string
+                }
+            ).operationId,
+        )
+
+        const gptTurn2: CodexResponseCreate = {
+            ...gptTurn1,
+            input: [
+                developerSystemItem,
+                { role: 'user', content: [{ type: 'input_text', text: 'hi' }] },
+                assistantMessageItem('ok1'),
+                { role: 'user', content: [{ type: 'input_text', text: 'next' }] },
+            ],
+        }
+
+        const acquire2 = manager.acquire('session-gpt-cont', {
+            apiKey: 'k',
+            baseUrl: 'http://127.0.0.1:8317/backend-api/',
+            request: gptTurn2,
+            signal: new AbortController().signal,
+            mode: 'session',
+        })
+        await vi.waitFor(() => {
+            expect(bridge.calls.filter((c) => c.method === 'sendWebSocket').length).toBe(2)
+        })
+        for (const frame of completedTextFrames('resp_gpt_2', 'ok2')) {
+            bridge.emit(opId, frame)
+        }
+        const lease2 = await acquire2
+        const sendsAfterTurn2 = bridge.calls.filter((c) => c.method === 'sendWebSocket')
+        const sentTurn2 = JSON.parse(String(sendsAfterTurn2[1]?.args[1])) as CodexResponseCreate
+        expect('instructions' in sentTurn2).toBe(false)
+        expect(sentTurn2.previous_response_id).toBe('resp_gpt_1')
+        expect(sentTurn2.input).toEqual([
+            { role: 'user', content: [{ type: 'input_text', text: 'next' }] },
+        ])
+        for await (const _ of lease2.events) {
+            // drain
+        }
+        lease2.commit({
+            fullRequestBody: gptTurn2,
+            responseId: 'resp_gpt_2',
+            responseItems: [assistantMessageItem('ok2')],
+        })
+        await lease2.release()
+
+        const updatedDeveloperItem = {
+            type: 'message' as const,
+            role: 'developer' as const,
+            content: [{ type: 'input_text' as const, text: 'Re-synthesized GPT-6.2 system prompt' }],
+        }
+        const gptTurn3ChangedSystem: CodexResponseCreate = {
+            ...gptTurn2,
+            input: [
+                updatedDeveloperItem,
+                { role: 'user', content: [{ type: 'input_text', text: 'hi' }] },
+                assistantMessageItem('ok1'),
+                { role: 'user', content: [{ type: 'input_text', text: 'next' }] },
+                assistantMessageItem('ok2'),
+                { role: 'user', content: [{ type: 'input_text', text: 'third' }] },
+            ],
+        }
+
+        const acquire3 = manager.acquire('session-gpt-cont', {
+            apiKey: 'k',
+            baseUrl: 'http://127.0.0.1:8317/backend-api/',
+            request: gptTurn3ChangedSystem,
+            signal: new AbortController().signal,
+            mode: 'session',
+        })
+        await vi.waitFor(() => {
+            expect(bridge.calls.filter((c) => c.method === 'sendWebSocket').length).toBe(3)
+        })
+        for (const frame of completedTextFrames('resp_gpt_3', 'ok3')) {
+            bridge.emit(opId, frame)
+        }
+        const lease3 = await acquire3
+        const sendsAfterTurn3 = bridge.calls.filter((c) => c.method === 'sendWebSocket')
+        const sentTurn3 = JSON.parse(String(sendsAfterTurn3[2]?.args[1])) as CodexResponseCreate
+        expect('instructions' in sentTurn3).toBe(false)
+        expect(sentTurn3.previous_response_id).toBeUndefined()
+        expect(sentTurn3.input).toEqual(gptTurn3ChangedSystem.input)
+        for await (const _ of lease3.events) {
+            // drain
+        }
+        await lease3.release({ keep: false })
+    })
+
+    it('invalidates previous_response_id continuation when switching between gpt-* models with identical input prefix', async () => {
+        const bridge = new FakeNativeBridge()
+        const manager = new CodexConnectionManager(bridge, {
+            now: () => 1_000,
+            generateRequestId: () => 'op',
+        })
+        bridge.queueWebSocket({
+            frames: [{ kind: 'websocket-open' }, ...completedTextFrames('resp_sw_1', 'ok1')],
+        })
+
+        const developerSystemItem = {
+            type: 'message' as const,
+            role: 'developer' as const,
+            content: [{ type: 'input_text' as const, text: 'Enhanced GPT system prompt' }],
+        }
+        const turn1: CodexResponseCreate = {
+            type: 'response.create',
+            model: 'gpt-6.2-sol',
+            store: false,
+            stream: true,
+            input: [
+                developerSystemItem,
+                { role: 'user', content: [{ type: 'input_text', text: 'hi' }] },
+            ],
+            text: { verbosity: 'low' },
+            include: ['reasoning.encrypted_content'],
+            prompt_cache_key: 'session-gpt-model-switch',
+        }
+
+        const lease1 = await manager.acquire('session-gpt-model-switch', {
+            apiKey: 'k',
+            baseUrl: 'http://127.0.0.1:8317/backend-api/',
+            request: turn1,
+            signal: new AbortController().signal,
+            mode: 'session',
+        })
+        for await (const _ of lease1.events) {
+            // drain
+        }
+        lease1.commit({
+            fullRequestBody: turn1,
+            responseId: 'resp_sw_1',
+            responseItems: [assistantMessageItem('ok1')],
+        })
+        await lease1.release()
+
+        const opId = String(
+            (
+                bridge.calls.find((c) => c.method === 'openWebSocket')?.args[0] as {
+                    operationId: string
+                }
+            ).operationId,
+        )
+
+        const turn2SwitchedModel: CodexResponseCreate = {
+            ...turn1,
+            model: 'gpt-6.2-astra',
+            input: [
+                developerSystemItem,
+                { role: 'user', content: [{ type: 'input_text', text: 'hi' }] },
+                assistantMessageItem('ok1'),
+                { role: 'user', content: [{ type: 'input_text', text: 'next' }] },
+            ],
+        }
+
+        const acquire2 = manager.acquire('session-gpt-model-switch', {
+            apiKey: 'k',
+            baseUrl: 'http://127.0.0.1:8317/backend-api/',
+            request: turn2SwitchedModel,
+            signal: new AbortController().signal,
+            mode: 'session',
+        })
+        await vi.waitFor(() => {
+            expect(bridge.calls.filter((c) => c.method === 'sendWebSocket').length).toBe(2)
+        })
+        for (const frame of completedTextFrames('resp_sw_2', 'ok2')) {
+            bridge.emit(opId, frame)
+        }
+        const lease2 = await acquire2
+        const sendCalls = bridge.calls.filter((c) => c.method === 'sendWebSocket')
+        const sentTurn2 = JSON.parse(String(sendCalls[1]?.args[1])) as CodexResponseCreate
+        expect(sentTurn2.model).toBe('gpt-6.2-astra')
+        expect('instructions' in sentTurn2).toBe(false)
+        expect(sentTurn2.previous_response_id).toBeUndefined()
+        expect(sentTurn2.input).toEqual(turn2SwitchedModel.input)
+        for await (const _ of lease2.events) {
+            // drain
+        }
+        await lease2.release({ keep: false })
+    })
 })

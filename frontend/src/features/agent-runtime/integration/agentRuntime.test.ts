@@ -1282,12 +1282,25 @@ describe('agent runtime end-to-end integration', () => {
         bridge.setWebSocketSendHandler((_opId, payload) => {
             const body = JSON.parse(payload) as {
                 instructions?: string
+                input?: Array<{ role?: string; content?: Array<{ text?: string }> }>
                 max_output_tokens?: number
             }
-            const isSummary =
-                typeof body.max_output_tokens === 'number' ||
+            const hasSummaryInstruction =
                 (typeof body.instructions === 'string' &&
-                    body.instructions.includes('context summarization assistant'))
+                    body.instructions.includes('context summarization assistant')) ||
+                (Array.isArray(body.input) &&
+                    body.input.some(
+                        (item) =>
+                            item?.role === 'developer' &&
+                            Array.isArray(item.content) &&
+                            item.content.some(
+                                (part) =>
+                                    typeof part?.text === 'string' &&
+                                    part.text.includes('context summarization assistant'),
+                            ),
+                    ))
+            const isSummary =
+                typeof body.max_output_tokens === 'number' || hasSummaryInstruction
             if (isSummary) {
                 summarySeq += 1
                 const textBody =
@@ -1397,7 +1410,12 @@ describe('agent runtime end-to-end integration', () => {
 
         const bodies = parseSentBodies(bridge)
         expect(bodies).toHaveLength(1)
-        expect(bodies[0]?.instructions).toContain('[E2E Policy Guardrail]')
+        expect(bodies[0]).not.toHaveProperty('instructions')
+        expect(bodies[0]?.input[0]).toEqual({
+            type: 'message',
+            role: 'developer',
+            content: [{ type: 'input_text', text: expect.stringContaining('[E2E Policy Guardrail]') }],
+        })
 
         expect(completedStats).toHaveLength(1)
         expect(completedStats[0]?.elapsedMs).toBeGreaterThanOrEqual(0)
@@ -1415,6 +1433,134 @@ describe('agent runtime end-to-end integration', () => {
                 )
             }),
         ).toBe(true)
+
+        await service.dispose()
+    })
+
+    it('places enhanced system prompt in input[0] developer message and omits instructions for gpt-6.2-* across synthesis, live turns, and cached compaction', async () => {
+        const { service, bridge } = createHarness()
+        const gpt62Model: ModelCatalogEntry = {
+            ...visionModel,
+            id: 'gpt-6.2-sol',
+            label: 'GPT-6.2 Sol',
+        }
+        const synthesizedCore = [
+            'Enhanced workspace instructions for /workspace/project: inspect project files using read, run commands with bash, apply targeted modifications with edit, and create files with write.',
+            'For independent subtasks, delegate via spawn_agent, send follow-ups using send_message, and cancel with stop_agent when needed.',
+            'Always set the session title on the first turn using title, verify exact paths inside /workspace/project before reporting completion, and reply concisely in English with rigorous verification.',
+            'Ensure every modification is validated by unit tests and type checks before concluding, avoiding speculative claims or unverified file paths.'.repeat(8),
+        ].join(' ')
+
+        // Queue: 1) synthesis isolated socket, 2) reused session socket (2 live turns), 3) single cached compaction isolated socket.
+        seedOpenSocket(bridge)
+        bridge.queueWebSocketSendResponse(textFrames('resp_synth', synthesizedCore, 10))
+        seedOpenSocket(bridge)
+        bridge.queueWebSocketSendResponse(textFrames('resp_live_1', 'old answer '.repeat(100), 12))
+        bridge.queueWebSocketSendResponse(textFrames('resp_live_2', 'ok', 14))
+        seedOpenSocket(bridge)
+        bridge.queueWebSocketSendResponse(textFrames('resp_cached_sum', validSummary(), 8))
+
+        const prepared = await service.prepare({
+            baseUrl: BASE_URL,
+            apiKey: API_KEY,
+            modelId: gpt62Model.id,
+            models: [gpt62Model],
+            reasoningLevel: 'medium',
+            speed: 'standard',
+            requestApproval: false,
+            projectPath: PROJECT,
+            fastContextCompaction: false,
+            systemPromptEnhancement: {
+                enabled: true,
+                multilingualEnabled: false,
+                allowedLanguages: ['en'],
+                modelId: gpt62Model.id,
+                appliedModelIds: [gpt62Model.id],
+            },
+        })
+
+        const sessionId = 'sess-gpt62-enh'
+        const u0 = userEntry('u0', 'old history '.repeat(100), sessionId)
+        const events1 = await collect(
+            service.streamChat({
+                prepared,
+                sessionId,
+                runId: 'run-gpt62-enh-1',
+                entries: [],
+                userEntry: u0,
+            }),
+        )
+        expect(events1.some((e) => e.type === 'error')).toBe(false)
+        const a0 = (events1.find((e) => e.type === 'assistant-end') as { entry?: AssistantEntry } | undefined)?.entry
+        expect(a0?.model).toBe(gpt62Model.id)
+
+        const u1 = userEntry('u1', 'recent question', sessionId)
+        const events2 = await collect(
+            service.streamChat({
+                prepared,
+                sessionId,
+                runId: 'run-gpt62-enh-2',
+                entries: [u0, a0!],
+                userEntry: u1,
+            }),
+        )
+        expect(events2.some((e) => e.type === 'error')).toBe(false)
+        const a1 = (events2.find((e) => e.type === 'assistant-end') as { entry?: AssistantEntry } | undefined)?.entry
+        expect(a1?.model).toBe(gpt62Model.id)
+
+        const opensBeforeCompact = openCalls(bridge)
+        expect(opensBeforeCompact).toHaveLength(2)
+
+        const compactResult = await service.compact({
+            prepared,
+            sessionId,
+            runId: 'run-gpt62-cached-compact',
+            entries: [u0, a0!, u1, a1!],
+        })
+        expect(compactResult.ok, compactResult.ok ? undefined : compactResult.message).toBe(true)
+
+        const opensAfterCompact = openCalls(bridge)
+        expect(opensAfterCompact).toHaveLength(opensBeforeCompact.length + 1)
+        const liveSessionOpId = (opensBeforeCompact[1]!.args[0] as { operationId: string }).operationId
+        const compactOpId = (opensAfterCompact[2]!.args[0] as { operationId: string }).operationId
+        expect(compactOpId).not.toBe(liveSessionOpId)
+
+        const sendCalls = bridge.calls.filter((call) => call.method === 'sendWebSocket')
+        expect(sendCalls).toHaveLength(4)
+        expect(sendCalls[1]!.args[0]).toBe(liveSessionOpId)
+        expect(sendCalls[2]!.args[0]).toBe(liveSessionOpId)
+        expect(sendCalls[3]!.args[0]).toBe(compactOpId)
+
+        const bodies = parseSentBodies(bridge)
+        expect(bodies).toHaveLength(4)
+        for (const body of bodies) {
+            expect('instructions' in body).toBe(false)
+        }
+
+        // Request 0: synthesis prompt in input[0] developer message.
+        expect(bodies[0]!.input[0]).toMatchObject({
+            type: 'message',
+            role: 'developer',
+        })
+        expect(JSON.stringify(bodies[0]!.input[0])).toContain('system prompt')
+
+        // Request 1: first live turn sends synthesized enhanced prompt in input[0] developer message.
+        expect(bodies[1]!.input[0]).toEqual({
+            type: 'message',
+            role: 'developer',
+            content: [{ type: 'input_text', text: expect.stringContaining(synthesizedCore) }],
+        })
+        expect(bodies[1]!.input[1]).toEqual({
+            role: 'user',
+            content: [{ type: 'input_text', text: 'old history '.repeat(100) }],
+        })
+
+        // Request 3: runCachedSummary reuses exact input[0] developer message, prompt_cache_key=sessionId, and omits instructions.
+        const cachedCompactionBody = bodies[3]!
+        expect(cachedCompactionBody.prompt_cache_key).toBe(sessionId)
+        expect(typeof cachedCompactionBody.max_output_tokens).toBe('number')
+        expect(cachedCompactionBody.input[0]).toEqual(bodies[1]!.input[0])
+        expect(cachedCompactionBody.input[1]).toEqual(bodies[1]!.input[1])
 
         await service.dispose()
     })

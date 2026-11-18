@@ -75,11 +75,26 @@ function resolveBaseReasoningEffort(
     return mappedCurrentEffort
 }
 
+const DEFAULT_SYSTEM_INSTRUCTIONS = 'You are a helpful assistant.'
+
+/**
+ * Returns true when the model ID starts with `gpt-` (case-insensitive, trimmed).
+ *
+ * GPT Responses models place system instructions as the leading `developer`
+ * message in `input` and omit top-level `instructions` so the prefix participates
+ * in prompt caching and `previous_response_id` continuation.
+ */
+export function isGptModelId(modelId: string): boolean {
+    return typeof modelId === 'string' && modelId.trim().toLowerCase().startsWith('gpt-')
+}
+
 /**
  * Construct a WebSocket `response.create` payload.
  *
  * Rules:
- * - system prompt only in `instructions`
+ * - `gpt-*` models write the system prompt as the first `role: 'developer'` message
+ *   in `input` (before any `developerPrompt`) and omit top-level `instructions`;
+ *   other models keep the system prompt in top-level `instructions`
  * - no maxTokens / max_tokens on normal turns; max_output_tokens only when
  *   maxOutputTokens is explicitly provided (summary-only)
  * - service_tier only when speed=fast and model.supportsFast
@@ -123,12 +138,27 @@ export function buildCodexRequest(input: BuildCodexRequestInput): CodexResponseC
         })
     }
 
+    const useDeveloperSystemPrompt = isGptModelId(model.id)
+    if (useDeveloperSystemPrompt) {
+        const developerSystemPrompt =
+            systemPrompt && systemPrompt.trim().length > 0
+                ? systemPrompt
+                : DEFAULT_SYSTEM_INSTRUCTIONS
+        codexInput.unshift({
+            type: 'message',
+            role: 'developer',
+            content: [{ type: 'input_text', text: developerSystemPrompt }],
+        })
+    }
+
     const body: CodexResponseCreate = {
         type: 'response.create',
         model: model.id,
         store: false,
         stream: true,
-        instructions: systemPrompt || 'You are a helpful assistant.',
+        ...(useDeveloperSystemPrompt
+            ? {}
+            : { instructions: systemPrompt || DEFAULT_SYSTEM_INSTRUCTIONS }),
         input: codexInput,
         text: { verbosity: 'low' },
         include: ['reasoning.encrypted_content'],

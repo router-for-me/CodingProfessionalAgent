@@ -124,7 +124,7 @@ export type CodexResponseCreate = {
     model: string
     store: false
     stream: true
-    instructions: string
+    instructions?: string
     input: CodexInputItem[]
     text: { verbosity: string }
     include: string[]

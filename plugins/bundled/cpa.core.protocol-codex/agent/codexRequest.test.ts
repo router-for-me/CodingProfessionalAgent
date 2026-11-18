@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ConversationEntry, ModelCatalogEntry } from '@cpa/plugin-api'
 import type { CodexToolDefinition } from './types'
-import { buildCodexRequest } from './codexRequest'
+import { buildCodexRequest, isGptModelId } from './codexRequest'
 
 const visionModel: ModelCatalogEntry = {
     id: 'vision-model',
@@ -465,7 +465,13 @@ describe('buildCodexRequest', () => {
             reasoningEffort: 'high',
         })
         expect(body).not.toHaveProperty('reasoning')
-        expect(body.input[1]).toEqual({ type: 'configuration_update', reasoning: { effort: 'high-effort' } })
+        expect(body).not.toHaveProperty('instructions')
+        expect(body.input[0]).toEqual({
+            type: 'message',
+            role: 'developer',
+            content: [{ type: 'input_text', text: 'System instructions' }],
+        })
+        expect(body.input[2]).toEqual({ type: 'configuration_update', reasoning: { effort: 'high-effort' } })
     })
 
     it('honors an explicit base across separate requests even when earlier entries have another effort', () => {
@@ -619,5 +625,168 @@ describe('buildCodexRequest', () => {
 
         // Should automatically infer 'low' from u1
         expect(body.reasoning?.effort).toBe('low')
+        expect(body).not.toHaveProperty('instructions')
+        expect(body.input[0]).toEqual({
+            type: 'message',
+            role: 'developer',
+            content: [{ type: 'input_text', text: 'System instructions' }],
+        })
+    })
+
+    describe('gpt-* system prompt placement', () => {
+        it('matches only model IDs starting with gpt- (case-insensitive, trimmed)', () => {
+            expect(isGptModelId('gpt-6.2-sol')).toBe(true)
+            expect(isGptModelId('gpt-6.2-astra')).toBe(true)
+            expect(isGptModelId('GPT-5.6-sol')).toBe(true)
+            expect(isGptModelId('  gpt-4o  ')).toBe(true)
+            expect(isGptModelId('claude-3-7-sonnet')).toBe(false)
+            expect(isGptModelId('gemini-2.5-pro')).toBe(false)
+            expect(isGptModelId('custom/gpt-6.2-sol')).toBe(false)
+            expect(isGptModelId('my-gpt-model')).toBe(false)
+        })
+
+        it('omits instructions and puts verbatim systemPrompt as input[0] developer message for gpt-* models', () => {
+            const gptModel: ModelCatalogEntry = {
+                ...visionModel,
+                id: 'gpt-6.2-sol',
+                label: 'GPT-6.2 Sol',
+            }
+            const enhancedPrompt = '  Enhanced core prompt for /repo\n\nPreserves formatting.  '
+            const entries: ConversationEntry[] = [
+                {
+                    id: 'u1',
+                    sessionId: 's-gpt',
+                    createdAt: 1,
+                    kind: 'user',
+                    content: [{ type: 'text', text: 'hi' }],
+                },
+            ]
+
+            const body = buildCodexRequest({
+                model: gptModel,
+                sessionId: 's-gpt',
+                systemPrompt: enhancedPrompt,
+                entries,
+            })
+
+            expect('instructions' in body).toBe(false)
+            expect(body.instructions).toBeUndefined()
+            expect(body.input[0]).toEqual({
+                type: 'message',
+                role: 'developer',
+                content: [{ type: 'input_text', text: enhancedPrompt }],
+            })
+            expect(body.input[1]).toEqual({
+                role: 'user',
+                content: [{ type: 'input_text', text: 'hi' }],
+            })
+        })
+
+        it('orders systemPrompt before developerPrompt in input for gpt-* models (parent/subagent shared prefix)', () => {
+            const gptModel: ModelCatalogEntry = {
+                ...visionModel,
+                id: 'GPT-6.2-Astra',
+                label: 'GPT-6.2 Astra',
+            }
+            const parentEnhancedPrompt = 'Shared enhanced parent prompt for /repo'
+            const entries: ConversationEntry[] = [
+                {
+                    id: 'u1',
+                    sessionId: 's-sub',
+                    createdAt: 1,
+                    kind: 'user',
+                    content: [{ type: 'text', text: 'Review diff' }],
+                },
+            ]
+
+            const parentBody = buildCodexRequest({
+                model: gptModel,
+                sessionId: 's-parent',
+                systemPrompt: parentEnhancedPrompt,
+                entries,
+            })
+            const childBody = buildCodexRequest({
+                model: gptModel,
+                sessionId: 's-sub',
+                systemPrompt: parentEnhancedPrompt,
+                developerPrompt: '  Role: Code Reviewer  ',
+                entries,
+            })
+
+            expect('instructions' in parentBody).toBe(false)
+            expect('instructions' in childBody).toBe(false)
+            expect(childBody.input[0]).toEqual(parentBody.input[0])
+            expect(childBody.input[0]).toEqual({
+                type: 'message',
+                role: 'developer',
+                content: [{ type: 'input_text', text: parentEnhancedPrompt }],
+            })
+            expect(childBody.input[1]).toEqual({
+                type: 'message',
+                role: 'developer',
+                content: [{ type: 'input_text', text: 'Role: Code Reviewer' }],
+            })
+            expect(childBody.input[2]).toEqual({
+                role: 'user',
+                content: [{ type: 'input_text', text: 'Review diff' }],
+            })
+        })
+
+        it('falls back to default assistant prompt in input[0] when systemPrompt is blank for gpt-* models', () => {
+            const gptModel: ModelCatalogEntry = {
+                ...textOnlyModel,
+                id: 'gpt-5.6-sol',
+            }
+            const body = buildCodexRequest({
+                model: gptModel,
+                sessionId: 's-blank',
+                systemPrompt: '   \n  ',
+                entries: [],
+            })
+
+            expect('instructions' in body).toBe(false)
+            expect(body.input).toEqual([
+                {
+                    type: 'message',
+                    role: 'developer',
+                    content: [{ type: 'input_text', text: 'You are a helpful assistant.' }],
+                },
+            ])
+        })
+
+        it('keeps top-level instructions for non-gpt-* models even when developerPrompt is present', () => {
+            const claudeModel: ModelCatalogEntry = {
+                ...visionModel,
+                id: 'claude-4-6-sonnet',
+            }
+            const body = buildCodexRequest({
+                model: claudeModel,
+                sessionId: 's-claude',
+                systemPrompt: 'Claude system prompt',
+                developerPrompt: 'Role guidance',
+                entries: [
+                    {
+                        id: 'u1',
+                        sessionId: 's-claude',
+                        createdAt: 1,
+                        kind: 'user',
+                        content: [{ type: 'text', text: 'Hello' }],
+                    },
+                ],
+            })
+
+            expect(body.instructions).toBe('Claude system prompt')
+            expect(body.input).toEqual([
+                {
+                    type: 'message',
+                    role: 'developer',
+                    content: [{ type: 'input_text', text: 'Role guidance' }],
+                },
+                {
+                    role: 'user',
+                    content: [{ type: 'input_text', text: 'Hello' }],
+                },
+            ])
+        })
     })
 })
