@@ -325,11 +325,66 @@ describe('Notification IPC & RPC Wiring', () => {
       await expect(unregisterClientRpc!.invoke({} as any, [unregPayload])).resolves.toEqual({ ok: true })
       expect(mockApnsService.unregisterClient).toHaveBeenCalledWith(unregPayload)
 
-      const taskPayload = { sessionId: 'focused-session', sessionTitle: 'Focused Task' }
+      const taskCompletedPayload = { sessionId: 'focused-session', sessionTitle: 'Focused Task' }
       const taskCompletedRpc = descriptors.find((d) => d.method === 'notification:taskCompleted')
-      await taskCompletedRpc!.invoke({} as any, [taskPayload])
-      expect(mockBadgeService.notifyTaskCompleted).toHaveBeenCalledWith(taskPayload)
-      expect(mockApnsService.notifyTaskCompleted).toHaveBeenCalledWith(taskPayload)
+      await taskCompletedRpc!.invoke({} as any, [taskCompletedPayload])
+      expect(mockBadgeService.notifyTaskCompleted).toHaveBeenCalledWith(taskCompletedPayload)
+      expect(mockApnsService.notifyTaskCompleted).toHaveBeenCalledWith(taskCompletedPayload)
+    })
+
+    it('declares notification:askRequested, resolves missing sessionTitle from sessionService, and dispatches to badge and APNs services', async () => {
+      const mockBadgeService = {
+        notifyTaskCompleted: vi.fn(),
+        notifyAskRequested: vi.fn(),
+        clearBadge: vi.fn(),
+      }
+      const mockApnsService = {
+        notifyAskRequested: vi.fn().mockResolvedValue(undefined),
+      }
+      const mockSessionService = {
+        getMeta: vi.fn().mockResolvedValue({ id: 'ask-session-1', title: 'SQLite Resolved Title' }),
+      }
+
+      const descriptors = createPlatformRpcDescriptors({
+        getService: <T>(id: string) => {
+          if (id === 'notificationBadgeService') return mockBadgeService as unknown as T
+          if (id === 'apnsPushService') return mockApnsService as unknown as T
+          if (id === 'sessionService') return mockSessionService as unknown as T
+          throw new Error(`Unknown service: ${id}`)
+        },
+        getMainWindow: () => ({ isFocused: () => true, isDestroyed: () => false }) as any,
+      })
+
+      const askRequestedRpc = descriptors.find((d) => d.method === 'notification:askRequested')
+      expect(askRequestedRpc).toBeDefined()
+      expect(askRequestedRpc?.aliases).toContain('NotificationAskRequested')
+      expect(askRequestedRpc?.ipcChannel).toBe('notification:askRequested')
+      expect(askRequestedRpc?.capability).toBe('notification.show')
+
+      await askRequestedRpc!.invoke({} as any, [{
+        sessionId: 'ask-session-1',
+        question: 'Proceed with migration?',
+        requestId: 'req-1',
+        toolCallId: 'call-1',
+      }])
+
+      expect(mockSessionService.getMeta).toHaveBeenCalledWith('ask-session-1')
+      const expectedPayload = {
+        sessionId: 'ask-session-1',
+        sessionTitle: 'SQLite Resolved Title',
+        question: 'Proceed with migration?',
+        requestId: 'req-1',
+        toolCallId: 'call-1',
+      }
+      expect(mockBadgeService.notifyAskRequested).toHaveBeenCalledWith(expectedPayload)
+      expect(mockApnsService.notifyAskRequested).toHaveBeenCalledWith(expectedPayload)
+
+      // Empty sessionId is a clean no-op
+      mockBadgeService.notifyAskRequested.mockClear()
+      mockApnsService.notifyAskRequested.mockClear()
+      await askRequestedRpc!.invoke({} as any, [{ sessionId: '   ', question: 'Ignored' }])
+      expect(mockBadgeService.notifyAskRequested).not.toHaveBeenCalled()
+      expect(mockApnsService.notifyAskRequested).not.toHaveBeenCalled()
     })
 
     it('swallows apnsPushService rejection on notification:taskCompleted without failing the RPC', async () => {
@@ -520,11 +575,16 @@ describe('Notification IPC & RPC Wiring', () => {
   })
 
   describe('HostCapabilityFacade bridge parity', () => {
-    it('includes NotificationTaskCompleted, NotificationClearBadge, NotificationRegisterClient, and NotificationUnregisterClient in RENDERER_CAPABILITY_DESCRIPTORS', () => {
+    it('includes NotificationTaskCompleted, NotificationAskRequested, NotificationClearBadge, NotificationRegisterClient, and NotificationUnregisterClient in RENDERER_CAPABILITY_DESCRIPTORS', () => {
       const taskCompletedDesc = RENDERER_CAPABILITY_DESCRIPTORS.find((d) => d.name === 'NotificationTaskCompleted')
       expect(taskCompletedDesc).toBeDefined()
       expect(taskCompletedDesc?.method).toBe('notification:taskCompleted')
       expect(taskCompletedDesc?.capability).toBe('notification.show')
+
+      const askRequestedDesc = RENDERER_CAPABILITY_DESCRIPTORS.find((d) => d.name === 'NotificationAskRequested')
+      expect(askRequestedDesc).toBeDefined()
+      expect(askRequestedDesc?.method).toBe('notification:askRequested')
+      expect(askRequestedDesc?.capability).toBe('notification.show')
 
       const clearBadgeDesc = RENDERER_CAPABILITY_DESCRIPTORS.find((d) => d.name === 'NotificationClearBadge')
       expect(clearBadgeDesc).toBeDefined()
@@ -554,6 +614,10 @@ describe('Notification IPC & RPC Wiring', () => {
       const payload = { sessionId: 'session-facade', sessionTitle: 'Facade Title' }
       await facade.NotificationTaskCompleted(payload)
       expect(invokeSpy).toHaveBeenCalledWith('desktop-main', 'notification:taskCompleted', [payload])
+
+      const askPayload = { sessionId: 'session-facade', sessionTitle: 'Facade Title', question: 'Confirm?' }
+      await facade.NotificationAskRequested(askPayload)
+      expect(invokeSpy).toHaveBeenCalledWith('desktop-main', 'notification:askRequested', [askPayload])
 
       await facade.NotificationClearBadge()
       expect(invokeSpy).toHaveBeenCalledWith('desktop-main', 'notification:clearBadge', [])

@@ -1,5 +1,6 @@
 import type { BrowserWindow } from 'electron'
 import type {
+    AskRequestedNotificationPayload,
     HttpRequest,
     NativeEvent,
     NotificationClientRegistration,
@@ -460,6 +461,56 @@ export function createPlatformRpcDescriptors(
                 if (apnsPushService) {
                     void Promise.resolve(apnsPushService.notifyTaskCompleted(payload)).catch((err) => {
                         console.warn('[rpcDescriptors] Failed to dispatch APNs push notification:', err)
+                    })
+                }
+            },
+        },
+        {
+            method: 'notification:askRequested',
+            aliases: ['NotificationAskRequested'],
+            ipcChannel: 'notification:askRequested',
+            capability: cap('notification:askRequested', 'notification.show'),
+            invoke: async (context, args) => {
+                const rawPayload = (args[0] ?? {}) as Partial<AskRequestedNotificationPayload>
+                const sessionId = typeof rawPayload.sessionId === 'string' ? rawPayload.sessionId.trim() : ''
+                if (!sessionId) {
+                    return
+                }
+                let sessionTitle =
+                    typeof rawPayload.sessionTitle === 'string' ? rawPayload.sessionTitle.trim() : ''
+                if (!sessionTitle) {
+                    const sessionService = getServiceOptional<{
+                        getMeta?: (id: string) => Promise<{ title?: string } | null>
+                    }>('sessionService', context)
+                    if (sessionService && typeof sessionService.getMeta === 'function') {
+                        try {
+                            const meta = await sessionService.getMeta(sessionId)
+                            if (meta && typeof meta.title === 'string') {
+                                sessionTitle = meta.title.trim()
+                            }
+                        } catch {
+                            // Ignore session metadata lookup failures
+                        }
+                    }
+                }
+                const payload: AskRequestedNotificationPayload = {
+                    sessionId,
+                    ...(sessionTitle ? { sessionTitle } : {}),
+                    ...(typeof rawPayload.question === 'string' && rawPayload.question.trim()
+                        ? { question: rawPayload.question.trim() }
+                        : {}),
+                    ...(typeof rawPayload.requestId === 'string' && rawPayload.requestId.trim()
+                        ? { requestId: rawPayload.requestId.trim() }
+                        : {}),
+                    ...(typeof rawPayload.toolCallId === 'string' && rawPayload.toolCallId.trim()
+                        ? { toolCallId: rawPayload.toolCallId.trim() }
+                        : {}),
+                }
+                getService<NotificationBadgeService>('notificationBadgeService', context).notifyAskRequested(payload)
+                const apnsPushService = getServiceOptional<ApnsPushService>('apnsPushService', context)
+                if (apnsPushService) {
+                    void Promise.resolve(apnsPushService.notifyAskRequested(payload)).catch((err) => {
+                        console.warn('[rpcDescriptors] Failed to dispatch APNs ask push notification:', err)
                     })
                 }
             },

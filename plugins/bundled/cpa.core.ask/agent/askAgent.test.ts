@@ -579,4 +579,88 @@ describe('cpa.core.ask agent entry', () => {
         await askAgentEntry.deactivate?.()
         await askMainEntry.deactivate?.()
     })
+
+    it('dispatches notification:askRequested with sessionTitle and question when ask:setRequest registers a new request', async () => {
+        const mainRpcs = new Map<string, (ctx: any, args: any[]) => Promise<any>>()
+        const mainInvokeSpy = vi.fn().mockResolvedValue(undefined)
+
+        await askMainEntry.activate({
+            manifest,
+            generation: 1,
+            capabilities: new Set(['ui.overlay', 'notification.show']),
+            capabilityClient: {
+                has: (cap: string) => cap === 'ui.overlay' || cap === 'notification.show',
+                invoke: mainInvokeSpy,
+                subscribe: () => () => {},
+            },
+            events: eventBus,
+            register: vi.fn((reg: any) => {
+                if (reg.kind === 'rpc') {
+                    mainRpcs.set(reg.id, reg.value.invoke)
+                }
+                return () => {}
+            }),
+        } as any)
+
+        const mockCapClient: any = {
+            has: () => true,
+            invoke: vi.fn(async (method: string, args: any[] = []) => {
+                const rpc = mainRpcs.get(method)
+                if (!rpc) throw new Error(`Missing RPC ${method}`)
+                return rpc({}, args)
+            }),
+            subscribe: vi.fn(() => () => {}),
+        }
+
+        let factory: any
+        await askAgentEntry.activate({
+            manifest,
+            generation: 1,
+            capabilities: new Set(['ui.overlay', 'notification.show']),
+            capabilityClient: mockCapClient,
+            events: eventBus,
+            register: vi.fn((reg: any) => {
+                if (reg.kind === 'tool-factory') {
+                    factory = reg.value
+                }
+                return () => {}
+            }),
+            getService: vi.fn(() => ({
+                getSnapshot: () => [{ id: 'ask-notif-sess', title: 'Mobile Ask Session' }],
+            })),
+        } as any)
+
+        const tool = factory.create({})
+        const pending = tool.execute(
+            'ask-notif-call-1',
+            { question: 'Should we deploy to production?' },
+            { sessionId: 'ask-notif-sess', toolCallId: 'ask-notif-call-1' } as any,
+        )
+
+        expect(mainInvokeSpy).toHaveBeenCalledTimes(1)
+        expect(mainInvokeSpy).toHaveBeenCalledWith('notification:askRequested', [
+            expect.objectContaining({
+                sessionId: 'ask-notif-sess',
+                sessionTitle: 'Mobile Ask Session',
+                question: 'Should we deploy to production?',
+                toolCallId: 'ask-notif-call-1',
+            }),
+        ])
+
+        // Re-sending the exact same request id must not emit duplicate notifications
+        const activeReq = await mainRpcs.get('ask:getRequests')!({}, [{ sessionId: 'ask-notif-sess' }])
+        await mainRpcs.get('ask:setRequest')!({}, ['ask-notif-sess', activeReq.request])
+        expect(mainInvokeSpy).toHaveBeenCalledTimes(1)
+
+        await mainRpcs.get('ask:submitAnswer')!({}, [
+            'ask-notif-sess',
+            'ask-notif-call-1',
+            { type: 'custom', text: 'Yes' },
+        ])
+        const res = await pending
+        expect((res.content[0] as any).text).toBe('User response: Yes')
+
+        await askAgentEntry.deactivate?.()
+        await askMainEntry.deactivate?.()
+    })
 })

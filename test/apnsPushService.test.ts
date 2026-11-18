@@ -694,4 +694,84 @@ describe('ApnsPushService', () => {
             }),
         ).rejects.toThrow()
     })
+
+    it('pushes ask notifications concurrently with collapsed question text, bounded collapseId, and badge parity', async () => {
+        const requests: Array<{ body: any }> = []
+        const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+            const payload = JSON.parse(String(init?.body ?? '{}'))
+            requests.push({ body: payload })
+            if (payload.deviceToken === TOKEN_B) {
+                return new Response(
+                    JSON.stringify({ ok: false, reason: 'Unregistered', unregistered: true }),
+                    { status: 410, headers: { 'content-type': 'application/json' } },
+                )
+            }
+            return new Response(JSON.stringify({ ok: true, apnsId: 'apns-ask' }), {
+                status: 200,
+                headers: { 'content-type': 'application/json' },
+            })
+        })
+
+        const service = new ApnsPushService({
+            kvStoreGetter: () => kvStore,
+            fetchFn: fetchMock,
+        })
+        await service.registerClient({
+            clientId: 'client-1',
+            connectionId: 'conn-1',
+            deviceToken: TOKEN_A,
+            environment: 'production',
+            enabled: true,
+        })
+        await service.registerClient({
+            clientId: 'client-stale',
+            connectionId: 'conn-2',
+            deviceToken: TOKEN_B,
+            environment: 'sandbox',
+            enabled: true,
+        })
+
+        const longSessionId = 's-'.padEnd(90, 'x')
+        await service.notifyAskRequested({
+            sessionId: longSessionId,
+            sessionTitle: '重构登录模块',
+            question: '是否继续执行\n  数据库迁移？',
+            requestId: 'ask-req-1',
+            toolCallId: 'call-1',
+        })
+
+        expect(requests).toHaveLength(2)
+        for (const req of requests) {
+            expect(req.body.title).toBe('Coding Professional Agent')
+            expect(req.body.body).toBe('重构登录模块 正在询问：是否继续执行 数据库迁移？')
+            expect(req.body.sound).toBe('default')
+            expect(req.body.threadId).toBe(longSessionId)
+            expect(Buffer.byteLength(req.body.collapseId, 'utf8')).toBeLessThanOrEqual(64)
+            expect(req.body.data.sessionId).toBe(longSessionId)
+            expect(req.body.data.sessionTitle).toBe('重构登录模块')
+            expect(req.body.data.notificationType).toBe('ask')
+        }
+        // Stale client removed on 410 during ask push
+        expect((await service.listClients()).map((c) => c.clientId)).toEqual(['client-1'])
+
+        // Verify exact body parity with NotificationBadgeService across all ask combinations
+        const badgeService = new NotificationBadgeService(() => null)
+        const askCases = [
+            { sessionId: 's1', sessionTitle: 'Short', question: 'Confirm?' },
+            { sessionId: 's2', sessionTitle: undefined, question: 'Q'.repeat(100) },
+            { sessionId: 's3', sessionTitle: 'T'.repeat(50), question: undefined },
+            { sessionId: 's4', sessionTitle: '  ', question: '   ' },
+        ]
+        requests.length = 0
+        capturedLocalNotifications.length = 0
+        for (const c of askCases) {
+            badgeService.notifyAskRequested(c)
+            await service.notifyAskRequested(c)
+        }
+        expect(capturedLocalNotifications).toHaveLength(askCases.length)
+        expect(requests).toHaveLength(askCases.length)
+        for (let i = 0; i < askCases.length; i += 1) {
+            expect(requests[i].body.body).toBe(capturedLocalNotifications[i].body)
+        }
+    })
 })

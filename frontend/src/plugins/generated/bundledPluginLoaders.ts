@@ -805,7 +805,8 @@ export const bundledManifests: Readonly<Record<string, PluginManifest>> = Object
                 "cpa.core.chat": ">=1.0.0"
         },
         "capabilities": [
-                "ui.overlay"
+                "ui.overlay",
+                "notification.show"
         ],
         "contributes": {
                 "rpc": [

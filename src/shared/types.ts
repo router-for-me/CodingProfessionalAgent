@@ -517,6 +517,14 @@ export interface NotificationClientUnregistration {
   connectionId: string
 }
 
+export interface AskRequestedNotificationPayload {
+  sessionId: string
+  sessionTitle?: string
+  question?: string
+  requestId?: string
+  toolCallId?: string
+}
+
 export interface RegisteredNotificationClient {
   clientId: string
   connectionId: string
@@ -756,6 +764,7 @@ export interface ElectronBridgeApi {
 
   // Notification & Badge
   NotificationTaskCompleted(payload: { sessionId: string; sessionTitle?: string }): Promise<void>
+  NotificationAskRequested(payload: AskRequestedNotificationPayload): Promise<void>
   NotificationClearBadge(): Promise<void>
   NotificationRegisterClient(payload: NotificationClientRegistration): Promise<{ ok: true }>
   NotificationUnregisterClient(payload: NotificationClientUnregistration): Promise<{ ok: true }>

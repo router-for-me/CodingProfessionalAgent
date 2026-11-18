@@ -126,6 +126,7 @@ function resolveSessionId(context: unknown): string {
 
 export interface CreateAskToolOptions {
     capabilityClient?: PluginCapabilityClient
+    getSessionTitle?: (sessionId: string) => string | undefined
 }
 
 export function createAskTool(toolOptions?: CreateAskToolOptions): AgentTool {
@@ -201,7 +202,11 @@ export function createAskTool(toolOptions?: CreateAskToolOptions): AgentTool {
                 toolOptions?.capabilityClient ??
                 ((toolContext as unknown as { capabilityClient?: PluginCapabilityClient })
                     ?.capabilityClient)
-            void invokeAskRpc('ask:setRequest', [sessionId, request], effectiveCapClient)
+            const sessionTitle = toolOptions?.getSessionTitle?.(sessionId)?.trim()
+            const setRequestArgs: unknown[] = sessionTitle
+                ? [sessionId, request, { sessionTitle }]
+                : [sessionId, request]
+            void invokeAskRpc('ask:setRequest', setRequestArgs, effectiveCapClient)
 
             let unsubAction: (() => void) | undefined
             if (typeof effectiveCapClient?.subscribe === 'function') {

@@ -81,6 +81,7 @@ export const askMainEntry = definePluginEntry({
                     const sessionId = typeof args[0] === 'string' ? args[0] : ''
                     const request = (args[1] as AskRequest | null | undefined) ?? null
                     if (!sessionId) return false
+                    const previous = requestsBySession.get(sessionId)
                     if (request) {
                         requestsBySession.set(sessionId, request)
                         if (request.toolCallId) {
@@ -94,6 +95,35 @@ export const askMainEntry = definePluginEntry({
                         { sessionId, request },
                         rpcCtx,
                     )
+                    if (
+                        request &&
+                        previous?.id !== request.id &&
+                        typeof context.capabilityClient?.invoke === 'function' &&
+                        (typeof context.capabilityClient.has !== 'function' ||
+                            context.capabilityClient.has('notification.show'))
+                    ) {
+                        const meta =
+                            args[2] && typeof args[2] === 'object' && !Array.isArray(args[2])
+                                ? (args[2] as { sessionTitle?: unknown })
+                                : undefined
+                        const sessionTitle =
+                            typeof meta?.sessionTitle === 'string' && meta.sessionTitle.trim()
+                                ? meta.sessionTitle.trim()
+                                : undefined
+                        void context.capabilityClient
+                            .invoke('notification:askRequested', [
+                                {
+                                    sessionId,
+                                    ...(sessionTitle ? { sessionTitle } : {}),
+                                    question: request.question,
+                                    requestId: request.id,
+                                    toolCallId: request.toolCallId,
+                                },
+                            ])
+                            .catch(() => {
+                                // Notification dispatch must never break ask:setRequest
+                            })
+                    }
                     return true
                 },
             },

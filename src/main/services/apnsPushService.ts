@@ -1,11 +1,20 @@
 import type {
+    AskRequestedNotificationPayload,
     NotificationClientRegistration,
     NotificationClientUnregistration,
     NotificationEnvironment,
     RegisteredNotificationClient,
 } from '../../shared/types.js'
+import {
+    MAX_APNS_COLLAPSE_ID_BYTES,
+    formatAskRequestedNotificationBody,
+    formatTaskCompletedNotificationBody,
+    sliceUtf8Bytes,
+    truncateSessionTitleForData,
+} from './notificationFormatting.js'
 
 export type {
+    AskRequestedNotificationPayload,
     NotificationClientRegistration,
     NotificationClientUnregistration,
     NotificationEnvironment,
@@ -17,13 +26,14 @@ export const NOTIFICATION_CLIENTS_STORAGE_KEY = 'notification-clients'
 export const DEFAULT_APNS_PUSH_TIMEOUT_MS = 10_000
 
 const DEVICE_TOKEN_HEX_RE = /^[0-9a-f]{64,200}$/
-const MAX_TITLE_PREVIEW_LENGTH = 40
-const MAX_DATA_SESSION_TITLE_LENGTH = 256
+const MAX_APNS_THREAD_ID_LENGTH = 128
 
 export interface TaskCompletedPushPayload {
     sessionId: string
     sessionTitle?: string
 }
+
+export type AskRequestedPushPayload = AskRequestedNotificationPayload
 
 export interface KVStoreLike {
     get(key: string): Promise<unknown> | unknown
@@ -273,6 +283,47 @@ export class ApnsPushService {
      * top-level task completes, and cleans up tokens confirmed unregistered.
      */
     async notifyTaskCompleted(payload: TaskCompletedPushPayload): Promise<void> {
+        const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId.trim() : ''
+        const bodyText = formatTaskCompletedNotificationBody(payload.sessionTitle)
+        const dataSessionTitle = truncateSessionTitleForData(payload.sessionTitle)
+        const collapseId = sessionId
+            ? sliceUtf8Bytes(`turn-complete-${sessionId}`, MAX_APNS_COLLAPSE_ID_BYTES)
+            : undefined
+        await this.dispatchPushToEnabledClients({
+            sessionId,
+            bodyText,
+            collapseId,
+            dataSessionTitle,
+        })
+    }
+
+    /**
+     * Dispatches push notifications concurrently to all enabled clients when the
+     * model calls `ask` and waits for user input, and cleans up tokens confirmed unregistered.
+     */
+    async notifyAskRequested(payload: AskRequestedPushPayload): Promise<void> {
+        const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId.trim() : ''
+        const bodyText = formatAskRequestedNotificationBody(payload.sessionTitle, payload.question)
+        const dataSessionTitle = truncateSessionTitleForData(payload.sessionTitle)
+        const collapseId = sessionId
+            ? sliceUtf8Bytes(`ask-${sessionId}`, MAX_APNS_COLLAPSE_ID_BYTES)
+            : undefined
+        await this.dispatchPushToEnabledClients({
+            sessionId,
+            bodyText,
+            collapseId,
+            dataSessionTitle,
+            extraData: { notificationType: 'ask' },
+        })
+    }
+
+    private async dispatchPushToEnabledClients(options: {
+        sessionId: string
+        bodyText: string
+        collapseId?: string
+        dataSessionTitle?: string
+        extraData?: Record<string, string>
+    }): Promise<void> {
         const clients = await this.listClients()
         const enabledClients = clients.filter((c) => c.enabled)
         if (enabledClients.length === 0) {
@@ -280,17 +331,9 @@ export class ApnsPushService {
         }
 
         const pushUrl = this.resolvePushUrl()
-        const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId.trim() : ''
-        const rawTitle = (typeof payload.sessionTitle === 'string' ? payload.sessionTitle : '').trim()
-        const title = rawTitle
-            ? (rawTitle.length > MAX_TITLE_PREVIEW_LENGTH ? `${rawTitle.slice(0, MAX_TITLE_PREVIEW_LENGTH)}...` : rawTitle)
-            : ''
-        const bodyText = title ? `${title} 任务已经完成` : '任务已经完成'
-        const dataSessionTitle = rawTitle
-            ? (rawTitle.length > MAX_DATA_SESSION_TITLE_LENGTH
-                ? `${rawTitle.slice(0, MAX_DATA_SESSION_TITLE_LENGTH)}...`
-                : rawTitle)
-            : undefined
+        const threadId = options.sessionId.length > MAX_APNS_THREAD_ID_LENGTH
+            ? options.sessionId.slice(0, MAX_APNS_THREAD_ID_LENGTH)
+            : options.sessionId
 
         const results = await Promise.allSettled(
             enabledClients.map(async (client): Promise<StaleClientRecord | null> => {
@@ -298,14 +341,15 @@ export class ApnsPushService {
                     deviceToken: client.deviceToken,
                     environment: client.environment,
                     title: 'Coding Professional Agent',
-                    body: bodyText,
+                    body: options.bodyText,
                     sound: 'default',
-                    threadId: sessionId,
-                    collapseId: sessionId ? `turn-complete-${sessionId}` : undefined,
+                    threadId,
+                    collapseId: options.collapseId,
                     data: {
                         connectionId: client.connectionId,
-                        sessionId,
-                        ...(dataSessionTitle ? { sessionTitle: dataSessionTitle } : {}),
+                        sessionId: options.sessionId,
+                        ...(options.dataSessionTitle ? { sessionTitle: options.dataSessionTitle } : {}),
+                        ...(options.extraData ?? {}),
                     },
                 }
 

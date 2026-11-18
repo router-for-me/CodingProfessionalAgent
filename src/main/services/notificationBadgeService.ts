@@ -1,6 +1,12 @@
 import { app, Notification, type BrowserWindow } from 'electron'
-import type { NativeEvent } from '../../shared/types.js'
+import type { AskRequestedNotificationPayload, NativeEvent } from '../../shared/types.js'
 import { createWindowsBadgeOverlay } from './badgeIconHelper.js'
+import {
+  formatAskRequestedNotificationBody,
+  formatTaskCompletedNotificationBody,
+} from './notificationFormatting.js'
+
+export type { AskRequestedNotificationPayload }
 
 export interface TaskCompletedNotificationPayload {
   sessionId: string
@@ -80,6 +86,19 @@ export class NotificationBadgeService {
    * Notifies the user that a background task has completed if window is unfocused or minimized.
    */
   notifyTaskCompleted(payload: TaskCompletedNotificationPayload): void {
+    const bodyText = formatTaskCompletedNotificationBody(payload.sessionTitle)
+    this.notifyWhenUnfocused(payload.sessionId, bodyText)
+  }
+
+  /**
+   * Notifies the user that the agent is waiting for an interactive ask answer if window is unfocused or minimized.
+   */
+  notifyAskRequested(payload: AskRequestedNotificationPayload): void {
+    const bodyText = formatAskRequestedNotificationBody(payload.sessionTitle, payload.question)
+    this.notifyWhenUnfocused(payload.sessionId, bodyText)
+  }
+
+  private notifyWhenUnfocused(sessionId: string, bodyText: string): void {
     const win = this.getMainWindow()
     const isFocused = Boolean(
       win &&
@@ -96,10 +115,6 @@ export class NotificationBadgeService {
     this.badgeCount += 1
     this.applyPlatformBadge()
 
-    const rawTitle = (payload.sessionTitle || '').trim()
-    const title = rawTitle ? (rawTitle.length > 40 ? `${rawTitle.slice(0, 40)}...` : rawTitle) : ''
-    const bodyText = title ? `${title} 任务已经完成` : '任务已经完成'
-
     try {
       const notification = new Notification({
         title: 'Coding Professional Agent',
@@ -115,7 +130,7 @@ export class NotificationBadgeService {
             if (!activeWin.isVisible || !activeWin.isVisible()) activeWin.show()
             activeWin.focus()
             if (activeWin.webContents && !activeWin.webContents.isDestroyed()) {
-              activeWin.webContents.send('notification:navigate-session', payload.sessionId)
+              activeWin.webContents.send('notification:navigate-session', sessionId)
             }
           }
         } catch {
@@ -125,7 +140,7 @@ export class NotificationBadgeService {
             operationId: `notif-${Date.now()}`,
             sequence: Date.now(),
             kind: 'notification:navigate-session',
-            data: JSON.stringify({ sessionId: payload.sessionId }),
+            data: JSON.stringify({ sessionId }),
           })
           this.clearBadge()
         }

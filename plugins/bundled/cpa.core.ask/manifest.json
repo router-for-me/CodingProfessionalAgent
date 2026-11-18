@@ -17,7 +17,8 @@
         "cpa.core.chat": ">=1.0.0"
     },
     "capabilities": [
-        "ui.overlay"
+        "ui.overlay",
+        "notification.show"
     ],
     "contributes": {
         "rpc": [

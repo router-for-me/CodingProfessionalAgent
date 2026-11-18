@@ -1,5 +1,9 @@
 import { definePluginEntry } from '@cpa/plugin-sdk'
-import type { PluginContext, ToolFactoryContribution } from '@cpa/plugin-api'
+import {
+    SessionServiceToken,
+    type PluginContext,
+    type ToolFactoryContribution,
+} from '@cpa/plugin-api'
 import {
     ASK_TOOL_DESCRIPTION,
     ASK_TOOL_NAME,
@@ -91,6 +95,20 @@ export const askAgentEntry = definePluginEntry({
                 create: (ctx: any) =>
                     createAskTool({
                         capabilityClient: ctx?.capabilityClient ?? context.capabilityClient,
+                        getSessionTitle: (sessionId: string) => {
+                            try {
+                                const sessionService = context.getService?.(SessionServiceToken)
+                                const snapshot = sessionService?.getSnapshot?.()
+                                const matched = Array.isArray(snapshot)
+                                    ? snapshot.find((item) => item?.id === sessionId)
+                                    : undefined
+                                return typeof matched?.title === 'string' && matched.title.trim()
+                                    ? matched.title.trim()
+                                    : undefined
+                            } catch {
+                                return undefined
+                            }
+                        },
                     }),
             },
         })

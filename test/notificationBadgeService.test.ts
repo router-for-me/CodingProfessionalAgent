@@ -287,6 +287,36 @@ describe('NotificationBadgeService', () => {
     expect(state.notifications[1].options.body).toBe(`${'A'.repeat(40)}... 任务已经完成`)
   })
 
+  it('notifies when ask is requested while unfocused and suppresses when focused', () => {
+    mockWin.isFocused.mockReturnValue(true)
+    mockWin.isMinimized.mockReturnValue(false)
+    service.notifyAskRequested({
+      sessionId: 'session-ask-focused',
+      sessionTitle: 'Focused Ask',
+      question: 'Should we proceed?',
+    })
+    expect(service.getStatus().badgeCount).toBe(0)
+    expect(state.notifications.length).toBe(0)
+
+    mockWin.isFocused.mockReturnValue(false)
+    service.notifyAskRequested({
+      sessionId: 'session-ask-unfocused',
+      sessionTitle: '修复登录',
+      question: '是否继续执行？',
+    })
+    expect(service.getStatus().badgeCount).toBe(1)
+    expect(state.notifications.length).toBe(1)
+    expect(state.notifications[0].options.title).toBe('Coding Professional Agent')
+    expect(state.notifications[0].options.body).toBe('修复登录 正在询问：是否继续执行？')
+
+    state.notifications[0].emit('click')
+    expect(mockWin.webContents.send).toHaveBeenCalledWith(
+      'notification:navigate-session',
+      'session-ask-unfocused',
+    )
+    expect(service.getStatus().badgeCount).toBe(0)
+  })
+
   it('handles attachWindow and getStatus gracefully when window is null or destroyed', () => {
     const standaloneService = new NotificationBadgeService()
     expect(standaloneService.getStatus()).toEqual({ badgeCount: 0, isWindowFocused: false })
