@@ -2157,9 +2157,11 @@ const BaseComposer = memo(function BaseComposer({
                             onChange={(next, cursor) => {
                                 if (gemini4PeriodicPickerOpen) return
                                 if (quickModelPickerOpen) {
+                                    if (next !== modelPickerQuery) {
+                                        setModelPickerActiveIndex(0)
+                                    }
                                     setModelPickerQuery(next)
                                     setModelPickerCursor(cursor)
-                                    setModelPickerActiveIndex(0)
                                 } else {
                                     setComposerDraft(next, skillReferencesFromParts(readSkillDraftParts(textareaRef.current)))
                                     setDraftCursor(cursor)

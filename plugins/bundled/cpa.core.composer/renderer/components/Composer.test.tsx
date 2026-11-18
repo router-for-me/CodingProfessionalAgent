@@ -2160,6 +2160,56 @@ describe('QuickModelPicker in Composer', () => {
         expectComposerValue('Draft before picker')
     })
 
+    it('preserves ArrowDown and ArrowUp selection after keyup when quick model picker is opened via shortcut', async () => {
+        const user = userEvent.setup()
+        const alphaModel: ModelCatalogEntry = {
+            id: 'alpha-model',
+            label: 'Alpha',
+            supportsFast: false,
+            reasoningLevels: [],
+            input: ['text'],
+            contextWindow: 128_000,
+            maxTokens: 8_192,
+        }
+        modelsState = [visionModel, textModel, alphaModel]
+
+        render(<Composer onSend={() => undefined} />)
+        const textarea = screen.getByTestId('composer-input')
+
+        act(() => {
+            rendererPluginRuntime.eventBus.emit('composer:toggle-model-selector')
+        })
+
+        await waitFor(() => expect(textarea).toHaveFocus())
+
+        const listbox = screen.getByRole('listbox', { name: 'Open model selector' })
+        const getOptions = () => within(listbox).getAllByRole('option')
+        expect(getOptions()[0]).toHaveAttribute('aria-selected', 'true')
+
+        // user.keyboard fires both keydown and keyup; keyup must not reset activeIndex back to 0
+        await user.keyboard('{ArrowDown}')
+        expect(getOptions()[1]).toHaveAttribute('aria-selected', 'true')
+        expect(getOptions()[0]).toHaveAttribute('aria-selected', 'false')
+
+        await user.keyboard('{ArrowDown}')
+        expect(getOptions()[2]).toHaveAttribute('aria-selected', 'true')
+
+        await user.keyboard('{ArrowUp}')
+        expect(getOptions()[1]).toHaveAttribute('aria-selected', 'true')
+
+        // Typing a filter query should reset activeIndex to 0 for the new query
+        await user.type(textarea, 'l')
+        expect(getOptions()[0]).toHaveAttribute('aria-selected', 'true')
+
+        // ArrowDown after filtering must also persist after keyup and select the highlighted item on Enter
+        await user.keyboard('{ArrowDown}')
+        expect(getOptions()[1]).toHaveAttribute('aria-selected', 'true')
+
+        await user.keyboard('{Enter}')
+        expect(mockServices.settings.setModelId).toHaveBeenCalledWith('text-model')
+        expect(screen.queryByRole('listbox', { name: 'Open model selector' })).not.toBeInTheDocument()
+    })
+
     it('updates session runtime settings when selecting model in an active session', async () => {
         const user = userEvent.setup()
         sessionsState = [
