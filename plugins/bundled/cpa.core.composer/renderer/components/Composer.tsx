@@ -34,6 +34,7 @@ import {
     useActiveRun,
     useDisplayMessages,
     useHostServices,
+    useModelCatalog,
     useProjects,
     useSessions,
     useSettings,
@@ -45,7 +46,7 @@ import {
     type SkillSuggestion,
 } from '@cpa/plugin-ui'
 import { getEffectiveSkillMode } from '@cpa/plugin-sdk'
-import { DEFAULT_SKILLS_SETTINGS, type SkillReference } from '@cpa/plugin-api'
+import { DEFAULT_SKILLS_SETTINGS, type SkillReference, type Speed } from '@cpa/plugin-api'
 import type {
     ComposerAttachment,
     ComposerImage,
@@ -68,10 +69,15 @@ import {
 import { expandPromptTemplateWithReferences, trimTextWithSkillReferences } from '../utils/promptTemplates.js'
 import { COMPACT_COMMAND_ALIASES, MODEL_COMMAND_ALIASES, parseSlashCommand } from '../utils/slashCommands.js'
 import {
+    commitModelSelection,
     filterCatalogModels,
-    normalizeModelPreferences,
-    sortModelsByName,
 } from '../utils/modelMenuOptions.js'
+import {
+    buildQuickModelPickerItems,
+    groupGemini4Models,
+    isGemini4Model,
+    isGemini4PeriodicTableEnabled,
+} from '../utils/gemini4PeriodicTable.js'
 import { FALLBACK_MODEL_CATALOG } from '../types.js'
 import {
     buildSlashSuggestionsWithDiagnostics,
@@ -81,6 +87,7 @@ import {
     type SlashSuggestion,
 } from './SlashMenu.js'
 import { QuickModelPicker } from './QuickModelPicker.js'
+import { Gemini4PeriodicTablePicker } from './Gemini4PeriodicTablePicker.js'
 import { isTurnCompleted } from '../utils/turnCompletion.js'
 import { AttachMenu, type AttachMenuItemId } from './AttachMenu.js'
 import { rendererEventBus } from '@/plugins/platform/eventBus'
@@ -263,13 +270,12 @@ const BaseComposer = memo(function BaseComposer({
         hostServices?.skillUsage?.fetchUsageCounts?.().catch(() => {})
     }, [hostServices])
 
-    const catalogModels = (hostServices?.models?.getModels?.() ?? []) as ModelCatalogEntry[]
+    const { models: catalogModels } = useModelCatalog()
     const rawModels = catalogModels.length > 0 ? catalogModels : FALLBACK_MODEL_CATALOG
-    const filteredModels = useMemo(
+    const models = useMemo(
         () => filterCatalogModels(rawModels, modelSettings),
         [rawModels, modelSettings],
     )
-    const models = filteredModels.length > 0 ? filteredModels : rawModels
 
     const storeSessionId = hostServices?.sessions?.getCurrentSessionId?.() ?? null
     const effectiveSessionId = sessionIdProp !== undefined ? sessionIdProp : storeSessionId
@@ -291,12 +297,15 @@ const BaseComposer = memo(function BaseComposer({
         hostServices?.ui?.getComposerDraftReferences?.(composerDraftKey) ??
         []
 
-    const setComposerDraft = (nextDraft: string, references: readonly SkillReference[] = []) => {
-        hostServices?.ui?.setComposerDraft?.(composerDraftKey, nextDraft, references)
-        if (effectiveSessionId) {
-            hostServices?.ui?.setComposerDraft?.(effectiveSessionId, nextDraft, references)
-        }
-    }
+    const setComposerDraft = useCallback(
+        (nextDraft: string, references: readonly SkillReference[] = []) => {
+            hostServices?.ui?.setComposerDraft?.(composerDraftKey, nextDraft, references)
+            if (effectiveSessionId) {
+                hostServices?.ui?.setComposerDraft?.(effectiveSessionId, nextDraft, references)
+            }
+        },
+        [hostServices, composerDraftKey, effectiveSessionId],
+    )
 
     const activeRun = useActiveRun(effectiveSessionId ?? undefined)
     const isRemoteRunning = Boolean(effectiveSessionId && activeRun && activeRun.status !== 'idle')
@@ -469,6 +478,8 @@ const BaseComposer = memo(function BaseComposer({
     const [attachMenuOpen, setAttachMenuOpen] = useState(false)
     const [attachMenuActiveIndex, setAttachMenuActiveIndex] = useState(0)
     const [quickModelPickerOpen, setQuickModelPickerOpen] = useState(false)
+    const [gemini4PeriodicPickerOpen, setGemini4PeriodicPickerOpen] = useState(false)
+    const [externalPeriodicPickerOpen, setExternalPeriodicPickerOpen] = useState(false)
     const [modelPickerActiveIndex, setModelPickerActiveIndex] = useState(0)
     const [modelPickerQuery, setModelPickerQuery] = useState('')
     const [modelPickerCursor, setModelPickerCursor] = useState(0)
@@ -534,6 +545,11 @@ const BaseComposer = memo(function BaseComposer({
     const lastSlashDiagnosticsRef = useRef<string[]>([])
     const isRunningRef = useRef(isRunning)
     isRunningRef.current = isRunning
+    const quickModelPickerOpenRef = useRef(quickModelPickerOpen)
+    quickModelPickerOpenRef.current = quickModelPickerOpen
+    const gemini4PeriodicPickerOpenRef = useRef(gemini4PeriodicPickerOpen)
+    gemini4PeriodicPickerOpenRef.current = gemini4PeriodicPickerOpen
+    const pendingRestoreEditorFocusRef = useRef(false)
 
     useEffect(() => {
         mountedRef.current = true
@@ -555,17 +571,24 @@ const BaseComposer = memo(function BaseComposer({
             if (isRunningRef.current || !workspaceVisible) return
             setModelPickerQuery('')
             setModelPickerCursor(0)
-            setQuickModelPickerOpen((prev) => {
-                const next = !prev
-                if (next) {
-                    setAttachMenuOpen(false)
-                    setModelPickerActiveIndex(0)
-                    setTimeout(() => {
-                        textareaRef.current?.focus()
-                    }, 0)
-                }
-                return next
-            })
+            if (gemini4PeriodicPickerOpenRef.current) {
+                pendingRestoreEditorFocusRef.current = true
+                setGemini4PeriodicPickerOpen(false)
+                setQuickModelPickerOpen(false)
+                return
+            }
+            const next = !quickModelPickerOpenRef.current
+            setQuickModelPickerOpen(next)
+            if (next) {
+                setAttachMenuOpen(false)
+                setSlashOpen(false)
+                setSkillOpen(false)
+                setModelPickerActiveIndex(0)
+                rendererEventBus.emit('composer:model-picker-opened', { source: 'composer' })
+                setTimeout(() => {
+                    textareaRef.current?.focus()
+                }, 0)
+            }
         })
         return () => {
             unsub()
@@ -573,12 +596,39 @@ const BaseComposer = memo(function BaseComposer({
     }, [workspaceVisible])
 
     useEffect(() => {
-        if (isRunning && quickModelPickerOpen) {
+        const unsubOpened = rendererEventBus.on(
+            'composer:model-picker-opened',
+            (payload: any) => {
+                if (payload?.source !== 'composer') {
+                    setQuickModelPickerOpen(false)
+                    setGemini4PeriodicPickerOpen(false)
+                    setModelPickerQuery('')
+                    setModelPickerCursor(0)
+                }
+            },
+        )
+        const unsubPeriodic = rendererEventBus.on(
+            'composer:periodic-picker-visibility',
+            (payload: any) => {
+                if (payload?.source !== 'composer') {
+                    setExternalPeriodicPickerOpen(Boolean(payload?.open))
+                }
+            },
+        )
+        return () => {
+            unsubOpened()
+            unsubPeriodic()
+        }
+    }, [])
+
+    useEffect(() => {
+        if (isRunning && (quickModelPickerOpen || gemini4PeriodicPickerOpen)) {
             setQuickModelPickerOpen(false)
+            setGemini4PeriodicPickerOpen(false)
             setModelPickerQuery('')
             setModelPickerCursor(0)
         }
-    }, [isRunning, quickModelPickerOpen])
+    }, [isRunning, quickModelPickerOpen, gemini4PeriodicPickerOpen])
 
     const handleOpenModelSelector = useCallback(() => {
         if (isRunningRef.current) return
@@ -590,11 +640,13 @@ const BaseComposer = memo(function BaseComposer({
         setModelPickerCursor(0)
         setAttachMenuOpen(false)
         setModelPickerActiveIndex(0)
+        setGemini4PeriodicPickerOpen(false)
         setQuickModelPickerOpen(true)
+        rendererEventBus.emit('composer:model-picker-opened', { source: 'composer' })
         setTimeout(() => {
             textareaRef.current?.focus()
         }, 0)
-    }, [])
+    }, [setComposerDraft])
 
     const focusInput = useCallback(() => {
         if (!workspaceVisible) return
@@ -612,6 +664,31 @@ const BaseComposer = memo(function BaseComposer({
             }
         } catch {}
     }, [workspaceVisible])
+
+    // Restore focus and caret position only after the editor commits back to contentEditable="true"
+    useEffect(() => {
+        if (
+            !pendingRestoreEditorFocusRef.current ||
+            gemini4PeriodicPickerOpen ||
+            externalPeriodicPickerOpen ||
+            quickModelPickerOpen ||
+            sending ||
+            isWorktreeBlocked ||
+            !workspaceVisible
+        ) {
+            return
+        }
+        pendingRestoreEditorFocusRef.current = false
+        focusInput()
+    }, [
+        gemini4PeriodicPickerOpen,
+        externalPeriodicPickerOpen,
+        quickModelPickerOpen,
+        sending,
+        isWorktreeBlocked,
+        workspaceVisible,
+        focusInput,
+    ])
 
     useEffect(() => {
         const handleFocus = () => {
@@ -660,40 +737,87 @@ const BaseComposer = memo(function BaseComposer({
         }
     }, [effectiveSessionId, isWorktreeBlocked, sending, focusInput])
 
-    const filteredPickerModels = useMemo(() => {
-        if (!quickModelPickerOpen) return []
-        const sorted = sortModelsByName(models)
-        const query = modelPickerQuery.trim().toLowerCase()
-        if (!query) return sorted
+    const gemini4GroupingEnabled = useMemo(
+        () => isGemini4PeriodicTableEnabled(modelSettings) && models.some(isGemini4Model),
+        [modelSettings, models],
+    )
 
-        return sorted.filter((model) => {
-            const labelMatch = (model.label || model.id).toLowerCase().includes(query)
-            const idMatch = model.id.toLowerCase().includes(query)
-            const descMatch =
-                model.description?.toLowerCase().includes(query) ?? false
-            return labelMatch || idMatch || descMatch
+    useEffect(() => {
+        if (gemini4PeriodicPickerOpen && !gemini4GroupingEnabled) {
+            setGemini4PeriodicPickerOpen(false)
+            setModelPickerQuery('')
+            setModelPickerCursor(0)
+        }
+    }, [gemini4PeriodicPickerOpen, gemini4GroupingEnabled])
+
+    const quickPickerItems = useMemo(() => {
+        if (!quickModelPickerOpen) return []
+        const grouped = groupGemini4Models(models)
+        return buildQuickModelPickerItems({
+            models,
+            currentModelId: effectiveModelId,
+            searchQuery: modelPickerQuery,
+            enableGemini4Grouping: gemini4GroupingEnabled,
+            groupLabel: t('composer.gemini4PeriodicTable.groupLabel', {
+                defaultValue: 'Gemini 4',
+            }),
+            groupDescription: t('composer.gemini4PeriodicTable.groupDesc', {
+                count: grouped.releasedCount,
+                defaultValue: `${grouped.releasedCount} released · Periodic table`,
+            }),
         })
-    }, [quickModelPickerOpen, modelPickerQuery, models])
+    }, [quickModelPickerOpen, models, effectiveModelId, modelPickerQuery, gemini4GroupingEnabled, t])
+
+    const handleOpenGemini4PeriodicPicker = useCallback(() => {
+        setQuickModelPickerOpen(false)
+        setModelPickerQuery('')
+        setModelPickerCursor(0)
+        setGemini4PeriodicPickerOpen(true)
+        rendererEventBus.emit('composer:model-picker-opened', { source: 'composer' })
+    }, [])
+
+    const effectiveSpeed: Speed =
+        (currentSession?.speed as Speed | undefined) ??
+        (!effectiveSessionId ? pendingSessionContext?.speed : undefined) ??
+        settings.speed ??
+        'standard'
 
     const handleSelectQuickModel = (model: ModelCatalogEntry) => {
-        hostServices?.settings?.setModelId?.(model.id)
-        const normalized = normalizeModelPreferences(
+        commitModelSelection({
             model,
-            currentSession?.reasoningEffort ?? settings.reasoningLevel,
-            currentSession?.speed ?? settings.speed,
-        )
-        hostServices?.settings?.setReasoningLevel?.(normalized.reasoningLevel)
-        if (effectiveSessionId && hostServices?.sessions?.setSessionRuntimeSettings) {
-            hostServices.sessions.setSessionRuntimeSettings(effectiveSessionId, {
-                modelId: model.id,
-                reasoningEffort: normalized.reasoningLevel,
-                speed: normalized.speed,
-            })
-        }
+            requestedReasoningLevel: currentSession?.reasoningEffort ?? settings.reasoningLevel ?? 'off',
+            currentSpeed: effectiveSpeed,
+            modelSettings,
+            sessionId: effectiveSessionId,
+            services: hostServices,
+        })
+        pendingRestoreEditorFocusRef.current = true
         setModelPickerQuery('')
         setModelPickerCursor(0)
         setQuickModelPickerOpen(false)
-        textareaRef.current?.focus()
+        setGemini4PeriodicPickerOpen(false)
+    }
+
+    const handleSelectGemini4Model = ({
+        model,
+        reasoningLevel: nextReasoning,
+    }: {
+        model: ModelCatalogEntry
+        reasoningLevel: string
+    }) => {
+        commitModelSelection({
+            model,
+            requestedReasoningLevel: nextReasoning,
+            currentSpeed: effectiveSpeed,
+            modelSettings,
+            sessionId: effectiveSessionId,
+            services: hostServices,
+        })
+        pendingRestoreEditorFocusRef.current = true
+        setModelPickerQuery('')
+        setModelPickerCursor(0)
+        setQuickModelPickerOpen(false)
+        setGemini4PeriodicPickerOpen(false)
     }
 
     const handleSelectAttachMenuItem = async (id: AttachMenuItemId) => {
@@ -817,8 +941,11 @@ const BaseComposer = memo(function BaseComposer({
     )
     lastSlashDiagnosticsRef.current = slashBuild.diagnostics
 
+    const anyPeriodicPickerOpen = gemini4PeriodicPickerOpen || externalPeriodicPickerOpen
+
     const showSlashMenu =
         !quickModelPickerOpen &&
+        !anyPeriodicPickerOpen &&
         slashOpen &&
         slashQuery !== null &&
         slashSuggestions.length > 0
@@ -872,6 +999,7 @@ const BaseComposer = memo(function BaseComposer({
     }))
     const showSkillMenu =
         !quickModelPickerOpen &&
+        !anyPeriodicPickerOpen &&
         skillOpen &&
         skillQuery !== null &&
         skillSuggestions.length > 0
@@ -945,6 +1073,9 @@ const BaseComposer = memo(function BaseComposer({
                 : {}),
             ...(pendingSessionContext.environmentId !== undefined
                 ? { environmentId: pendingSessionContext.environmentId }
+                : {}),
+            ...(pendingSessionContext.speed !== undefined
+                ? { speed: pendingSessionContext.speed }
                 : {}),
         })
         if (effectiveSessionId) {
@@ -1171,23 +1302,32 @@ const BaseComposer = memo(function BaseComposer({
     const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
         if (event.nativeEvent.isComposing || event.keyCode === 229) return
 
+        if (gemini4PeriodicPickerOpen) {
+            if (event.key === 'Escape') {
+                event.preventDefault()
+                setGemini4PeriodicPickerOpen(false)
+                textareaRef.current?.focus()
+            }
+            return
+        }
+
         if (quickModelPickerOpen) {
             if (event.key === 'ArrowDown') {
                 event.preventDefault()
-                if (filteredPickerModels.length > 0) {
+                if (quickPickerItems.length > 0) {
                     setModelPickerActiveIndex(
-                        (index) => (index + 1) % filteredPickerModels.length,
+                        (index) => (index + 1) % quickPickerItems.length,
                     )
                 }
                 return
             }
             if (event.key === 'ArrowUp') {
                 event.preventDefault()
-                if (filteredPickerModels.length > 0) {
+                if (quickPickerItems.length > 0) {
                     setModelPickerActiveIndex(
                         (index) =>
-                            (index - 1 + filteredPickerModels.length) %
-                            filteredPickerModels.length,
+                            (index - 1 + quickPickerItems.length) %
+                            quickPickerItems.length,
                     )
                 }
                 return
@@ -1195,14 +1335,18 @@ const BaseComposer = memo(function BaseComposer({
             if (event.key === 'Enter' || event.key === 'Tab') {
                 event.preventDefault()
                 const safeIndex =
-                    filteredPickerModels.length > 0
-                        ? ((modelPickerActiveIndex % filteredPickerModels.length) +
-                              filteredPickerModels.length) %
-                          filteredPickerModels.length
+                    quickPickerItems.length > 0
+                        ? ((modelPickerActiveIndex % quickPickerItems.length) +
+                              quickPickerItems.length) %
+                          quickPickerItems.length
                         : 0
-                const item = filteredPickerModels[safeIndex]
+                const item = quickPickerItems[safeIndex]
                 if (item) {
-                    handleSelectQuickModel(item)
+                    if (item.kind === 'gemini4-group') {
+                        handleOpenGemini4PeriodicPicker()
+                    } else {
+                        handleSelectQuickModel(item.model)
+                    }
                 }
                 return
             }
@@ -1464,7 +1608,7 @@ const BaseComposer = memo(function BaseComposer({
         if (files.length === 0) return
         // Consume image pastes so clipboard HTML/text is not inserted as well.
         event.preventDefault()
-        if (controlsLocked || isWorktreeBlocked || quickModelPickerOpen) return
+        if (controlsLocked || isWorktreeBlocked || quickModelPickerOpen || gemini4PeriodicPickerOpen) return
         enqueueFiles(files)
     }
 
@@ -1638,7 +1782,8 @@ const BaseComposer = memo(function BaseComposer({
         attachMenuOpen ||
         showSlashMenu ||
         showSkillMenu ||
-        quickModelPickerOpen
+        quickModelPickerOpen ||
+        gemini4PeriodicPickerOpen
 
     return (
         <div
@@ -1663,6 +1808,7 @@ const BaseComposer = memo(function BaseComposer({
                         'pb-[22px] mb-[-18px]',
                         (shouldHideContextBar ||
                             quickModelPickerOpen ||
+                            anyPeriodicPickerOpen ||
                             attachMenuOpen ||
                             showSkillMenu) &&
                             'hidden',
@@ -1715,15 +1861,43 @@ const BaseComposer = memo(function BaseComposer({
                 >
                     {quickModelPickerOpen && !isRunning ? (
                         <QuickModelPicker
-                            models={filteredPickerModels}
+                            models={models}
+                            items={quickPickerItems}
+                            searchQuery={modelPickerQuery}
                             currentModelId={effectiveModelId}
                             activeIndex={modelPickerActiveIndex}
                             onActiveIndexChange={setModelPickerActiveIndex}
                             onSelect={handleSelectQuickModel}
+                            enableGemini4Grouping={gemini4GroupingEnabled}
+                            onOpenGemini4Group={handleOpenGemini4PeriodicPicker}
                             onClose={() => {
                                 setModelPickerQuery('')
                                 setModelPickerCursor(0)
                                 setQuickModelPickerOpen(false)
+                            }}
+                        />
+                    ) : null}
+
+                    {gemini4PeriodicPickerOpen && !isRunning ? (
+                        <Gemini4PeriodicTablePicker
+                            models={models}
+                            currentModelId={effectiveModelId}
+                            currentReasoningLevel={
+                                currentSession?.reasoningEffort ??
+                                settings.reasoningLevel ??
+                                'off'
+                            }
+                            modelSettings={modelSettings}
+                            anchorElement={composerCardRef.current}
+                            preferredPlacement="above"
+                            closeOnOutsideClick
+                            onSelect={handleSelectGemini4Model}
+                            onClose={() => {
+                                pendingRestoreEditorFocusRef.current = true
+                                setModelPickerQuery('')
+                                setModelPickerCursor(0)
+                                setQuickModelPickerOpen(false)
+                                setGemini4PeriodicPickerOpen(false)
                             }}
                         />
                     ) : null}
@@ -1942,7 +2116,7 @@ const BaseComposer = memo(function BaseComposer({
                             trigger={skillTrigger}
                             references={quickModelPickerOpen ? [] : draftReferences}
                             reservedSlashNames={[...COMPACT_COMMAND_ALIASES, ...MODEL_COMMAND_ALIASES, compactName, modelName, ...prompts.map((prompt) => prompt.name)]}
-                            disabled={sending || isWorktreeBlocked}
+                            disabled={sending || isWorktreeBlocked || anyPeriodicPickerOpen}
                             maxHeight={TEXTAREA_MAX_HEIGHT}
                             placeholder={
                                 quickModelPickerOpen
@@ -1981,9 +2155,11 @@ const BaseComposer = memo(function BaseComposer({
                                         : t('composer.placeholder', { defaultValue: 'Type a message...' })
                             }
                             onChange={(next, cursor) => {
+                                if (gemini4PeriodicPickerOpen) return
                                 if (quickModelPickerOpen) {
                                     setModelPickerQuery(next)
                                     setModelPickerCursor(cursor)
+                                    setModelPickerActiveIndex(0)
                                 } else {
                                     setComposerDraft(next, skillReferencesFromParts(readSkillDraftParts(textareaRef.current)))
                                     setDraftCursor(cursor)
@@ -2047,6 +2223,7 @@ const BaseComposer = memo(function BaseComposer({
                                                 if (next) {
                                                     setAttachMenuActiveIndex(0)
                                                     setQuickModelPickerOpen(false)
+                                                    setGemini4PeriodicPickerOpen(false)
                                                     setSlashOpen(false)
                                                     setSkillOpen(false)
                                                     setTimeout(() => {

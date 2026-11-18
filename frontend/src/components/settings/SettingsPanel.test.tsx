@@ -1,4 +1,4 @@
-import { createEvent, fireEvent, render, screen } from '@testing-library/react'
+import { act, createEvent, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import i18n from '@/i18n'
@@ -425,5 +425,29 @@ describe('SettingsPanel keyboard shortcuts', () => {
         expect((searchInput as HTMLInputElement).value).toBe('')
         // Standard group header should be restored
         expect(screen.getByText('Personal')).toBeInTheDocument()
+    })
+
+    it('finds the Gemini 4 periodic table setting via Chinese and English search queries and navigates to the toggle row', async () => {
+        const user = userEvent.setup()
+        useUiStore.setState({ settingsOpen: true })
+        render(<SettingsPanel />)
+
+        const searchInput = screen.getByPlaceholderText(/Search settings/i)
+        await user.type(searchInput, 'periodic table')
+        const enResult = screen.getByRole('button', { name: /Gemini 4 periodic table selector/i })
+        expect(enResult).toBeInTheDocument()
+        await user.click(enResult)
+        expect(document.getElementById('gemini4PeriodicTable')).toBeInTheDocument()
+
+        await act(async () => {
+            await i18n.changeLanguage('zh-CN')
+        })
+        const zhInput = screen.getByPlaceholderText(/搜索设置/i)
+        await user.clear(zhInput)
+        await user.type(zhInput, '元素周期表')
+        const zhResult = screen.getByRole('button', { name: /Gemini 4 元素周期表选择器/i })
+        expect(zhResult).toBeInTheDocument()
+        await user.click(zhResult)
+        expect(document.getElementById('gemini4PeriodicTable')).toBeInTheDocument()
     })
 })

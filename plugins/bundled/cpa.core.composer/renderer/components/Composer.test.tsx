@@ -10,7 +10,8 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '@/i18n'
 import { HostServicesProvider, setDefaultHostServices, WorkspaceVisibilityProvider } from '@cpa/plugin-ui'
-import type { AppSettings, ModelCatalogEntry, Project, SessionItem } from '@cpa/plugin-api'
+import { StrictMode } from 'react'
+import type { AppSettings, ModelCatalogEntry, ModelReasoningOption, Project, SessionItem } from '@cpa/plugin-api'
 import { rendererPluginRuntime } from '@/plugins/platform/RendererPluginRuntimeHost'
 import { createHostServices } from '@/application/services/createHostServices'
 import { useUiStore } from '@/stores/uiStore'
@@ -117,6 +118,7 @@ let projectsListeners: Set<() => void>
 let uiListeners: Set<() => void>
 let runsListeners: Set<() => void>
 let skillUsageListeners: Set<() => void>
+let modelsListeners: Set<() => void>
 
 function notifySettings() {
     for (const l of settingsListeners) l()
@@ -143,6 +145,9 @@ function notifyRuns() {
 function notifySkillUsage() {
     for (const l of skillUsageListeners) l()
 }
+function notifyModels() {
+    for (const l of modelsListeners) l()
+}
 
 function resetTestServices() {
     settingsListeners = new Set()
@@ -151,6 +156,7 @@ function resetTestServices() {
     uiListeners = new Set()
     runsListeners = new Set()
     skillUsageListeners = new Set()
+    modelsListeners = new Set()
 
     settingsState = {
         theme: 'dark',
@@ -218,7 +224,10 @@ function resetTestServices() {
             getModels: () => modelsState,
             getStatus: () => 'ready',
             getError: () => null,
-            subscribe: (listener: () => void) => () => {},
+            subscribe: (listener: () => void) => {
+                modelsListeners.add(listener)
+                return () => modelsListeners.delete(listener)
+            },
         },
         sessions: {
             getSnapshot: () => sessionsState,
@@ -2173,6 +2182,291 @@ describe('QuickModelPicker in Composer', () => {
             'session-live',
             expect.objectContaining({ modelId: 'vision-model' }),
         )
+    })
+
+    it('groups Gemini 4 in quick model picker, isolates draft during periodic table, commits model + thinking level, and supports direct keyword search & Escape restore', async () => {
+        const user = userEvent.setup()
+        const lmh: ModelReasoningOption[] = [
+            { id: 'low', requestValue: 'low', labelKey: 'composer.reasoning.low' },
+            { id: 'medium', requestValue: 'medium', labelKey: 'composer.reasoning.medium' },
+            { id: 'high', requestValue: 'high', labelKey: 'composer.reasoning.high' },
+        ]
+        modelsState = [
+            visionModel,
+            textModel,
+            {
+                id: 'gemini-4-argon-high',
+                label: 'Gemini 4 Argon',
+                supportsFast: false,
+                reasoningLevels: lmh,
+                input: ['text'],
+                contextWindow: 1_000_000,
+                maxTokens: 65_536,
+            },
+            {
+                id: 'gemini-4-carbon-high',
+                label: 'Gemini 4 Carbon',
+                supportsFast: false,
+                reasoningLevels: lmh,
+                input: ['text'],
+                contextWindow: 1_000_000,
+                maxTokens: 65_536,
+            },
+        ]
+        settingsState = {
+            ...settingsState,
+            speed: 'fast',
+        }
+        sessionsState = [
+            { id: 'session-gemini-quick', title: 'Live', pinned: false, speed: 'fast', createdAt: 1, updatedAt: 1 },
+        ]
+
+        render(<Composer sessionId="session-gemini-quick" onSend={() => undefined} />)
+
+        const textarea = screen.getByTestId('composer-input')
+        await user.type(textarea, 'Keep my draft')
+
+        act(() => {
+            rendererPluginRuntime.eventBus.emit('composer:toggle-model-selector')
+        })
+
+        const geminiGroupOption = screen.getByRole('option', { name: /Gemini 4/i })
+        expect(geminiGroupOption).toBeInTheDocument()
+        expect(screen.queryByRole('option', { name: /Gemini 4 Argon/i })).not.toBeInTheDocument()
+
+        await user.type(textarea, 'argon')
+        expect(screen.getByRole('option', { name: /Gemini 4 Argon/i })).toBeInTheDocument()
+
+        await user.clear(textarea)
+        fireEvent.mouseDown(screen.getByRole('option', { name: /Gemini 4/i }))
+
+        const dialog = screen.getByRole('dialog', { name: 'Model periodic table' })
+        expect(dialog).toBeInTheDocument()
+        expect(dialog.contains(document.activeElement)).toBe(true)
+
+        await user.keyboard('oops')
+        await user.keyboard('{Escape}')
+        expect(screen.queryByRole('dialog', { name: 'Model periodic table' })).not.toBeInTheDocument()
+        expectComposerValue('Keep my draft')
+
+        act(() => {
+            rendererPluginRuntime.eventBus.emit('composer:toggle-model-selector')
+        })
+        fireEvent.mouseDown(screen.getByRole('option', { name: /Gemini 4/i }))
+
+        const dialog2 = screen.getByRole('dialog', { name: 'Model periodic table' })
+        const carbonBtn = dialog2.querySelector('[data-periodic-element="6"]') as HTMLButtonElement
+        await user.click(carbonBtn)
+        const inspector = within(dialog2).getByTestId('gemini4-periodic-inspector')
+        await user.click(within(inspector).getByRole('button', { name: 'High' }))
+
+        expect(mockServices.settings.setModelId).toHaveBeenCalledWith('gemini-4-carbon-high')
+        expect(mockServices.settings.setReasoningLevel).toHaveBeenCalledWith('high')
+        expect(mockServices.settings.setSpeed).not.toHaveBeenCalled()
+        expect(mockServices.sessions.setSessionRuntimeSettings).toHaveBeenCalledWith(
+            'session-gemini-quick',
+            expect.objectContaining({
+                modelId: 'gemini-4-carbon-high',
+                reasoningEffort: 'high',
+                speed: 'standard',
+            }),
+        )
+        expect(screen.queryByRole('dialog', { name: 'Model periodic table' })).not.toBeInTheDocument()
+        expectComposerValue('Keep my draft')
+    })
+
+    it('preserves session A draft when switching to session B and running /model, supports StrictMode toggle, enforces mutual exclusion, and honors all-disabled models', async () => {
+        const user = userEvent.setup()
+        modelsState = [
+            {
+                id: 'gemini-4-argon-high',
+                label: 'Gemini 4 Argon',
+                supportsFast: false,
+                reasoningLevels: [
+                    { id: 'low', requestValue: 'low', labelKey: 'composer.reasoning.low' },
+                    { id: 'high', requestValue: 'high', labelKey: 'composer.reasoning.high' },
+                ],
+                input: ['text'],
+                contextWindow: 1_000_000,
+                maxTokens: 65_536,
+            },
+        ]
+        sessionsState = [
+            { id: 'sess-a', title: 'A', pinned: false, createdAt: 1, updatedAt: 1 },
+            { id: 'sess-b', title: 'B', pinned: false, createdAt: 2, updatedAt: 2 },
+        ]
+
+        const { rerender } = render(
+            <StrictMode>
+                <Composer sessionId="sess-a" onSend={() => undefined} />
+            </StrictMode>,
+        )
+
+        await user.type(screen.getByTestId('composer-input'), 'draft A')
+        expect(composerDraftsState['session:sess-a']).toBe('draft A')
+
+        rerender(
+            <StrictMode>
+                <Composer sessionId="sess-b" onSend={() => undefined} />
+            </StrictMode>,
+        )
+
+        await user.type(screen.getByTestId('composer-input'), '/model')
+        await user.keyboard('{Enter}')
+        expect(screen.getByRole('listbox', { name: 'Open model selector' })).toBeInTheDocument()
+        expect(composerDraftsState['session:sess-a']).toBe('draft A')
+        expect(composerDraftsState['session:sess-b'] ?? '').toBe('')
+        expectComposerValue('')
+
+        await user.keyboard('{Escape}')
+        expect(screen.queryByRole('listbox', { name: 'Open model selector' })).not.toBeInTheDocument()
+
+        act(() => {
+            rendererPluginRuntime.eventBus.emit('composer:toggle-model-selector')
+        })
+        expect(screen.getByRole('listbox', { name: 'Open model selector' })).toBeInTheDocument()
+
+        await user.click(screen.getByRole('button', { name: 'Model' }))
+        expect(screen.queryByRole('listbox', { name: 'Open model selector' })).not.toBeInTheDocument()
+        await user.click(screen.getByRole('menuitem', { name: 'Advanced' }))
+        await user.click(screen.getByRole('menuitem', { name: /Model/i }))
+        await user.click(screen.getByRole('menuitem', { name: /^Gemini 4/i }))
+        expect(screen.getAllByRole('dialog', { name: 'Model periodic table' })).toHaveLength(1)
+
+        act(() => {
+            rendererPluginRuntime.eventBus.emit('composer:toggle-model-selector')
+        })
+        expect(screen.queryByRole('dialog', { name: 'Model periodic table' })).not.toBeInTheDocument()
+        expect(screen.getByRole('listbox', { name: 'Open model selector' })).toBeInTheDocument()
+
+        await user.keyboard('{Enter}')
+        expect(screen.getByRole('dialog', { name: 'Model periodic table' })).toBeInTheDocument()
+
+        act(() => {
+            settingsState = {
+                ...settingsState,
+                modelSettings: {
+                    enableAll: false,
+                    models: { 'gemini-4-argon-high': { enabled: false } },
+                },
+            }
+            notifySettings()
+        })
+        expect(screen.queryByRole('dialog', { name: 'Model periodic table' })).not.toBeInTheDocument()
+        notifyModels()
+    })
+
+    it('restores focus into contenteditable editor after closing periodic table with Escape so immediate typing inserts into draft', async () => {
+        const user = userEvent.setup()
+        modelsState = [
+            {
+                id: 'gemini-4-argon-high',
+                label: 'Gemini 4 Argon',
+                supportsFast: false,
+                reasoningLevels: [{ id: 'high', requestValue: 'high', labelKey: 'composer.reasoning.high' }],
+                input: ['text'],
+                contextWindow: 1_000_000,
+                maxTokens: 65_536,
+            },
+        ]
+
+        render(<Composer onSend={() => undefined} />)
+        const textarea = screen.getByTestId('composer-input')
+        await user.type(textarea, 'Keep my draft')
+
+        act(() => {
+            rendererPluginRuntime.eventBus.emit('composer:toggle-model-selector')
+        })
+        fireEvent.mouseDown(screen.getByRole('option', { name: /Gemini 4/i }))
+        expect(screen.getByRole('dialog', { name: 'Model periodic table' })).toBeInTheDocument()
+        expect(textarea).toHaveAttribute('contenteditable', 'false')
+
+        await user.keyboard('{Escape}')
+        expect(screen.queryByRole('dialog', { name: 'Model periodic table' })).not.toBeInTheDocument()
+        expect(textarea).toHaveAttribute('contenteditable', 'true')
+        expect(textarea).toHaveFocus()
+
+        await user.keyboard('!')
+        expectComposerValue('Keep my draft!')
+    })
+
+    it('isolates Composer editor and slash menu while ModelSelect periodic table is open and preserves pending speed across project switch', async () => {
+        const user = userEvent.setup()
+        let uiSnapshotLocal = { pendingSessionContext: pendingSessionContextState }
+        const replaceSubscribers = new Set<() => void>()
+        const notifyLocalUi = () => {
+            uiSnapshotLocal = { pendingSessionContext: pendingSessionContextState }
+            replaceSubscribers.forEach((listener) => listener())
+        }
+        setDefaultHostServices({
+            ...mockServices,
+            ui: {
+                ...mockServices.ui,
+                getSnapshot: () => uiSnapshotLocal,
+                subscribe: (listener: () => void) => {
+                    replaceSubscribers.add(listener)
+                    return () => replaceSubscribers.delete(listener)
+                },
+                getPendingSessionContext: () => pendingSessionContextState,
+                setPendingSessionContext: vi.fn((ctx: any) => {
+                    pendingSessionContextState = ctx
+                    notifyLocalUi()
+                }),
+            },
+        })
+        modelsState = [
+            {
+                id: 'model-fast',
+                label: 'Fast Model',
+                supportsFast: true,
+                reasoningLevels: [{ id: 'high', requestValue: 'high', labelKey: 'composer.reasoning.high' }],
+                input: ['text'],
+                contextWindow: 1_000_000,
+                maxTokens: 65_536,
+            },
+            {
+                id: 'gemini-4-argon-high',
+                label: 'Gemini 4 Argon',
+                supportsFast: false,
+                reasoningLevels: [{ id: 'high', requestValue: 'high', labelKey: 'composer.reasoning.high' }],
+                input: ['text'],
+                contextWindow: 1_000_000,
+                maxTokens: 65_536,
+            },
+        ]
+        settingsState = {
+            ...settingsState,
+            modelId: 'model-fast',
+            reasoningLevel: 'high',
+            speed: 'fast',
+        }
+
+        render(<Composer sessionId={null} onSend={() => undefined} />)
+        const textarea = screen.getByTestId('composer-input')
+        await user.type(textarea, '/')
+        expect(screen.getByRole('listbox', { name: /Slash commands/i })).toBeInTheDocument()
+
+        await user.click(screen.getByRole('button', { name: 'Model' }))
+        await user.click(screen.getByRole('menuitem', { name: 'Advanced' }))
+        await user.click(screen.getByRole('menuitem', { name: /Model/i }))
+        await user.click(screen.getByRole('menuitem', { name: /^Gemini 4/i }))
+
+        const dialog = screen.getByRole('dialog', { name: 'Model periodic table' })
+        expect(dialog).toBeInTheDocument()
+        expect(screen.queryByRole('listbox', { name: /Slash commands/i })).not.toBeInTheDocument()
+        expect(textarea).toHaveAttribute('contenteditable', 'false')
+
+        // Select Gemini 4 Argon (supportsFast: false) -> sets pendingSessionContext.speed = standard
+        const inspector = within(dialog).getByTestId('gemini4-periodic-inspector')
+        await user.click(within(inspector).getByRole('button', { name: 'High' }))
+        expect(pendingSessionContextState.speed).toBe('standard')
+        expect(textarea).toHaveAttribute('contenteditable', 'true')
+
+        // Switch project in new chat -> must preserve pendingSessionContext.speed
+        await user.click(screen.getByRole('button', { name: 'Select project' }))
+        await user.click(screen.getByText('Example Project'))
+        expect(pendingSessionContextState.projectId).toBe('project-1')
+        expect(pendingSessionContextState.speed).toBe('standard')
     })
 })
 

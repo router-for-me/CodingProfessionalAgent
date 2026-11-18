@@ -5051,6 +5051,47 @@ describe('persist pure helpers', () => {
       })
     })
 
+    it('sanitizes and preserves modelSettings.gemini4PeriodicTable boolean values on write and hydrate without injecting defaults when absent', async () => {
+      let writtenState: any = null
+      const KVStoreSet = vi.fn(async (key: string, value: unknown) => {
+        if (key === 'app-state') {
+          writtenState = value
+        }
+      })
+      setHostBridge({
+        KVStoreGet: vi.fn(async () => null),
+        KVStoreSet,
+      } as any)
+
+      useSettingsStore.getState().setModelSettings({
+        gemini4PeriodicTable: false,
+      })
+
+      await flushPendingPersistence()
+      await flushWrites()
+
+      expect(writtenState?.settings?.modelSettings?.gemini4PeriodicTable).toBe(false)
+
+      applyPersistedState({
+        version: 1,
+        settings: writtenState.settings,
+      } as any)
+      expect(useSettingsStore.getState().settings.modelSettings?.gemini4PeriodicTable).toBe(false)
+
+      applyPersistedState({
+        version: 1,
+        settings: {
+          ...writtenState.settings,
+          modelSettings: {
+            enableAll: true,
+            models: {},
+            gemini4PeriodicTable: true,
+          },
+        },
+      } as any)
+      expect(useSettingsStore.getState().settings.modelSettings?.gemini4PeriodicTable).toBe(true)
+    })
+
     it('persists and sanitizes headlessCloseAction setting', async () => {
       let writtenState: any = null
       const KVStoreSet = vi.fn(async (key: string, value: unknown) => {

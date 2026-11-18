@@ -28,6 +28,8 @@ export interface AdvancedMenuProps {
     onSpeedChange: (speed: Speed) => void
     onSubmenuChange: (submenu: ActiveSubmenu) => void
     onBackToQuick: () => void
+    enableGemini4Grouping?: boolean
+    onOpenGemini4Group?: () => void
     catalogNotice?: string
     id?: string
     disabled?: boolean
@@ -47,6 +49,8 @@ export function AdvancedMenu({
     onSpeedChange,
     onSubmenuChange,
     onBackToQuick,
+    enableGemini4Grouping = false,
+    onOpenGemini4Group,
     catalogNotice,
     id = 'composer-advanced-menu',
     disabled = false,
@@ -237,6 +241,8 @@ export function AdvancedMenu({
                                   ariaLabelledBy={modelTriggerId}
                                   models={models}
                                   modelId={modelId}
+                                  enableGemini4Grouping={enableGemini4Grouping}
+                                  onOpenGemini4Group={onOpenGemini4Group}
                                   maxHeight={submenuPlacement.maxHeight}
                                   disabled={disabled}
                                   onSelect={(nextModelId) => {

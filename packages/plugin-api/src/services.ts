@@ -247,6 +247,8 @@ export interface ModelSettingsConfig {
   models: Record<string, ModelCustomConfig>
   modelOrder?: string[]
   cacheWarming?: CacheWarmingSettings
+  /** Whether to group Gemini 4 models into the periodic table selector (defaults to true when omitted). */
+  gemini4PeriodicTable?: boolean
 }
 
 export type GitMergeMethod = 'merge' | 'squash'

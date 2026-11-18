@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { ModelCatalogEntry } from '@cpa/plugin-api'
 import {
+    commitModelSelection,
+    filterCatalogModels,
     getDefaultReasoningLevel,
     getDefaultReasoningOption,
     getReasoningOptions,
@@ -185,6 +187,89 @@ describe('model menu options', () => {
                 'beta-model',
                 'zeta-model',
             ])
+        })
+    })
+
+    describe('filterCatalogModels', () => {
+        it('returns empty list when enableAll is false and all models are explicitly disabled', () => {
+            const models: ModelCatalogEntry[] = [
+                {
+                    id: 'm1',
+                    label: 'M1',
+                    supportsFast: false,
+                    reasoningLevels: [{ id: 'low', requestValue: 'low' }, { id: 'high', requestValue: 'high' }],
+                    input: ['text'],
+                    contextWindow: 128000,
+                    maxTokens: 4096,
+                },
+            ]
+            expect(
+                filterCatalogModels(models, {
+                    enableAll: false,
+                    models: { m1: { enabled: false } },
+                }),
+            ).toEqual([])
+        })
+
+        it('filters enabledReasoningLevels safely when enableAll is false and falls back when empty', () => {
+            const models: ModelCatalogEntry[] = [
+                {
+                    id: 'm1',
+                    label: 'M1',
+                    supportsFast: false,
+                    reasoningLevels: [
+                        { id: 'low', requestValue: 'low' },
+                        { id: 'medium', requestValue: 'medium' },
+                        { id: 'high', requestValue: 'high' },
+                    ],
+                    input: ['text'],
+                    contextWindow: 128000,
+                    maxTokens: 4096,
+                },
+            ]
+            const filtered = filterCatalogModels(models, {
+                enableAll: false,
+                models: { m1: { enabled: true, enabledReasoningLevels: ['low', 'high'] } },
+            })
+            expect(filtered[0]?.reasoningLevels.map((r) => r.id)).toEqual(['low', 'high'])
+
+            const emptyFallback = filterCatalogModels(models, {
+                enableAll: false,
+                models: { m1: { enabled: true, enabledReasoningLevels: [] } },
+            })
+            expect(emptyFallback[0]?.reasoningLevels.map((r) => r.id)).toEqual(['low', 'medium', 'high'])
+        })
+
+        it('returns empty reasoningLevels instead of falling back when non-empty allowlist has zero catalog matches', () => {
+            const refreshedModels: ModelCatalogEntry[] = [
+                {
+                    id: 'm1',
+                    label: 'M1',
+                    supportsFast: false,
+                    reasoningLevels: [{ id: 'low', requestValue: 'low' }],
+                    input: ['text'],
+                    contextWindow: 128000,
+                    maxTokens: 4096,
+                },
+            ]
+            const settings = {
+                enableAll: false,
+                models: { m1: { enabled: true, enabledReasoningLevels: ['high'] } },
+            }
+            const filtered = filterCatalogModels(refreshedModels, settings)
+            expect(filtered).toHaveLength(1)
+            expect(filtered[0]?.reasoningLevels).toEqual([])
+
+            const setReasoningLevel = vi.fn()
+            const normalized = commitModelSelection({
+                model: refreshedModels[0]!,
+                requestedReasoningLevel: 'low',
+                currentSpeed: 'standard',
+                modelSettings: settings,
+                services: { settings: { setModelId: vi.fn(), setReasoningLevel } },
+            })
+            expect(normalized.reasoningLevel).toBe('off')
+            expect(setReasoningLevel).toHaveBeenCalledWith('off')
         })
     })
 })

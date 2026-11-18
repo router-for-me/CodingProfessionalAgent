@@ -1,9 +1,10 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '@/i18n'
 import { setDefaultHostServices } from '@cpa/plugin-ui'
-import type { AppSettings, ModelCatalogEntry, SessionItem } from '@cpa/plugin-api'
+import type { AppSettings, ModelCatalogEntry, ModelReasoningOption, SessionItem } from '@cpa/plugin-api'
+import { rendererPluginRuntime } from '@/plugins/platform/RendererPluginRuntimeHost'
 import { ModelSelect } from './ModelSelect.js'
 
 const testModels: readonly ModelCatalogEntry[] = [
@@ -825,6 +826,331 @@ describe('ModelSelect', () => {
             rectSpy.mockRestore()
         } finally {
             vi.useRealTimers()
+        }
+    })
+
+    it('groups Gemini 4 models into periodic table picker by default and switches model + reasoning + session runtime settings while keeping global speed intact', async () => {
+        const user = userEvent.setup()
+        const lmh: ModelReasoningOption[] = [
+            { id: 'low', requestValue: 'low', labelKey: 'composer.reasoning.low' },
+            { id: 'medium', requestValue: 'medium', labelKey: 'composer.reasoning.medium' },
+            { id: 'high', requestValue: 'high', labelKey: 'composer.reasoning.high' },
+        ]
+        const geminiModels: ModelCatalogEntry[] = [
+            ...testModels,
+            {
+                id: 'gemini-4-argon-high',
+                label: 'Gemini 4 Argon',
+                supportsFast: false,
+                reasoningLevels: lmh,
+                input: ['text'],
+                contextWindow: 1_000_000,
+                maxTokens: 65_536,
+            },
+            {
+                id: 'devin/gemini-4-argon',
+                label: 'Gemini 4 Argon (Devin)',
+                supportsFast: false,
+                reasoningLevels: lmh,
+                input: ['text'],
+                contextWindow: 1_000_000,
+                maxTokens: 65_536,
+            },
+            {
+                id: 'gemini-4-carbon-high',
+                label: 'Gemini 4 Carbon',
+                supportsFast: false,
+                reasoningLevels: lmh,
+                input: ['text'],
+                contextWindow: 1_000_000,
+                maxTokens: 65_536,
+            },
+        ]
+        modelsState = geminiModels
+        settingsState = {
+            ...settingsState,
+            modelId: 'model-fast',
+            reasoningLevel: 'high',
+            speed: 'fast',
+        }
+        sessionsState = [
+            {
+                id: 'sess-gemini',
+                title: 'Gemini Session',
+                pinned: false,
+                createdAt: 1,
+                updatedAt: 1,
+                modelId: 'model-fast',
+                reasoningEffort: 'high',
+                speed: 'fast',
+            },
+        ]
+
+        render(<ModelSelect sessionId="sess-gemini" />)
+
+        const trigger = screen.getByRole('button', { name: 'Model' })
+        await user.click(trigger)
+        await user.click(screen.getByRole('menuitem', { name: 'Advanced' }))
+        await user.click(screen.getByRole('menuitem', { name: /Model/i }))
+
+        const gemini4Group = screen.getByRole('menuitem', { name: /Gemini 4/i })
+        expect(gemini4Group).toBeVisible()
+        expect(screen.queryByRole('menuitemradio', { name: 'Gemini 4 Argon' })).not.toBeInTheDocument()
+
+        await user.click(gemini4Group)
+
+        const dialog = screen.getByRole('dialog', { name: 'Model periodic table' })
+        expect(dialog).toBeVisible()
+        expect(dialog.closest('[data-model-menu-portal]')).toHaveClass('fixed', 'z-[70]')
+        expect(trigger).toHaveAttribute('aria-expanded', 'true')
+        expect(trigger).toHaveAttribute('aria-haspopup', 'dialog')
+        expect(trigger).toHaveAttribute('aria-controls', dialog.id)
+
+        const argonBtn = dialog.querySelector('[data-periodic-element="18"]') as HTMLButtonElement
+        await user.click(argonBtn)
+
+        const inspector = within(dialog).getByTestId('gemini4-periodic-inspector')
+        await user.click(within(inspector).getByRole('button', { name: /Devin/i }))
+        await user.click(within(inspector).getByRole('button', { name: 'Medium' }))
+
+        expect(settingsState.modelId).toBe('devin/gemini-4-argon')
+        expect(settingsState.reasoningLevel).toBe('medium')
+        expect(settingsState.speed).toBe('fast')
+        expect(mockServices.sessions.setSessionRuntimeSettings).toHaveBeenCalledWith(
+            'sess-gemini',
+            expect.objectContaining({
+                modelId: 'devin/gemini-4-argon',
+                reasoningEffort: 'medium',
+                speed: 'standard',
+            }),
+        )
+        expect(screen.queryByRole('dialog', { name: 'Model periodic table' })).not.toBeInTheDocument()
+    })
+
+    it('flattens Gemini 4 models directly in Model submenu when modelSettings.gemini4PeriodicTable is false', async () => {
+        const user = userEvent.setup()
+        const lmh: ModelReasoningOption[] = [
+            { id: 'low', requestValue: 'low', labelKey: 'composer.reasoning.low' },
+            { id: 'medium', requestValue: 'medium', labelKey: 'composer.reasoning.medium' },
+            { id: 'high', requestValue: 'high', labelKey: 'composer.reasoning.high' },
+        ]
+        modelsState = [
+            ...testModels,
+            {
+                id: 'gemini-4-argon-high',
+                label: 'Gemini 4 Argon',
+                supportsFast: false,
+                reasoningLevels: lmh,
+                input: ['text'],
+                contextWindow: 1_000_000,
+                maxTokens: 65_536,
+            },
+            {
+                id: 'gemini-4-carbon-high',
+                label: 'Gemini 4 Carbon',
+                supportsFast: false,
+                reasoningLevels: lmh,
+                input: ['text'],
+                contextWindow: 1_000_000,
+                maxTokens: 65_536,
+            },
+        ]
+        settingsState = {
+            ...settingsState,
+            modelId: 'model-primary',
+            reasoningLevel: 'high',
+            modelSettings: {
+                enableAll: true,
+                models: {},
+                gemini4PeriodicTable: false,
+            },
+        }
+
+        renderModelSelect()
+
+        await user.click(screen.getByRole('button', { name: 'Model' }))
+        await user.click(screen.getByRole('menuitem', { name: 'Advanced' }))
+        await user.click(screen.getByRole('menuitem', { name: /Model/i }))
+
+        expect(screen.queryByRole('menuitem', { name: /Gemini 4/i })).not.toBeInTheDocument()
+        expect(screen.getByRole('menuitemradio', { name: 'Gemini 4 Argon' })).toBeVisible()
+        expect(screen.getByRole('menuitemradio', { name: 'Gemini 4 Carbon' })).toBeVisible()
+    })
+
+    it('closes open periodic picker when gemini4PeriodicTable becomes false, when composer opens a picker, and disables trigger when all models are explicitly disabled', async () => {
+        const user = userEvent.setup()
+        modelsState = [
+            {
+                id: 'gemini-4-argon-high',
+                label: 'Gemini 4 Argon',
+                supportsFast: false,
+                reasoningLevels: [{ id: 'high', requestValue: 'high', labelKey: 'composer.reasoning.high' }],
+                input: ['text'],
+                contextWindow: 1_000_000,
+                maxTokens: 65_536,
+            },
+        ]
+        renderModelSelect()
+
+        await user.click(screen.getByRole('button', { name: 'Model' }))
+        await user.click(screen.getByRole('menuitem', { name: 'Advanced' }))
+        await user.click(screen.getByRole('menuitem', { name: /Model/i }))
+        await user.click(screen.getByRole('menuitem', { name: /^Gemini 4/i }))
+        expect(screen.getByRole('dialog', { name: 'Model periodic table' })).toBeInTheDocument()
+
+        act(() => {
+            rendererPluginRuntime.eventBus.emit('composer:model-picker-opened', { source: 'composer' })
+        })
+        expect(screen.queryByRole('dialog', { name: 'Model periodic table' })).not.toBeInTheDocument()
+
+        await user.click(screen.getByRole('button', { name: 'Model' }))
+        await user.click(screen.getByRole('menuitem', { name: 'Advanced' }))
+        await user.click(screen.getByRole('menuitem', { name: /Model/i }))
+        await user.click(screen.getByRole('menuitem', { name: /^Gemini 4/i }))
+        expect(screen.getByRole('dialog', { name: 'Model periodic table' })).toBeInTheDocument()
+
+        act(() => {
+            settingsState = {
+                ...settingsState,
+                modelSettings: { enableAll: false, models: {}, gemini4PeriodicTable: false },
+            }
+            notifySettings()
+        })
+        expect(screen.queryByRole('dialog', { name: 'Model periodic table' })).not.toBeInTheDocument()
+        expect(screen.getByRole('button', { name: 'Model' })).toBeEnabled()
+
+        act(() => {
+            settingsState = {
+                ...settingsState,
+                modelSettings: { enableAll: false, models: { 'gemini-4-argon-high': { enabled: false } }, gemini4PeriodicTable: false },
+            }
+            notifySettings()
+        })
+        expect(screen.getByRole('button', { name: 'Model' })).toBeDisabled()
+    })
+
+    it('stops masking cleared pendingSessionContext.speed with stale local speed when shared UI state exists', async () => {
+        const user = userEvent.setup()
+        const uiListeners = new Set<() => void>()
+        let sharedSnapshot = { pendingSessionContext: { ...pendingSessionContext } }
+        const notifyUi = () => {
+            sharedSnapshot = { pendingSessionContext: { ...pendingSessionContext } }
+            uiListeners.forEach((listener) => listener())
+        }
+        setDefaultHostServices({
+            ...mockServices,
+            ui: {
+                getSnapshot: () => sharedSnapshot,
+                subscribe: (listener: () => void) => {
+                    uiListeners.add(listener)
+                    return () => uiListeners.delete(listener)
+                },
+                getPendingSessionContext: () => pendingSessionContext,
+                setPendingSessionContext: vi.fn((ctx: any) => {
+                    pendingSessionContext = ctx
+                    notifyUi()
+                }),
+                pushToast: vi.fn(),
+            },
+        })
+        modelsState = testModels
+        settingsState = {
+            ...settingsState,
+            modelId: 'model-fast',
+            reasoningLevel: 'high',
+            speed: 'fast',
+        }
+        notifySettings()
+
+        render(<ModelSelect sessionId={null} />)
+        const trigger = screen.getByRole('button', { name: 'Model' })
+        expect(trigger.querySelector('.lucide-zap')).not.toBeNull()
+
+        // Select non-fast model in new chat -> sets pendingSessionContext.speed = 'standard'
+        await user.click(trigger)
+        await user.click(screen.getByRole('menuitem', { name: 'Advanced' }))
+        await user.click(screen.getByRole('menuitem', { name: /Model/i }))
+        await user.click(screen.getByRole('menuitemradio', { name: 'Primary Model' }))
+        expect(pendingSessionContext.speed).toBe('standard')
+        expect(trigger.querySelector('.lucide-zap')).toBeNull()
+
+        // Clear pendingSessionContext WITHOUT switching away from non-fast Primary Model -> must NOT overwrite global settings.speed
+        mockServices.settings.setSpeed.mockClear()
+        act(() => {
+            pendingSessionContext = { projectId: null, branch: null }
+            notifyUi()
+        })
+        expect(mockServices.settings.setSpeed).not.toHaveBeenCalled()
+        expect(settingsState.speed).toBe('fast')
+        expect(pendingSessionContext.speed).toBe('standard')
+
+        // Clear pendingSessionContext and switch back to Fast Model -> must show Fast again
+        act(() => {
+            pendingSessionContext = { projectId: null, branch: null }
+            settingsState = { ...settingsState, modelId: 'model-fast' }
+            notifyUi()
+            notifySettings()
+        })
+        expect(trigger.querySelector('.lucide-zap')).not.toBeNull()
+        expect(settingsState.speed).toBe('fast')
+    })
+
+    it('anchors Gemini 4 periodic table horizontally centered in the conversation window and vertically above composer-container', async () => {
+        const user = userEvent.setup()
+        const originalWidth = window.innerWidth
+        const originalHeight = window.innerHeight
+        Object.defineProperty(window, 'innerWidth', { value: 1440, configurable: true })
+        Object.defineProperty(window, 'innerHeight', { value: 900, configurable: true })
+
+        modelsState = [
+            ...testModels,
+            {
+                id: 'gemini-4-argon-high',
+                label: 'Gemini 4 Argon',
+                supportsFast: false,
+                reasoningLevels: [{ id: 'high', requestValue: 'high', labelKey: 'composer.reasoning.high' }],
+                input: ['text'],
+                contextWindow: 1_000_000,
+                maxTokens: 65_536,
+            },
+        ]
+
+        const origGetBCR = HTMLElement.prototype.getBoundingClientRect
+        vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+            if (this.getAttribute('data-testid') === 'workspace-content-container') {
+                return { top: 40, bottom: 900, left: 260, right: 1440, width: 1180, height: 860, x: 260, y: 40, toJSON: () => ({}) } as DOMRect
+            }
+            if (this.getAttribute('data-element') === 'composer-container') {
+                return { top: 750, bottom: 860, left: 466, right: 1234, width: 768, height: 110, x: 466, y: 750, toJSON: () => ({}) } as DOMRect
+            }
+            if (this.getAttribute('aria-label') === 'Model') {
+                return { top: 820, bottom: 850, left: 1080, right: 1220, width: 140, height: 30, x: 1080, y: 820, toJSON: () => ({}) } as DOMRect
+            }
+            return origGetBCR.call(this)
+        })
+
+        try {
+            render(
+                <div data-testid="workspace-content-container">
+                    <div data-element="composer-container">
+                        <ModelSelect sessionId="sess-1" />
+                    </div>
+                </div>,
+            )
+
+            await user.click(screen.getByRole('button', { name: 'Model' }))
+            await user.click(screen.getByRole('menuitem', { name: 'Advanced' }))
+            await user.click(screen.getByRole('menuitem', { name: /Model/i }))
+            await user.click(screen.getByRole('menuitem', { name: /^Gemini 4/i }))
+
+            const dialog = screen.getByRole('dialog', { name: 'Model periodic table' })
+            const portal = dialog.closest('[data-model-menu-portal]') as HTMLElement
+            expect(portal.style.left).toBe('470px')
+            expect(portal.style.bottom).toBe('158px')
+        } finally {
+            vi.restoreAllMocks()
+            Object.defineProperty(window, 'innerWidth', { value: originalWidth, configurable: true })
+            Object.defineProperty(window, 'innerHeight', { value: originalHeight, configurable: true })
         }
     })
 })

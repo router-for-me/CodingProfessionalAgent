@@ -19,7 +19,7 @@ export const protocolCodexRendererEntry = definePluginEntry({
             labelKey: 'settings.nav.models',
             icon: Sparkles,
             component: ModelsSection,
-            keywords: ['models', 'llm', 'codex', 'reasoning', 'openai', 'claude'],
+            keywords: ['models', 'llm', 'codex', 'reasoning', 'openai', 'claude', 'gemini', 'gemini 4', 'periodic table'],
             items: [
                 {
                     id: 'modelConfig',
@@ -31,6 +31,12 @@ export const protocolCodexRendererEntry = definePluginEntry({
                     labelKey: 'settings.models.enableAll',
                     descriptionKey: 'settings.models.enableAll.desc',
                     keywords: ['enable all models', 'reasoning'],
+                },
+                {
+                    id: 'gemini4PeriodicTable',
+                    labelKey: 'settings.models.gemini4PeriodicTable',
+                    descriptionKey: 'settings.models.gemini4PeriodicTable.desc',
+                    keywords: ['gemini', 'gemini 4', 'periodic table', '元素周期表', 'thinking'],
                 },
                 {
                     id: 'modelList',

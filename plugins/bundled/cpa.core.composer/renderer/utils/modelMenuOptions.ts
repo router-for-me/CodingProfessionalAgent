@@ -1,4 +1,4 @@
-import type { ModelCatalogEntry, ModelReasoningOption, Speed } from '@cpa/plugin-api'
+import type { ModelCatalogEntry, ModelReasoningOption, ModelSettingsConfig, Speed } from '@cpa/plugin-api'
 import { CANONICAL_REASONING_ORDER } from '../types.js'
 
 export interface SpeedOption {
@@ -69,16 +69,38 @@ export function getSpeedOptions(supportsFast: boolean): readonly SpeedOption[] {
     ]
 }
 
+export function filterReasoningOptionsBySettings(
+    model: ModelCatalogEntry | undefined,
+    modelSettings?: ModelSettingsConfig,
+): readonly ModelReasoningOption[] {
+    const base = getReasoningOptions(model)
+    if (!model || !modelSettings || modelSettings.enableAll !== false) {
+        return base
+    }
+    const enabledLevels = modelSettings.models?.[model.id]?.enabledReasoningLevels
+    // Empty array falls back to all options to avoid deadlocks per spec; non-empty arrays act as strict allowlists
+    if (!Array.isArray(enabledLevels) || enabledLevels.length === 0) {
+        return base
+    }
+    const allowed = new Set(enabledLevels)
+    return base.filter((opt) => allowed.has(opt.id))
+}
+
 export function normalizeModelPreferences(
     model: ModelCatalogEntry | undefined,
     reasoningLevel: string,
     speed: Speed,
+    modelSettings?: ModelSettingsConfig,
 ): { reasoningLevel: string; speed: Speed } {
     if (!model) {
         return { reasoningLevel: reasoningLevel || 'off', speed: 'standard' }
     }
-    const reasoningOptions = getReasoningOptions(model)
-    const defaultReasoning = getDefaultReasoningLevel(model)
+    const reasoningOptions = filterReasoningOptionsBySettings(model, modelSettings)
+    const defaultOption =
+        reasoningOptions.length > 0
+            ? reasoningOptions[Math.floor(reasoningOptions.length / 2)]
+            : undefined
+    const defaultReasoning = defaultOption ? defaultOption.id : 'off'
     const nextReasoningLevel = reasoningOptions.length === 0
         ? 'off'
         : reasoningOptions.some((option) => option.id === reasoningLevel)
@@ -127,24 +149,108 @@ export function filterCatalogModels(
 ): readonly ModelCatalogEntry[] {
     if (!modelSettings?.models) return models
     const isAllEnabled = modelSettings.enableAll !== false
-    const configured = models
-        .filter((m) => {
-            if (isAllEnabled) return true
-            const config = modelSettings.models[m.id]
-            return config ? config.enabled !== false : true
+    if (isAllEnabled) return models
+
+    return models.flatMap((m) => {
+        const config = modelSettings.models[m.id]
+        if (config && config.enabled === false) {
+            return []
+        }
+
+        const effectiveContextWindow =
+            config &&
+            typeof config.contextWindow === 'number' &&
+            Number.isFinite(config.contextWindow) &&
+            config.contextWindow > 0
+                ? Math.floor(config.contextWindow)
+                : m.contextWindow
+
+        let effectiveReasoningLevels = m.reasoningLevels
+        if (
+            config &&
+            Array.isArray(config.enabledReasoningLevels) &&
+            config.enabledReasoningLevels.length > 0 &&
+            Array.isArray(m.reasoningLevels)
+        ) {
+            const enabledSet = new Set(config.enabledReasoningLevels)
+            effectiveReasoningLevels = m.reasoningLevels.filter((level) =>
+                enabledSet.has(level.id),
+            )
+        }
+
+        if (
+            effectiveContextWindow !== m.contextWindow ||
+            effectiveReasoningLevels !== m.reasoningLevels
+        ) {
+            return [
+                {
+                    ...m,
+                    contextWindow: effectiveContextWindow,
+                    reasoningLevels: effectiveReasoningLevels,
+                },
+            ]
+        }
+        return [m]
+    })
+}
+
+export interface CommitModelSelectionParams {
+    model: ModelCatalogEntry
+    requestedReasoningLevel: string
+    currentSpeed: Speed
+    modelSettings?: ModelSettingsConfig
+    sessionId?: string | null
+    services?: {
+        settings?: {
+            setModelId?: (id: string) => void
+            setReasoningLevel?: (level: string) => void
+        }
+        sessions?: {
+            setSessionRuntimeSettings?: (
+                sessionId: string,
+                opts: { modelId?: string; reasoningEffort?: string; speed?: Speed },
+            ) => void
+        }
+        ui?: {
+            getPendingSessionContext?: () => any
+            setPendingSessionContext?: (ctx: any) => void
+        }
+    } | null
+    onPendingSpeedChange?: (speed: Speed) => void
+}
+
+export function commitModelSelection({
+    model,
+    requestedReasoningLevel,
+    currentSpeed,
+    modelSettings,
+    sessionId,
+    services,
+    onPendingSpeedChange,
+}: CommitModelSelectionParams): { reasoningLevel: string; speed: Speed } {
+    const normalized = normalizeModelPreferences(
+        model,
+        requestedReasoningLevel,
+        currentSpeed,
+        modelSettings,
+    )
+    services?.settings?.setModelId?.(model.id)
+    services?.settings?.setReasoningLevel?.(normalized.reasoningLevel)
+    if (sessionId) {
+        services?.sessions?.setSessionRuntimeSettings?.(sessionId, {
+            modelId: model.id,
+            reasoningEffort: normalized.reasoningLevel,
+            speed: normalized.speed,
         })
-        .map((m) => {
-            if (isAllEnabled) return m
-            const config = modelSettings.models[m.id]
-            if (
-                config &&
-                typeof config.contextWindow === 'number' &&
-                Number.isFinite(config.contextWindow) &&
-                config.contextWindow > 0
-            ) {
-                return { ...m, contextWindow: Math.floor(config.contextWindow) }
-            }
-            return m
-        })
-    return configured.length > 0 ? configured : models
+    } else {
+        const pendingContext = services?.ui?.getPendingSessionContext?.()
+        if (pendingContext?.speed !== undefined || normalized.speed !== currentSpeed) {
+            onPendingSpeedChange?.(normalized.speed)
+            services?.ui?.setPendingSessionContext?.({
+                ...pendingContext,
+                speed: normalized.speed,
+            })
+        }
+    }
+    return normalized
 }

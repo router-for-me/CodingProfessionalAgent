@@ -248,6 +248,22 @@ describe('settingsStore', () => {
     })
   })
 
+  it('updates and hydrates modelSettings.gemini4PeriodicTable while preserving omitted default semantics', () => {
+    expect(useSettingsStore.getState().settings.modelSettings?.gemini4PeriodicTable).toBeUndefined()
+
+    useSettingsStore.getState().setModelSettings({ gemini4PeriodicTable: false })
+    expect(useSettingsStore.getState().settings.modelSettings?.gemini4PeriodicTable).toBe(false)
+
+    useSettingsStore.getState().hydrate({
+      modelSettings: {
+        enableAll: true,
+        models: {},
+        gemini4PeriodicTable: true,
+      },
+    })
+    expect(useSettingsStore.getState().settings.modelSettings?.gemini4PeriodicTable).toBe(true)
+  })
+
   it('updates and hydrates headlessCloseAction correctly', () => {
     expect(useSettingsStore.getState().settings.headlessCloseAction).toBe('continue_headless')
 

@@ -493,4 +493,37 @@ describe('ModelsSection', () => {
         const contextInputs = screen.getAllByLabelText(/Max Context/i)
         expect(contextInputs[0]).toBeDisabled()
     })
+
+    it('renders Gemini 4 periodic table switch enabled by default and toggles gemini4PeriodicTable setting', () => {
+        renderWithServices(<ModelsSection />)
+
+        const periodicSwitch = screen.getByRole('switch', {
+            name: /Gemini 4 periodic table selector/i,
+        })
+        expect(periodicSwitch).toBeInTheDocument()
+        expect(periodicSwitch).toHaveAttribute('aria-checked', 'true')
+
+        fireEvent.click(periodicSwitch)
+        expect(mockSettingsService.update).toHaveBeenCalledWith(
+            expect.objectContaining({
+                modelSettings: expect.objectContaining({ gemini4PeriodicTable: false }),
+            }),
+        )
+
+        // Re-render with explicit false persisted to verify toggling back on
+        mockSettings = { modelSettings: { ...mockSettings.modelSettings, gemini4PeriodicTable: false } }
+        renderWithServices(<ModelsSection />)
+        const switches = screen.getAllByRole('switch', {
+            name: /Gemini 4 periodic table selector/i,
+        })
+        const disabledSwitch = switches[switches.length - 1]!
+        expect(disabledSwitch).toHaveAttribute('aria-checked', 'false')
+
+        fireEvent.click(disabledSwitch)
+        expect(mockSettingsService.update).toHaveBeenLastCalledWith(
+            expect.objectContaining({
+                modelSettings: expect.objectContaining({ gemini4PeriodicTable: true }),
+            }),
+        )
+    })
 })

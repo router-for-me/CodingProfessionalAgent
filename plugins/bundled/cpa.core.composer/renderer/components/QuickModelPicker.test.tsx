@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import type { ModelCatalogEntry } from '@cpa/plugin-api'
+import type { ModelCatalogEntry, ModelReasoningOption } from '@cpa/plugin-api'
 import { QuickModelPicker } from './QuickModelPicker.js'
 
 const mockModels: ModelCatalogEntry[] = [
@@ -135,5 +135,59 @@ describe('QuickModelPicker', () => {
             expect.stringContaining('GPT 5.6 Sol'),
             expect.stringContaining('GPT 5.6 Terra'),
         ])
+    })
+
+    it('groups Gemini 4 models into a single Gemini 4 option when enableGemini4Grouping is true', () => {
+        const onOpenGemini4Group = vi.fn()
+        const withGemini4: ModelCatalogEntry[] = [
+            ...mockModels,
+            {
+                id: 'gemini-4-argon-high',
+                label: 'Gemini 4 Argon',
+                supportsFast: false,
+                reasoningLevels: [
+                    { id: 'low', requestValue: 'low', labelKey: 'composer.reasoning.low' },
+                    { id: 'medium', requestValue: 'medium', labelKey: 'composer.reasoning.medium' },
+                    { id: 'high', requestValue: 'high', labelKey: 'composer.reasoning.high' },
+                ] satisfies ModelReasoningOption[],
+                input: ['text'],
+                contextWindow: 1_000_000,
+                maxTokens: 65_536,
+            },
+            {
+                id: 'gemini-4-carbon-high',
+                label: 'Gemini 4 Carbon',
+                supportsFast: false,
+                reasoningLevels: [
+                    { id: 'low', requestValue: 'low', labelKey: 'composer.reasoning.low' },
+                    { id: 'medium', requestValue: 'medium', labelKey: 'composer.reasoning.medium' },
+                    { id: 'high', requestValue: 'high', labelKey: 'composer.reasoning.high' },
+                ] satisfies ModelReasoningOption[],
+                input: ['text'],
+                contextWindow: 1_000_000,
+                maxTokens: 65_536,
+            },
+        ]
+
+        render(
+            <QuickModelPicker
+                models={withGemini4}
+                currentModelId="gemini-4-argon-high"
+                activeIndex={0}
+                onActiveIndexChange={vi.fn()}
+                onSelect={vi.fn()}
+                onClose={vi.fn()}
+                enableGemini4Grouping
+                onOpenGemini4Group={onOpenGemini4Group}
+            />,
+        )
+
+        const geminiOption = screen.getByRole('option', { name: /Gemini 4/i })
+        expect(geminiOption).toBeInTheDocument()
+        expect(screen.queryByRole('option', { name: 'Gemini 4 Argon' })).not.toBeInTheDocument()
+        expect(screen.queryByRole('option', { name: 'Gemini 4 Carbon' })).not.toBeInTheDocument()
+
+        fireEvent.mouseDown(geminiOption)
+        expect(onOpenGemini4Group).toHaveBeenCalledTimes(1)
     })
 })

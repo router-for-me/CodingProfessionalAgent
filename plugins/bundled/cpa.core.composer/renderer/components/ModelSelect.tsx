@@ -10,14 +10,19 @@ import {
     useSessions,
     useSettings,
     useTranslation,
+    useUiState,
     useWorkspaceVisible,
 } from '@cpa/plugin-ui'
 import type { ModelReasoningOption, Speed } from '@cpa/plugin-api'
 import { AdvancedMenu, type ActiveSubmenu } from './AdvancedMenu.js'
+import { Gemini4PeriodicTablePicker } from './Gemini4PeriodicTablePicker.js'
 import { ModelMenu } from './ModelMenu.js'
+import { rendererEventBus } from '@/plugins/platform/eventBus'
+import { isGemini4Model, isGemini4PeriodicTableEnabled } from '../utils/gemini4PeriodicTable.js'
 import {
+    commitModelSelection,
+    filterReasoningOptionsBySettings,
     getDefaultReasoningLevel,
-    getReasoningOptions,
     getSpeedOptions,
     MODEL_MENU_WIDTH_PX,
     normalizeModelPreferences,
@@ -43,6 +48,7 @@ export function ModelSelect({
     const reactId = useId()
     const idSuffix = sanitizeAriaId(reactId)
     const modelMenuId = `model-menu-${idSuffix}`
+    const periodicPickerId = `gemini4-periodic-picker-${idSuffix}`
     const triggerDescriptionId = `model-trigger-desc-${idSuffix}`
 
     const services = useHostServices()
@@ -53,9 +59,19 @@ export function ModelSelect({
     const modelSettings = settings.modelSettings
 
     const currentSessions = useSessions()
+    const uiState = useUiState()
+    const hasSharedUiState = uiState !== null && uiState !== undefined
+    const uiPendingSpeed = hasSharedUiState
+        ? (uiState?.pendingSessionContext?.speed as Speed | undefined)
+        : undefined
     const [pendingSpeed, setPendingSpeed] = useState<Speed | undefined>(
         () => services?.ui?.getPendingSessionContext?.().speed,
     )
+    const activePendingSpeed = !sessionId
+        ? hasSharedUiState
+            ? uiPendingSpeed
+            : pendingSpeed
+        : undefined
     const sessionRuntimeSettings = sessionId
         ? currentSessions.find((session: any) => session.id === sessionId)
         : undefined
@@ -66,12 +82,10 @@ export function ModelSelect({
         selectedReasoningLevel
     const speed =
         (sessionRuntimeSettings?.speed as Speed | undefined) ??
-        (!sessionId ? pendingSpeed : undefined) ??
+        activePendingSpeed ??
         selectedSpeed
 
-    const setModelId = (id: string) => services?.settings?.setModelId?.(id)
     const setReasoningLevel = (level: string) => services?.settings?.setReasoningLevel?.(level)
-    const setSpeed = (spd: Speed) => services?.settings?.setSpeed?.(spd)
     const setSessionRuntimeSettings = (
         sId: string,
         opts: { modelId?: string; reasoningEffort?: string; speed?: Speed },
@@ -84,6 +98,7 @@ export function ModelSelect({
     } = useModelCatalog()
 
     const [open, setOpen] = useState(false)
+    const [gemini4PickerOpen, setGemini4PickerOpen] = useState(false)
     const [view, setView] = useState<'quick' | 'advanced'>('quick')
     const [activeSubmenu, setActiveSubmenu] = useState<ActiveSubmenu>(null)
     const [compactWidth, setCompactWidth] = useState<number | undefined>(undefined)
@@ -170,12 +185,10 @@ export function ModelSelect({
     const isRemoteRunning = Boolean(sessionId && activeRun && activeRun.status !== 'idle')
     const isSessionRunning = Boolean(isRunning || isRemoteRunning)
 
-    const filteredCatalogModels = useMemo(
+    const catalogModels = useMemo(
         () => filterCatalogModels(rawCatalogModels, modelSettings),
         [rawCatalogModels, modelSettings],
     )
-    const catalogModels =
-        filteredCatalogModels.length > 0 ? filteredCatalogModels : rawCatalogModels
     const isTriggerDisabled =
         (!isSessionRunning && disabled) || catalogModels.length === 0
     const matchedModel = (
@@ -190,7 +203,7 @@ export function ModelSelect({
               catalogModels[0]?.label ??
               (modelId || t('composer.modelCatalog.noModels', { defaultValue: 'No models available' }))
 
-    const reasoningOptions = current ? getReasoningOptions(current) : []
+    const reasoningOptions = current ? filterReasoningOptionsBySettings(current, modelSettings) : []
     const speedOptions = current ? getSpeedOptions(current.supportsFast) : []
     const isFastEnabled = Boolean(current?.supportsFast && speed !== 'standard')
     const currentReasoning = reasoningOptions.find(
@@ -215,38 +228,37 @@ export function ModelSelect({
 
         if (!matchedModel) {
             const firstModel = catalogModels[0]
-            const defaultReasoning = getDefaultReasoningLevel(firstModel)
-            const defaultSpeed =
-                firstModel.supportsFast && speed === 'fast' ? 'fast' : 'standard'
-            setModelId(firstModel.id)
-            setReasoningLevel(defaultReasoning)
-            setSpeed(defaultSpeed)
-            if (sessionId) {
-                setSessionRuntimeSettings(sessionId, {
-                    modelId: firstModel.id,
-                    reasoningEffort: defaultReasoning,
-                    speed: defaultSpeed,
-                })
-            }
+            commitModelSelection({
+                model: firstModel,
+                requestedReasoningLevel: getDefaultReasoningLevel(firstModel),
+                currentSpeed: speed,
+                modelSettings,
+                sessionId,
+                services,
+                onPendingSpeedChange: setPendingSpeed,
+            })
             return
         }
 
-        const normalized = normalizeModelPreferences(matchedModel, reasoningLevel, speed)
+        const normalized = normalizeModelPreferences(
+            matchedModel,
+            reasoningLevel,
+            speed,
+            modelSettings,
+        )
         let changed = false
         if (normalized.reasoningLevel !== reasoningLevel) {
             setReasoningLevel(normalized.reasoningLevel)
             changed = true
         }
         if (normalized.speed !== speed) {
-            if (!sessionId && pendingSpeed !== undefined) {
+            if (!sessionId) {
                 setPendingSpeed(normalized.speed)
                 const pendingContext = services?.ui?.getPendingSessionContext?.()
                 services?.ui?.setPendingSessionContext?.({
                     ...pendingContext,
                     speed: normalized.speed,
                 })
-            } else if (!sessionId) {
-                setSpeed(normalized.speed)
             }
             changed = true
         }
@@ -265,9 +277,10 @@ export function ModelSelect({
         modelId,
         reasoningLevel,
         speed,
+        modelSettings,
         sessionId,
         disabled,
-        pendingSpeed,
+        activePendingSpeed,
         services,
     ])
 
@@ -295,13 +308,19 @@ export function ModelSelect({
     }, [sessionId, services])
 
     useEffect(() => {
-        if (disabled && !isSessionRunning) setOpen(false)
+        if (disabled && !isSessionRunning) {
+            setOpen(false)
+            setGemini4PickerOpen(false)
+        }
     }, [disabled, isSessionRunning])
 
     useEffect(() => {
-        if (isSessionRunning && view === 'advanced') {
-            setView('quick')
-            setActiveSubmenu(null)
+        if (isSessionRunning) {
+            setGemini4PickerOpen(false)
+            if (view === 'advanced') {
+                setView('quick')
+                setActiveSubmenu(null)
+            }
         }
     }, [isSessionRunning, view])
 
@@ -334,25 +353,63 @@ export function ModelSelect({
         }
     }, [open, workspaceVisible])
 
+    const gemini4GroupingEnabled = useMemo(
+        () =>
+            isGemini4PeriodicTableEnabled(modelSettings) &&
+            catalogModels.some(isGemini4Model),
+        [modelSettings, catalogModels],
+    )
+
+    useEffect(() => {
+        if (gemini4PickerOpen && !gemini4GroupingEnabled) {
+            setGemini4PickerOpen(false)
+        }
+    }, [gemini4PickerOpen, gemini4GroupingEnabled])
+
+    useEffect(() => {
+        const visibleOpen = gemini4PickerOpen && workspaceVisible
+        rendererEventBus.emit('composer:periodic-picker-visibility', {
+            open: visibleOpen,
+            source: 'model-select',
+        })
+        return () => {
+            if (visibleOpen) {
+                rendererEventBus.emit('composer:periodic-picker-visibility', {
+                    open: false,
+                    source: 'model-select',
+                })
+            }
+        }
+    }, [gemini4PickerOpen, workspaceVisible])
+
+    useEffect(() => {
+        const unsub = rendererEventBus.on(
+            'composer:model-picker-opened',
+            (payload: any) => {
+                if (payload?.source !== 'model-select') {
+                    setOpen(false)
+                    setGemini4PickerOpen(false)
+                }
+            },
+        )
+        return () => {
+            unsub()
+        }
+    }, [])
+
     const handleModelChange = (nextModelId: string) => {
         const nextModel =
             catalogModels.find((model) => model.id === nextModelId) ?? current
         if (!nextModel) return
-        const normalized = normalizeModelPreferences(
-            nextModel,
-            reasoningLevel,
-            speed,
-        )
-        setModelId(nextModelId)
-        setReasoningLevel(normalized.reasoningLevel)
-        setSpeed(normalized.speed)
-        if (sessionId) {
-            setSessionRuntimeSettings(sessionId, {
-                modelId: nextModelId,
-                reasoningEffort: normalized.reasoningLevel,
-                speed: normalized.speed,
-            })
-        }
+        commitModelSelection({
+            model: nextModel,
+            requestedReasoningLevel: reasoningLevel,
+            currentSpeed: speed,
+            modelSettings,
+            sessionId,
+            services,
+            onPendingSpeedChange: setPendingSpeed,
+        })
     }
 
     const handleReasoningLevelChange = (nextReasoningLevel: string) => {
@@ -398,21 +455,32 @@ export function ModelSelect({
                             : undefined,
                 }}
                 className={cn(
-                    'inline-flex w-max items-center justify-center gap-1 rounded-full px-[10px] py-1.5 text-[12px]',
+                    'inline-flex w-max items-center justify-center gap-1 rounded-full px-[10px] py-1.5 font-[inherit] text-[12px]',
                     'text-[var(--text-secondary)] transition-[width,background-color,color] duration-200 ease-out',
                     'hover:bg-[var(--bg-sidebar-hover)] hover:text-[var(--text-primary)]',
-                    open && 'bg-[var(--bg-sidebar-hover)] text-[var(--text-primary)]',
+                    (open || gemini4PickerOpen) && 'bg-[var(--bg-sidebar-hover)] text-[var(--text-primary)]',
                     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-blue)]/40',
                     'disabled:pointer-events-none disabled:opacity-50',
                 )}
                 aria-label={t('composer.model', { defaultValue: 'Model' })}
                 aria-describedby={triggerDescriptionId}
-                aria-haspopup="menu"
-                aria-expanded={open && workspaceVisible}
-                aria-controls={open && workspaceVisible ? modelMenuId : undefined}
+                aria-haspopup={gemini4PickerOpen ? 'dialog' : 'menu'}
+                aria-expanded={(open || gemini4PickerOpen) && workspaceVisible}
+                aria-controls={
+                    gemini4PickerOpen && workspaceVisible
+                        ? periodicPickerId
+                        : open && workspaceVisible
+                            ? modelMenuId
+                            : undefined
+                }
                 onClick={() => {
                     if (isTriggerDisabled) return
-                    if (!open && triggerRef.current) {
+                    if (gemini4PickerOpen) {
+                        setGemini4PickerOpen(false)
+                        return
+                    }
+                    const nextOpen = !open
+                    if (nextOpen && triggerRef.current) {
                         const rect = triggerRef.current.getBoundingClientRect()
                         const startWidth = compactWidth ?? Math.ceil(rect.width)
                         if (startWidth > 0 && !isFolding) {
@@ -420,8 +488,9 @@ export function ModelSelect({
                             void triggerRef.current.offsetWidth
                         }
                         setMenuPosition(computeModelMenuPosition(rect))
+                        rendererEventBus.emit('composer:model-picker-opened', { source: 'model-select' })
                     }
-                    setOpen((prev) => !prev)
+                    setOpen(nextOpen)
                 }}
             >
                 <span className="truncate">{currentModelLabel}</span>
@@ -526,6 +595,14 @@ export function ModelSelect({
                                       setView('quick')
                                       setActiveSubmenu(null)
                                   }}
+                                  enableGemini4Grouping={gemini4GroupingEnabled}
+                                  onOpenGemini4Group={() => {
+                                      if (disabled || isSessionRunning) return
+                                      setActiveSubmenu(null)
+                                      setOpen(false)
+                                      setGemini4PickerOpen(true)
+                                      rendererEventBus.emit('composer:model-picker-opened', { source: 'model-select' })
+                                  }}
                                   catalogNotice={catalogNotice}
                                   disabled={disabled}
                               />
@@ -534,6 +611,38 @@ export function ModelSelect({
                       document.body,
                   )
                 : null}
+
+            {gemini4PickerOpen && workspaceVisible && !isSessionRunning ? (
+                <Gemini4PeriodicTablePicker
+                    id={periodicPickerId}
+                    models={catalogModels}
+                    currentModelId={modelId}
+                    currentReasoningLevel={reasoningLevel}
+                    modelSettings={modelSettings}
+                    anchorElement={
+                        (triggerRef.current?.closest('[data-element="composer-container"]') as HTMLElement | null) ??
+                        triggerRef.current
+                    }
+                    ignoreOutsideClickElement={triggerRef.current}
+                    preferredPlacement="above"
+                    closeOnOutsideClick
+                    disabled={disabled}
+                    onSelect={({ model, reasoningLevel: nextReasoning }) => {
+                        commitModelSelection({
+                            model,
+                            requestedReasoningLevel: nextReasoning,
+                            currentSpeed: speed,
+                            modelSettings,
+                            sessionId,
+                            services,
+                            onPendingSpeedChange: setPendingSpeed,
+                        })
+                        setGemini4PickerOpen(false)
+                        setOpen(false)
+                    }}
+                    onClose={() => setGemini4PickerOpen(false)}
+                />
+            ) : null}
         </div>
     )
 }

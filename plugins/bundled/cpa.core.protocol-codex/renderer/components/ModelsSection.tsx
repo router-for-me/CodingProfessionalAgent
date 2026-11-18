@@ -141,6 +141,7 @@ export function ModelsSection() {
     const [dragOverId, setDragOverId] = useState<string | null>(null)
 
     const enableAll = modelSettings.enableAll !== false
+    const gemini4PeriodicTableEnabled = modelSettings.gemini4PeriodicTable !== false
 
     const filteredModels = useMemo(() => {
         const query = searchQuery.trim().toLowerCase()
@@ -376,6 +377,30 @@ export function ModelsSection() {
                                     {t('settings.models.defaultTtl.unit', { defaultValue: 's' })}
                                 </span>
                             </div>
+                        }
+                    />
+                    <SettingsRow
+                        id="gemini4PeriodicTable"
+                        title={t('settings.models.gemini4PeriodicTable', {
+                            defaultValue: 'Gemini 4 periodic table selector',
+                        })}
+                        description={t('settings.models.gemini4PeriodicTable.desc', {
+                            defaultValue:
+                                'When enabled, groups all Gemini 4 models in the chat model selector and lets you pick the model and reasoning level from a periodic table.',
+                        })}
+                        control={
+                            <ToggleSwitch
+                                checked={gemini4PeriodicTableEnabled}
+                                onChange={(checked) =>
+                                    updateModelSettings((prev) => ({
+                                        ...prev,
+                                        gemini4PeriodicTable: checked,
+                                    }))
+                                }
+                                label={t('settings.models.gemini4PeriodicTable', {
+                                    defaultValue: 'Gemini 4 periodic table selector',
+                                })}
+                            />
                         }
                         last
                     />

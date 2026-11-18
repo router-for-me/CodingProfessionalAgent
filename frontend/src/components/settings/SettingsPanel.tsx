@@ -108,7 +108,7 @@ export function SettingsPanel() {
                     document.querySelector(`[data-setting-id="${itemId}"]`) ||
                     document.getElementById(itemId)
                 if (el) {
-                    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                    el.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
                     el.classList.add('ring-2', 'ring-[var(--accent-blue)]/60', 'rounded-lg')
                     setTimeout(() => {
                         el.classList.remove('ring-2', 'ring-[var(--accent-blue)]/60', 'rounded-lg')

@@ -632,6 +632,9 @@ function sanitizeModelSettings(value: unknown): ModelSettingsConfig {
       mode,
       maxWarmingTime,
     },
+    ...(typeof raw.gemini4PeriodicTable === 'boolean'
+      ? { gemini4PeriodicTable: raw.gemini4PeriodicTable }
+      : {}),
   }
 }
 

@@ -557,6 +557,9 @@ export const useSettingsStore = create<SettingsState>((set) => ({
                 ? Math.floor(partial.modelSettings.cacheWarming.maxWarmingTime)
                 : (DEFAULT_MODEL_SETTINGS.cacheWarming?.maxWarmingTime ?? 3600),
           },
+          ...(typeof partial.modelSettings.gemini4PeriodicTable === 'boolean'
+            ? { gemini4PeriodicTable: partial.modelSettings.gemini4PeriodicTable }
+            : {}),
         }
       }
       if (partial.git) {
