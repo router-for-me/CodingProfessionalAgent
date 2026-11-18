@@ -128,6 +128,8 @@ export interface MessageItemProps {
     toolOverlays?: Readonly<Record<string, ToolLiveOverlay>>
     /** Main-agent CPA-style folded tools and turn header. */
     compactActivity?: boolean
+    /** Transient activity row for the active turn, independent of message history. */
+    activityStatus?: ReactNode
     /** Override collapsed-turn body when multiple assistant stages are merged. */
     collapsedText?: string
     /** Hide the turn timer when a parent turn already rendered one. */
@@ -750,6 +752,7 @@ export const AssistantMessageRenderer = memo(function AssistantMessageRenderer(
         onExecuteHook: _onExecuteHook,
         toolOverlays,
         compactActivity = false,
+        activityStatus,
         collapsedText,
         suppressTurnHeader = false,
         forceExpanded = false,
@@ -861,6 +864,7 @@ export const AssistantMessageRenderer = memo(function AssistantMessageRenderer(
                         />
                     }
                 />
+                {activityStatus}
                 <ExtensionSlot name="chat.message.after" props={{ message }} />
             </div>
         )
@@ -937,6 +941,7 @@ export const AssistantMessageRenderer = memo(function AssistantMessageRenderer(
                         citations={message.citations}
                     />
                 )}
+            {activityStatus}
             {message.status === 'error' ? (
                 <div
                     data-testid="message-error-card"

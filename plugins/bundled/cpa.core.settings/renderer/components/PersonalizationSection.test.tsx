@@ -4,7 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '@/i18n'
 import { HostServicesProvider } from '@cpa/plugin-ui'
 import { createHostServices, setHostServices } from '@/application/services/createHostServices'
-import type { HostServices, ModelCatalogEntry, PersonalizationService } from '@cpa/plugin-api'
+import type {
+    HostServices,
+    ModelCatalogEntry,
+    PersonalizationService,
+    SystemPromptEnhancementSettings,
+} from '@cpa/plugin-api'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useModelCatalogStore } from '@/stores/modelCatalogStore'
 import { useUiStore } from '@/stores/uiStore'
@@ -243,6 +248,72 @@ describe('PersonalizationSection', () => {
     })
 
     describe('System Prompt Enhancement section in PersonalizationSection', () => {
+        it('hides all enhancement options when switched off and restores saved values when switched back on', async () => {
+            const user = userEvent.setup()
+            const defaultModel: ModelCatalogEntry = {
+                id: 'model-a',
+                label: 'Model A',
+                supportsFast: false,
+                reasoningLevels: [],
+                input: ['text'],
+                contextWindow: 128_000,
+                maxTokens: 8_192,
+            }
+            const savedEnhancement: SystemPromptEnhancementSettings = {
+                enabled: true,
+                modelId: 'model-b',
+                appliedModelIds: ['model-a'],
+                multilingualEnabled: true,
+                allowedLanguages: ['de', 'ja'],
+            }
+            useModelCatalogStore.setState({
+                models: [defaultModel, { ...defaultModel, id: 'model-b', label: 'Model B' }],
+            })
+            useSettingsStore.setState({
+                settings: {
+                    ...useSettingsStore.getState().settings,
+                    modelId: defaultModel.id,
+                    modelSettings: { enableAll: true },
+                    systemPromptEnhancement: savedEnhancement,
+                },
+            })
+            renderWithServices(<BasePersonalizationSection />)
+
+            const toggle = screen.getByRole('switch', { name: 'System Prompt Enhancement' })
+            const toggleRow = toggle.closest('#systemPromptEnhancement')
+            expect(toggle).toBeChecked()
+            await user.click(toggle)
+
+            expect(toggle).not.toBeChecked()
+            for (const label of [
+                'Builder model',
+                'Apply to models',
+                'Allow multilingual construction',
+                'Allowed construction languages',
+            ]) {
+                expect(screen.queryByText(label)).not.toBeInTheDocument()
+            }
+            expect(toggleRow).not.toHaveClass('border-b')
+            expect(useSettingsStore.getState().settings.systemPromptEnhancement).toEqual({
+                ...savedEnhancement,
+                enabled: false,
+            })
+
+            await user.click(toggle)
+
+            expect(toggle).toBeChecked()
+            expect(toggleRow).toHaveClass('border-b')
+            expect(screen.getByRole('combobox', { name: 'Builder model' })).toHaveTextContent('Model B')
+            expect(screen.getByRole('switch', { name: 'Allow multilingual construction' })).toBeChecked()
+            expect(screen.getByRole('button', { name: 'German', pressed: true })).toBeInTheDocument()
+            expect(screen.getByRole('button', { name: 'Japanese', pressed: true })).toBeInTheDocument()
+            expect(screen.getByRole('button', { name: 'English', pressed: false })).toBeInTheDocument()
+            await user.click(screen.getByRole('button', { name: /apply to models/i }))
+            const scope = within(screen.getByRole('dialog', { name: 'Apply to models' }))
+            expect(scope.getByRole('checkbox', { name: 'Model A' })).toBeChecked()
+            expect(scope.getByRole('checkbox', { name: 'Model B' })).not.toBeChecked()
+        })
+
         it('renders enhancement switch, multilingual switch, and build model CustomSelect aligned with enabled models in modelOrder', async () => {
             useModelCatalogStore.setState({
                 models: [
@@ -302,13 +373,11 @@ describe('PersonalizationSection', () => {
             expect(
                 screen.getByRole('heading', { level: 2, name: 'System Prompt Enhancement' }),
             ).toBeInTheDocument()
-            expect(screen.getByRole('switch', { name: 'System Prompt Enhancement' })).toHaveAttribute(
-                'aria-checked',
-                'false',
-            )
-            expect(
-                screen.getByRole('switch', { name: 'Allow multilingual construction' }),
-            ).toHaveAttribute('aria-checked', 'false')
+            const toggle = screen.getByRole('switch', { name: 'System Prompt Enhancement' })
+            expect(toggle).not.toBeChecked()
+            expect(screen.queryByRole('combobox', { name: 'Builder model' })).not.toBeInTheDocument()
+            await userEvent.setup().click(toggle)
+            expect(screen.getByRole('switch', { name: 'Allow multilingual construction' })).not.toBeChecked()
 
             // Language selection list is hidden when multilingualEnabled is false
             expect(screen.queryByRole('button', { name: 'Select all' })).not.toBeInTheDocument()
@@ -545,6 +614,7 @@ describe('PersonalizationSection', () => {
     it.each(['en', 'zh-CN'])('describes the global default model and shows empty catalog label in %s', async (locale) => {
         await i18n.changeLanguage(locale)
         useModelCatalogStore.setState({ models: [] })
+        useSettingsStore.getState().setSystemPromptEnhancement({ enabled: true })
         renderWithServices(<BasePersonalizationSection />)
         const prefix = 'settings.personalization.systemPromptEnhancement.'
         expect(i18n.t(prefix + 'modelDesc')).toMatch(locale === 'en' ? /global default model/i : /全局默认模型/)

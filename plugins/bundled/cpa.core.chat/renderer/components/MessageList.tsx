@@ -137,6 +137,7 @@ export function MessageList({
   const lastUserMessageKeyRef = useRef(lastUserMessageKey)
 
   const scrollKey = computeScrollFingerprint(messages, isCompacting, sessionKey)
+  const buildStatus = isBuildingSystemPrompt ? <SystemPromptBuildStatus key="system-prompt-build-status" /> : null
 
   useEffect(() => {
     pinnedRef.current = true
@@ -250,6 +251,7 @@ export function MessageList({
                 isRunActive,
                 activeTurnStartedAt,
                 isCompacting,
+                buildStatus,
                 {
                   onApproveTool,
                   onRejectTool,
@@ -348,7 +350,7 @@ export function MessageList({
           {!compactActivity && isCompacting ? (
             <CompactionDivider pending />
           ) : null}
-          {isBuildingSystemPrompt ? <SystemPromptBuildStatus /> : null}
+          {!compactActivity ? buildStatus : null}
           </div>
           <div
             ref={floatingInsetRef}
@@ -367,6 +369,7 @@ function renderCompactTurns(
   isRunActive: boolean,
   activeTurnStartedAt: number | undefined,
   isCompacting: boolean,
+  buildStatus: React.ReactElement | null,
   handlers: CompactTurnHandlers,
   windowOptions?: {
     expandedAllHistory?: boolean
@@ -484,6 +487,7 @@ function renderCompactTurns(
           turn={displayedTurn}
           live={live}
           compacting={isCompacting && index === activeAssistantTurnIndex}
+          activityStatus={live ? buildStatus : null}
           handlers={handlers}
         />
       </div>,
@@ -511,12 +515,13 @@ function renderCompactTurns(
   const lastTurnIsPendingUser =
     lastTurn?.type === 'user' && Boolean((lastTurn.message as any).pendingStatus)
 
-  if (
+  const needsPendingAssistantTurn =
     isRunActive &&
     lastTurn?.type !== 'assistant' &&
     !lastTurnIsPendingUser &&
     activeAssistantTurnIndex === -1
-  ) {
+
+  if (needsPendingAssistantTurn) {
     nodes.push(
       <CompactAssistantTurn
         key="pending-assistant-turn"
@@ -527,11 +532,15 @@ function renderCompactTurns(
         }}
         live
         compacting={isCompacting}
+        activityStatus={buildStatus}
         handlers={handlers}
       />,
     )
-  } else if (isCompacting && turns[turns.length - 1]?.type !== 'assistant') {
+  } else if (isCompacting && lastTurn?.type !== 'assistant') {
     nodes.push(<CompactionDivider key="compaction-progress" pending />)
+  }
+  if (buildStatus && activeAssistantTurnIndex === -1 && !needsPendingAssistantTurn) {
+    nodes.push(buildStatus)
   }
   return nodes
 }
@@ -555,11 +564,13 @@ function CompactAssistantTurn({
   turn,
   live,
   compacting,
+  activityStatus,
   handlers,
 }: {
   turn: Extract<ChatTurn, { type: 'assistant' }>
   live: boolean
   compacting: boolean
+  activityStatus?: React.ReactNode
   handlers: CompactTurnHandlers
 }) {
   const messages = assistantTurnMessages(turn)
@@ -594,6 +605,7 @@ function CompactAssistantTurn({
         }
         toolOverlays={handlers.toolOverlays}
         compactActivity
+        activityStatus={activityStatus}
         collapsedText={
           last ? trailingAssistantText(last.parts, last.content) : undefined
         }
@@ -606,6 +618,7 @@ function CompactAssistantTurn({
       merged={merged}
       last={last}
       compacting={compacting}
+      activityStatus={activityStatus}
       handlers={handlers}
     />
   )
@@ -689,12 +702,14 @@ function CompactAssistantTurnWithCompaction({
   merged,
   last,
   compacting,
+  activityStatus,
   handlers,
 }: {
   turn: Extract<ChatTurn, { type: 'assistant' }>
   merged: DisplayChatMessage
   last: DisplayChatMessage | undefined
   compacting: boolean
+  activityStatus?: React.ReactNode
   handlers: CompactTurnHandlers
 }) {
   const [historyOpen, setHistoryOpen] = useState(
@@ -848,6 +863,7 @@ function CompactAssistantTurnWithCompaction({
             </>
           )}
       {compacting ? <CompactionDivider pending /> : null}
+      {activityStatus}
     </div>
   )
 }

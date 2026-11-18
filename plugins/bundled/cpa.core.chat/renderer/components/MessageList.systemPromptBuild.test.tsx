@@ -19,6 +19,40 @@ const handlers = {
     onRejectTool: () => undefined,
 }
 
+it.each([false, true])('uses the compact turn activity row before the first tool (assistant message=%s)', (hasAssistantMessage) => {
+    const assistant: DisplayMessage = {
+        kind: 'message',
+        id: 'a1',
+        sessionId: 's1',
+        role: 'assistant',
+        content: '',
+        parts: [],
+        status: 'streaming',
+        createdAt: 2,
+    }
+    const view = (messages: DisplayMessage[], building: boolean) => (
+        <MessageList
+            {...handlers}
+            compactActivity
+            isRunActive
+            messages={messages}
+            isBuildingSystemPrompt={building}
+        />
+    )
+    const { rerender } = render(view(hasAssistantMessage ? [firstMessage, assistant] : [firstMessage], true))
+
+    const header = screen.getByTestId('turn-header')
+    expect(header.nextElementSibling).toBe(screen.getByTestId('system-prompt-build-status'))
+
+    rerender(view([firstMessage, {
+        ...assistant,
+        parts: [{ type: 'tool_call', id: 't1', name: 'read', args: { path: 'example.ts' }, status: 'running' }],
+    }], false))
+
+    expect(screen.queryByTestId('system-prompt-build-status')).not.toBeInTheDocument()
+    expect(screen.getByTestId('turn-header').nextElementSibling).toBe(screen.getByTestId('tool-activity'))
+})
+
 describe.each([false, true])('MessageList system prompt build (compact=%s)', (compactActivity) => {
     beforeEach(async () => {
         await i18n.changeLanguage('en')

@@ -383,6 +383,7 @@ export function BasePersonalizationSection(props: PersonalizationSectionProps = 
                         id="systemPromptEnhancement"
                         title={t('settings.personalization.systemPromptEnhancement.enable')}
                         description={t('settings.personalization.systemPromptEnhancement.enableDesc')}
+                        last={!enhancement.enabled}
                         inheritTypography
                         control={
                             <ToggleSwitch
@@ -392,123 +393,127 @@ export function BasePersonalizationSection(props: PersonalizationSectionProps = 
                             />
                         }
                     />
-                    <SettingsRow
-                        id="systemPromptEnhancementModel"
-                        title={t('settings.personalization.systemPromptEnhancement.model')}
-                        description={t('settings.personalization.systemPromptEnhancement.modelDesc')}
-                        inheritTypography
-                        control={
-                            <CustomSelect
-                                value={selectedBuilderModelId}
-                                options={
-                                    modelOptions.length > 0
-                                        ? modelOptions
-                                        : [
-                                              {
-                                                  value: '',
-                                                  label: t(
-                                                      'settings.personalization.systemPromptEnhancement.noModels',
-                                                  ),
-                                              },
-                                          ]
+                    {enhancement.enabled ? (
+                        <>
+                            <SettingsRow
+                                id="systemPromptEnhancementModel"
+                                title={t('settings.personalization.systemPromptEnhancement.model')}
+                                description={t('settings.personalization.systemPromptEnhancement.modelDesc')}
+                                inheritTypography
+                                control={
+                                    <CustomSelect
+                                        value={selectedBuilderModelId}
+                                        options={
+                                            modelOptions.length > 0
+                                                ? modelOptions
+                                                : [
+                                                      {
+                                                          value: '',
+                                                          label: t(
+                                                              'settings.personalization.systemPromptEnhancement.noModels',
+                                                          ),
+                                                      },
+                                                  ]
+                                        }
+                                        ariaLabel={t('settings.personalization.systemPromptEnhancement.model')}
+                                        disabled={modelOptions.length === 0}
+                                        triggerClassName={cn(
+                                            'max-w-[240px] rounded-lg border border-[var(--border-subtle)]',
+                                            'bg-[var(--bg-sidebar-hover)] px-2.5 py-1.5 font-[inherit] text-[length:calc(var(--ui-font-size)-2px)] text-[var(--text-primary)]',
+                                            'hover:bg-[var(--bg-sidebar)]',
+                                        )}
+                                        onChange={(val) => updateEnhancement({ modelId: val })}
+                                    />
                                 }
-                                ariaLabel={t('settings.personalization.systemPromptEnhancement.model')}
-                                disabled={modelOptions.length === 0}
-                                triggerClassName={cn(
-                                    'max-w-[240px] rounded-lg border border-[var(--border-subtle)]',
-                                    'bg-[var(--bg-sidebar-hover)] px-2.5 py-1.5 font-[inherit] text-[length:calc(var(--ui-font-size)-2px)] text-[var(--text-primary)]',
-                                    'hover:bg-[var(--bg-sidebar)]',
-                                )}
-                                onChange={(val) => updateEnhancement({ modelId: val })}
                             />
-                        }
-                    />
-                    <SystemPromptEnhancementAppliedModels
-                        models={catalogModels}
-                        value={enhancement.appliedModelIds}
-                        onChange={(appliedModelIds) => updateEnhancement({ appliedModelIds })}
-                    />
-                    <SettingsRow
-                        id="systemPromptEnhancementMultilingual"
-                        title={t('settings.personalization.systemPromptEnhancement.multilingual')}
-                        description={t('settings.personalization.systemPromptEnhancement.multilingualDesc')}
-                        last={!enhancement.multilingualEnabled}
-                        inheritTypography
-                        control={
-                            <ToggleSwitch
-                                checked={enhancement.multilingualEnabled}
-                                label={t('settings.personalization.systemPromptEnhancement.multilingual')}
-                                onChange={(next) => updateEnhancement({ multilingualEnabled: next })}
+                            <SystemPromptEnhancementAppliedModels
+                                models={catalogModels}
+                                value={enhancement.appliedModelIds}
+                                onChange={(appliedModelIds) => updateEnhancement({ appliedModelIds })}
                             />
-                        }
-                    />
-                    {enhancement.multilingualEnabled ? (
-                        <div
-                            id="systemPromptEnhancementLanguages"
-                            data-setting-id="systemPromptEnhancementLanguages"
-                            className="space-y-3 px-3.5 py-3"
-                        >
-                            <div className="flex items-start justify-between gap-4">
-                                <div className="min-w-0 flex-1">
-                                    <div className="font-[inherit] text-[length:calc(var(--ui-font-size)-1px)] text-[var(--text-primary)]">
-                                        {t('settings.personalization.systemPromptEnhancement.languages')}
-                                    </div>
-                                    <div className="mt-0.5 font-[inherit] text-[length:calc(var(--ui-font-size)-2px)] leading-relaxed text-[var(--text-muted)]">
-                                        {t('settings.personalization.systemPromptEnhancement.languagesDesc')}
-                                    </div>
-                                </div>
-                                <button
-                                    type="button"
-                                    disabled={
-                                        enhancement.allowedLanguages.length >=
-                                        ALL_SYSTEM_PROMPT_LANGUAGES.length
-                                    }
-                                    className={cn(
-                                        'shrink-0 rounded-lg bg-[var(--bg-sidebar-hover)] px-2.5 py-1 font-[inherit] text-[length:calc(var(--ui-font-size)-2px)]',
-                                        'text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-sidebar)] hover:text-[var(--text-primary)]',
-                                        'disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer',
-                                    )}
-                                    onClick={handleSelectAllLanguages}
+                            <SettingsRow
+                                id="systemPromptEnhancementMultilingual"
+                                title={t('settings.personalization.systemPromptEnhancement.multilingual')}
+                                description={t('settings.personalization.systemPromptEnhancement.multilingualDesc')}
+                                last={!enhancement.multilingualEnabled}
+                                inheritTypography
+                                control={
+                                    <ToggleSwitch
+                                        checked={enhancement.multilingualEnabled}
+                                        label={t('settings.personalization.systemPromptEnhancement.multilingual')}
+                                        onChange={(next) => updateEnhancement({ multilingualEnabled: next })}
+                                    />
+                                }
+                            />
+                            {enhancement.multilingualEnabled ? (
+                                <div
+                                    id="systemPromptEnhancementLanguages"
+                                    data-setting-id="systemPromptEnhancementLanguages"
+                                    className="space-y-3 px-3.5 py-3"
                                 >
-                                    {t('settings.personalization.systemPromptEnhancement.selectAll')}
-                                </button>
-                            </div>
-                            <div className="flex flex-wrap gap-2">
-                                {ALL_SYSTEM_PROMPT_LANGUAGES.map((lang) => {
-                                    const selected = enhancement.allowedLanguages.includes(lang)
-                                    const isLastSelected =
-                                        selected && enhancement.allowedLanguages.length <= 1
-                                    return (
+                                    <div className="flex items-start justify-between gap-4">
+                                        <div className="min-w-0 flex-1">
+                                            <div className="font-[inherit] text-[length:calc(var(--ui-font-size)-1px)] text-[var(--text-primary)]">
+                                                {t('settings.personalization.systemPromptEnhancement.languages')}
+                                            </div>
+                                            <div className="mt-0.5 font-[inherit] text-[length:calc(var(--ui-font-size)-2px)] leading-relaxed text-[var(--text-muted)]">
+                                                {t('settings.personalization.systemPromptEnhancement.languagesDesc')}
+                                            </div>
+                                        </div>
                                         <button
-                                            key={lang}
                                             type="button"
-                                            aria-pressed={selected}
-                                            title={
-                                                isLastSelected
-                                                    ? t(
-                                                          'settings.personalization.systemPromptEnhancement.languagesDesc',
-                                                      )
-                                                    : undefined
+                                            disabled={
+                                                enhancement.allowedLanguages.length >=
+                                                ALL_SYSTEM_PROMPT_LANGUAGES.length
                                             }
                                             className={cn(
-                                                'rounded-lg border px-2.5 py-1 font-[inherit] text-[length:calc(var(--ui-font-size)-2px)] transition-colors',
-                                                isLastSelected ? 'cursor-not-allowed opacity-75' : 'cursor-pointer',
-                                                selected
-                                                    ? 'border-[var(--accent-blue)]/60 bg-[var(--accent-blue)]/15 text-[var(--text-primary)]'
-                                                    : 'border-[var(--border-subtle)] bg-[var(--bg-sidebar-hover)] text-[var(--text-muted)] hover:text-[var(--text-primary)]',
+                                                'shrink-0 rounded-lg bg-[var(--bg-sidebar-hover)] px-2.5 py-1 font-[inherit] text-[length:calc(var(--ui-font-size)-2px)]',
+                                                'text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-sidebar)] hover:text-[var(--text-primary)]',
+                                                'disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer',
                                             )}
-                                            disabled={isLastSelected}
-                                            aria-disabled={isLastSelected}
-                                            onClick={() => handleToggleLanguage(lang)}
+                                            onClick={handleSelectAllLanguages}
                                         >
-                                            {t(
-                                                `settings.personalization.systemPromptEnhancement.lang.${lang}`,
-                                            )}
+                                            {t('settings.personalization.systemPromptEnhancement.selectAll')}
                                         </button>
-                                    )
-                                })}
-                            </div>
-                        </div>
+                                    </div>
+                                    <div className="flex flex-wrap gap-2">
+                                        {ALL_SYSTEM_PROMPT_LANGUAGES.map((lang) => {
+                                            const selected = enhancement.allowedLanguages.includes(lang)
+                                            const isLastSelected =
+                                                selected && enhancement.allowedLanguages.length <= 1
+                                            return (
+                                                <button
+                                                    key={lang}
+                                                    type="button"
+                                                    aria-pressed={selected}
+                                                    title={
+                                                        isLastSelected
+                                                            ? t(
+                                                                  'settings.personalization.systemPromptEnhancement.languagesDesc',
+                                                              )
+                                                            : undefined
+                                                    }
+                                                    className={cn(
+                                                        'rounded-lg border px-2.5 py-1 font-[inherit] text-[length:calc(var(--ui-font-size)-2px)] transition-colors',
+                                                        isLastSelected ? 'cursor-not-allowed opacity-75' : 'cursor-pointer',
+                                                        selected
+                                                            ? 'border-[var(--accent-blue)]/60 bg-[var(--accent-blue)]/15 text-[var(--text-primary)]'
+                                                            : 'border-[var(--border-subtle)] bg-[var(--bg-sidebar-hover)] text-[var(--text-muted)] hover:text-[var(--text-primary)]',
+                                                    )}
+                                                    disabled={isLastSelected}
+                                                    aria-disabled={isLastSelected}
+                                                    onClick={() => handleToggleLanguage(lang)}
+                                                >
+                                                    {t(
+                                                        `settings.personalization.systemPromptEnhancement.lang.${lang}`,
+                                                    )}
+                                                </button>
+                                            )
+                                        })}
+                                    </div>
+                                </div>
+                            ) : null}
+                        </>
                     ) : null}
                 </SettingsCard>
             </section>
