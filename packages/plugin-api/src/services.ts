@@ -350,6 +350,8 @@ export interface SystemPromptEnhancementSettings {
   allowedLanguages: SystemPromptLanguage[]
   /** Model ID used to synthesize the enhanced system prompt; empty falls back to default enabled model. */
   modelId: string
+  /** Models that use the enhanced prompt. Omitted or null means all; [] means none. */
+  appliedModelIds?: string[] | null
 }
 
 export const DEFAULT_SYSTEM_PROMPT_ENHANCEMENT_SETTINGS: SystemPromptEnhancementSettings = Object.freeze({
@@ -392,12 +394,18 @@ export function normalizeSystemPromptEnhancementSettings(raw: unknown): SystemPr
   }
 
   const modelId = typeof value.modelId === 'string' ? value.modelId.trim() : ''
+  const appliedModelIds = Array.isArray(value.appliedModelIds)
+    ? [...new Set(value.appliedModelIds.flatMap((id) =>
+        typeof id === 'string' && id.trim() ? [id.trim()] : [],
+      ))]
+    : value.appliedModelIds === null ? null : undefined
 
   return {
     enabled,
     multilingualEnabled,
     allowedLanguages,
     modelId,
+    ...(appliedModelIds !== undefined ? { appliedModelIds } : {}),
   }
 }
 

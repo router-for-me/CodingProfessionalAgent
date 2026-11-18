@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createPluginTestHarness } from '@cpa/plugin-sdk'
+import { searchSettingsSections } from '@/plugins/platform/contributions/settings'
 import type { ActionContribution, SettingsGroupContribution, SettingsSectionContribution } from '@cpa/plugin-api'
 import {
     GeneralSection,
@@ -20,6 +21,17 @@ describe('settingsRendererEntry', () => {
         expect(manifest.name).toBe('Settings')
         expect(manifest.entries?.renderer).toBe('./renderer/index.tsx')
         expect(manifest.contributes?.['settings-group']).toEqual(['personal', 'integrations', 'code'])
+    })
+
+    it('finds the model scope row in settings search by its localized label and keywords', async () => {
+        const harness = createPluginTestHarness(settingsRendererEntry, { manifest })
+        await harness.activate()
+        const sections = harness.getRegistered<SettingsSectionContribution>('settings').map(({ value }) => value)
+        for (const query of ['Apply to models', '应用到的模型', 'model scope']) {
+            const result = searchSettingsSections(sections, query).find(({ section }) => section.id === 'personalization')
+            expect(result?.matchedItems.map(({ id }) => id) ?? [], query).toContain('systemPromptEnhancementAppliedModels')
+        }
+        await harness.deactivate()
     })
 
     it('registers settings groups, sections, and actions on activation, and cleans up on deactivation', async () => {

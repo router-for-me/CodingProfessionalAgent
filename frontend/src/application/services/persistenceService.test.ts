@@ -5086,6 +5086,7 @@ describe('persist pure helpers', () => {
               multilingualEnabled: true,
               allowedLanguages: ['invalid-lang'],
               modelId: '  gpt-6-astra  ',
+              appliedModelIds: ['  target-1 ', '', 42, 'target-1', 'target-2'],
             },
           },
         })),
@@ -5100,6 +5101,7 @@ describe('persist pure helpers', () => {
         multilingualEnabled: true,
         allowedLanguages: ['en'],
         modelId: 'gpt-6-astra',
+        appliedModelIds: ['target-1', 'target-2'],
       })
 
       useSettingsStore.getState().setSystemPromptEnhancement({
@@ -5107,6 +5109,7 @@ describe('persist pure helpers', () => {
         multilingualEnabled: true,
         allowedLanguages: ['zh-CN', 'ja', 'zh-CN'],
         modelId: 'gpt-6-astra',
+        appliedModelIds: [],
       })
 
       await flushPendingPersistence()
@@ -5117,7 +5120,13 @@ describe('persist pure helpers', () => {
         multilingualEnabled: true,
         allowedLanguages: ['zh-CN', 'ja'],
         modelId: 'gpt-6-astra',
+        appliedModelIds: [],
       })
+
+      useSettingsStore.getState().setSystemPromptEnhancement({ appliedModelIds: null })
+      await flushPendingPersistence()
+      await flushWrites()
+      expect(writtenState?.settings?.systemPromptEnhancement.appliedModelIds).toBeNull()
     })
   })
 })

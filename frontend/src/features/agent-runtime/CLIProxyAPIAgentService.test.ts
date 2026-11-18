@@ -846,6 +846,77 @@ function createWorktreePrepareInput(
             expect(warmer?.status.state).toBe('inactive')
         })
 
+        it('stops idle warming an enhanced prompt when its model is deselected', async () => {
+            vi.useFakeTimers()
+            const { service, bridge, fakeClient } = createService({ now: () => Date.now() })
+            try {
+                const sessionId = 'sess-warm-enhanced'
+                const savedPrompt = 'Saved enhanced system prompt'
+                await bridge.SessionSetSystemPrompt(sessionId, savedPrompt)
+                const response = {
+                    kind: 'stream' as const,
+                    final: (seed: AssistantEntry) => doneAssistant(seed, { stopReason: 'stop' }),
+                }
+                fakeClient.queue(response, response, response)
+
+                let enhancement: NonNullable<AgentPrepareInput['systemPromptEnhancement']> = {
+                    enabled: true,
+                    multilingualEnabled: false,
+                    allowedLanguages: ['en'],
+                    modelId: '',
+                    appliedModelIds: [modelBase.id],
+                }
+                const modelSettings = {
+                    enableAll: true,
+                    defaultTtl: 300,
+                    models: {},
+                    cacheWarming: { mode: 'idle' as const, maxWarmingTime: 1800 },
+                }
+                const prepared = await service.prepare({
+                    baseUrl: 'http://127.0.0.1:8317',
+                    apiKey: 'key',
+                    modelId: modelBase.id,
+                    models: [modelBase],
+                    reasoningLevel: 'medium',
+                    speed: 'standard',
+                    modelSettings,
+                    systemPromptEnhancement: enhancement,
+                })
+                const user = userEntry('u1', 'hi', sessionId)
+                await collect(
+                    service.streamChat({
+                        prepared,
+                        sessionId,
+                        runId: 'run-warm-enhanced',
+                        entries: [user],
+                        userEntry: user,
+                        getRuntimeSettings: () => ({
+                            modelSettings,
+                            systemPromptEnhancement: enhancement,
+                        }),
+                    }),
+                )
+
+                const warmer = service.getCacheWarmer(sessionId)
+                expect(warmer?.status).toMatchObject({ state: 'scheduled', phase: 'idle' })
+                expect(fakeClient.calls.map((call) => call.systemPrompt)).toEqual([savedPrompt])
+
+                // Disabling new builds does not stop replay of a still-in-scope saved prompt.
+                enhancement = { ...enhancement, enabled: false }
+                await vi.advanceTimersByTimeAsync(270_000)
+                expect(fakeClient.calls.map((call) => call.systemPrompt)).toEqual([savedPrompt, savedPrompt])
+
+                enhancement = { ...enhancement, appliedModelIds: [] }
+                await vi.advanceTimersByTimeAsync(270_000)
+                expect(fakeClient.calls.map((call) => call.systemPrompt)).toEqual([savedPrompt, savedPrompt])
+                expect(warmer?.status.state).toBe('inactive')
+                expect(await bridge.SessionGetSystemPrompt(sessionId)).toBe(savedPrompt)
+            } finally {
+                await service.dispose()
+                vi.useRealTimers()
+            }
+        })
+
         it('rebinds warmer with updated settings on subsequent runs in the same session', async () => {
             const { service, fakeClient } = createService()
             fakeClient.queue({
@@ -6195,6 +6266,141 @@ function createWorktreePrepareInput(
             expect(fakeClient.calls).toHaveLength(2)
             expect(fakeClient.calls[0]?.model.id).toBe('global-default-model')
             expect(fakeClient.calls[1]?.model.id).toBe('session-override-model')
+        })
+
+        it('builds once on the first selected child and never uses the enhanced prompt for unselected turns', async () => {
+            const bridge = new FakeNativeBridge()
+            const fakeClient = new FakeCPAClient()
+            const sessionId = 's-model-scope'
+            const target = { ...modelBase, id: 'selected-child' }
+            const builder = { ...modelBase, id: 'prompt-builder' }
+            const builtPrompt = 'Rewritten instructions for this session; use title when appropriate and assist the user in English.'
+            for (const text of [builtPrompt, builtPrompt, 'child reply', 'raw child reply', 'another child reply', 'next main reply']) {
+                fakeClient.queue({
+                    kind: 'stream',
+                    final: (seed) => doneAssistant(seed, { content: [{ type: 'text', text }], stopReason: 'stop' }),
+                })
+            }
+            const service = new CLIProxyAPIAgentService({
+                bridge,
+                createClient: () => fakeClient as unknown as CPAClient,
+                createTools: async () => [],
+                loadResources: async () => ({
+                    contextFiles: [], skills: [], prompts: [], diagnostics: [],
+                    systemPrompt: 'RAW_MAIN', mutableCoreSystemPrompt: 'Base instructions.',
+                    verbatimContextPrompt: '',
+                }),
+            })
+            const prepareInput = {
+                baseUrl: 'http://127.0.0.1:8317', apiKey: 'sk-test',
+                modelId: modelBase.id, models: [modelBase, target, builder],
+                reasoningLevel: 'medium' as const, speed: 'standard' as const, sessionId,
+                systemPromptEnhancement: {
+                    enabled: true, multilingualEnabled: false, allowedLanguages: ['en' as const],
+                    modelId: builder.id, appliedModelIds: [target.id],
+                },
+            }
+            const u1 = userEntry('u-scope-1', 'delegate work', sessionId)
+            const parent = service.streamChat({
+                prepared: await service.prepare(prepareInput),
+                sessionId, runId: 'r-scope-1', entries: [], userEntry: u1,
+            })
+            let first = await parent.next()
+            while (fakeClient.calls.length === 0 && !first.done) first = await parent.next()
+            expect(fakeClient.calls.map((call) => call.model.id)).toEqual([modelBase.id])
+            expect(fakeClient.calls[0]?.systemPrompt).toContain('RAW_MAIN')
+            expect(await bridge.SessionGetSystemPrompt(sessionId)).toBeNull()
+
+            for (const modelId of [target.id, modelBase.id, target.id]) {
+                const result = await service.subAgents.spawn('do work', { name: 'Worker', modelId, parentSessionId: sessionId })
+                expect(result.isError).toBeFalsy()
+            }
+            expect(await bridge.SessionGetSystemPrompt(sessionId)).toBe(builtPrompt)
+            expect(fakeClient.calls.map((call) => call.model.id)).toEqual([
+                modelBase.id, builder.id, target.id, modelBase.id, target.id,
+            ])
+            expect(fakeClient.calls[2]?.systemPrompt).toBe(builtPrompt)
+            expect(fakeClient.calls[3]?.systemPrompt).toContain('Worker')
+            expect(fakeClient.calls[3]?.systemPrompt).not.toContain(builtPrompt)
+            expect(fakeClient.calls[4]?.systemPrompt).toBe(builtPrompt)
+            await collect(parent)
+
+            await collect(service.streamChat({
+                prepared: await service.prepare(prepareInput),
+                sessionId, runId: 'r-scope-2', entries: [u1],
+                userEntry: userEntry('u-scope-2', 'next turn', sessionId),
+            }))
+            expect(fakeClient.calls).toHaveLength(6)
+            expect(fakeClient.calls[5]?.systemPrompt).toContain('RAW_MAIN')
+        })
+
+        it('skips builder preflight for an unselected model even when no enabled builder is available', async () => {
+            const service = new CLIProxyAPIAgentService({
+                bridge: new FakeNativeBridge(),
+                loadResources: async () => ({
+                    contextFiles: [], skills: [], prompts: [], diagnostics: [], systemPrompt: 'RAW',
+                }),
+                createTools: async () => [],
+            })
+            const prepared = await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317', apiKey: 'sk-test',
+                modelId: modelBase.id, models: [modelBase],
+                reasoningLevel: 'medium', speed: 'standard',
+                modelSettings: { enableAll: false, models: { [modelBase.id]: { enabled: false } } },
+                systemPromptEnhancement: {
+                    enabled: true, multilingualEnabled: false, allowedLanguages: ['en'],
+                    modelId: 'unavailable-builder', appliedModelIds: [],
+                },
+            })
+            expect(prepared.model.id).toBe(modelBase.id)
+        })
+
+        it('does not compact with an enhanced prompt or its cached request after unselecting that model', async () => {
+            const bridge = new FakeNativeBridge()
+            const sessionId = 's-unselected-compact'
+            await bridge.SessionSetSystemPrompt(sessionId, 'SAVED_ENHANCED')
+            const fakeClient = new FakeCPAClient()
+            fakeClient.queue({
+                kind: 'stream',
+                final: (seed) => doneAssistant(seed, { content: [{ type: 'text', text: 'reply' }], stopReason: 'stop' }),
+            })
+            const compactMock = vi.fn(async (_entries: any, _options?: any) => null)
+            const service = new CLIProxyAPIAgentService({
+                bridge,
+                createClient: () => fakeClient as unknown as CPAClient,
+                compact: compactMock as any,
+                loadResources: async () => ({
+                    contextFiles: [], skills: [], prompts: [], diagnostics: [], systemPrompt: 'RAW',
+                }),
+                createTools: async () => [],
+            })
+            const prepareInput = {
+                baseUrl: 'http://127.0.0.1:8317', apiKey: 'sk-test',
+                modelId: modelBase.id, models: [modelBase],
+                reasoningLevel: 'medium' as const, speed: 'standard' as const,
+                fastContextCompaction: false, sessionId,
+            }
+            const entry = userEntry('u-scope-compact', 'a message', sessionId)
+            await collect(service.streamChat({
+                prepared: await service.prepare(prepareInput),
+                sessionId, runId: 'r-scope-cached', entries: [], userEntry: entry,
+            }))
+            expect(fakeClient.calls[0]?.systemPrompt).toBe('SAVED_ENHANCED')
+
+            await service.compact({
+                prepared: await service.prepare({
+                    ...prepareInput,
+                    systemPromptEnhancement: {
+                        enabled: true, multilingualEnabled: false, allowedLanguages: ['en'],
+                        modelId: '', appliedModelIds: [],
+                    },
+                }),
+                sessionId, runId: 'r-scope-compact', entries: [entry],
+            })
+            expect(compactMock).toHaveBeenCalledTimes(1)
+            expect(compactMock.mock.calls[0]?.[1]?.sessionSystemPrompt).toBeUndefined()
+            expect(compactMock.mock.calls[0]?.[1]?.cachedContext).toBeUndefined()
+            expect(await bridge.SessionGetSystemPrompt(sessionId)).toBe('SAVED_ENHANCED')
         })
 
         it('forwards parent enhancedSystemPrompt through sub-agent loop into overflow compaction', async () => {

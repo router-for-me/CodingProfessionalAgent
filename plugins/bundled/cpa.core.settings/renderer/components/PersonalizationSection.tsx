@@ -23,6 +23,7 @@ import {
     normalizeSystemPromptEnhancementSettings,
 } from '@cpa/plugin-api'
 import { SettingsCard, SettingsRow, ToggleSwitch } from './SettingsControls.js'
+import { SystemPromptEnhancementAppliedModels } from './SystemPromptEnhancementAppliedModels.js'
 
 function getEnabledOrderedModels(
     catalogModels: readonly ModelCatalogEntry[],
@@ -421,6 +422,11 @@ export function BasePersonalizationSection(props: PersonalizationSectionProps = 
                                 onChange={(val) => updateEnhancement({ modelId: val })}
                             />
                         }
+                    />
+                    <SystemPromptEnhancementAppliedModels
+                        models={catalogModels}
+                        value={enhancement.appliedModelIds}
+                        onChange={(appliedModelIds) => updateEnhancement({ appliedModelIds })}
                     />
                     <SettingsRow
                         id="systemPromptEnhancementMultilingual"

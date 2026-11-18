@@ -113,6 +113,8 @@ export interface AgentRunInput {
     systemPrompt: string
     /** Locked enhanced session system prompt passed into compaction paths when present. */
     enhancedSystemPrompt?: string
+    /** Explicit subset; middleware may only route within the same prompt scope. */
+    enhancementModelIds?: readonly string[]
     developerPrompt?: string
     tools: readonly AgentTool[]
     /** No provider request or pending tool may run without this policy. */
@@ -1159,6 +1161,7 @@ export class AgentLoop {
                     model,
                     systemPrompt,
                     enhancedSystemPrompt,
+                    enhancementModelIds: input.enhancementModelIds,
                     developerPrompt: input.developerPrompt,
                     toolDefs,
                     reasoningEffort: activeReasoningEffort,
@@ -1528,6 +1531,7 @@ export class AgentLoop {
         model: ModelCatalogEntry
         systemPrompt: string
         enhancedSystemPrompt?: string
+        enhancementModelIds?: readonly string[]
         developerPrompt?: string
         toolDefs: ProtocolToolDefinition[] | undefined
         reasoningEffort?: string
@@ -1621,6 +1625,7 @@ export class AgentLoop {
                 seed,
             }
 
+            const appliesToOriginalModel = args.enhancementModelIds?.includes(streamInput.model.id)
             let effectiveInput: ProtocolStreamInput = streamInput
             try {
                 effectiveInput = await pipeline.executeRequest(streamInput, {
@@ -1640,6 +1645,15 @@ export class AgentLoop {
                     'aborted',
                 )
                 return { kind: 'aborted', entry }
+            }
+
+            if (appliesToOriginalModel !== args.enhancementModelIds?.includes(effectiveInput.model.id)) {
+                const entry = finalizeErrorAssistant(
+                    seed,
+                    'Middleware cannot route a request outside its system prompt enhancement scope',
+                    'error',
+                )
+                return { kind: 'error', entry }
             }
 
             // Fail closed if any onRequest middleware altered a locked enhanced system prompt.

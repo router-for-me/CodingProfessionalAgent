@@ -22,10 +22,12 @@ import {
     disposeAgentRuntime,
     useAgentStream,
 } from './useAgentStream'
+import { CLIProxyAPIAgentService } from '@/features/agent-runtime/CLIProxyAPIAgentService'
 import { SubAgentHost } from '@/features/agent-runtime/host/SubAgentHost'
+import { FakeNativeBridge } from '@/features/agent-runtime/native/fakeNativeBridge'
 import { getHostServices } from '@/application/services/createHostServices'
 import { setHostBridge } from '@/application/services/hostTransport'
-import type { SubAgentRecord, SubagentRole } from '@cpa/plugin-api'
+import type { ProtocolStreamInput, SubAgentRecord, SubagentRole } from '@cpa/plugin-api'
 import { useMessageStore } from '@/stores/messageStore'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useSettingsStore } from '@/stores/settingsStore'
@@ -1942,6 +1944,98 @@ describe('useAgentStream', () => {
         expect(call.entries).toHaveLength(2)
         expect(call.entries[0].id).toBe('u1')
         expect(call.entries[1].id).toBe('a1')
+    })
+
+    it.each([
+        { workLocation: 'local', childSelected: false },
+        { workLocation: 'worktree', childSelected: false },
+        { workLocation: 'local', childSelected: true },
+    ] as const)('resumes child-only sessions without a builder ($workLocation, child selected: $childSelected)', async ({ workLocation, childSelected }) => {
+        const sessionId = workLocation === 'worktree'
+            ? seedReadyWorktreeSession({ sourceTreePath: '/projects/repo', includeProject: true })
+            : useSessionStore.getState().createSession({ title: 'Parent' })
+        const child = {
+            ...makeSubAgent({ id: `${sessionId}-child`, name: 'Reviewer', parentSessionId: sessionId, parentToolCallId: 'spawn-call' }),
+            modelId: modelTextOnly.id,
+            status: 'aborted' as const,
+        }
+        useSubAgentStore.getState().setAgentsForParent(sessionId, [child])
+        useMessageStore.getState().appendEntry({
+            id: 'child-user',
+            sessionId: child.sessionId,
+            createdAt: 1,
+            kind: 'user',
+            content: [{ type: 'text', text: 'Review these changes' }],
+        })
+        const previousSettings = useSettingsStore.getState().settings
+        useSettingsStore.getState().hydrate({
+            toolMode: 'direct',
+            modelSettings: {
+                enableAll: false,
+                models: { [model.id]: { enabled: false }, [modelTextOnly.id]: { enabled: false } },
+            },
+            systemPromptEnhancement: {
+                enabled: true,
+                multilingualEnabled: false,
+                allowedLanguages: ['en'],
+                modelId: '',
+                appliedModelIds: childSelected ? [model.id, modelTextOnly.id] : [model.id],
+            },
+        })
+
+        const bridge = new FakeNativeBridge()
+        const worktreePath = '/worktrees/repo-session'
+        if (workLocation === 'worktree') await bridge.mkdirAll(worktreePath)
+        const stream = vi.fn(async function* (input: ProtocolStreamInput) {
+            return {
+                ...input.seed,
+                content: [{ type: 'text' as const, text: 'Review done' }],
+                status: 'done' as const,
+                stopReason: 'stop' as const,
+            }
+        })
+        const runtimeService = new CLIProxyAPIAgentService({
+            bridge,
+            createClient: () => ({ stream }),
+            createTools: async (cwd) => cwd ? [{
+                name: 'read',
+                label: 'Read',
+                description: 'Read a file',
+                parameters: { type: 'object', properties: {} },
+                validate: () => ({}),
+                execute: async () => ({ content: [] }),
+            }] : [],
+        })
+        const { result, unmount } = renderHook(() => useAgentStream(), { wrapper: wrapperFor(runtimeService) })
+
+        try {
+            let resumedId: string | null = null
+            await act(async () => {
+                resumedId = await result.current.resumeSession(sessionId)
+            })
+
+            expect(resumedId).toBe(sessionId)
+            const resumed = runtimeService.subAgents.list(sessionId)[0]
+            if (childSelected) {
+                expect(resumed).toMatchObject({
+                    status: 'error',
+                    errorMessage: 'No available model to build enhanced system prompt',
+                })
+                expect(stream).not.toHaveBeenCalled()
+            } else {
+                expect(stream).toHaveBeenCalledTimes(1)
+                const request = stream.mock.calls[0]?.[0]
+                expect(request?.model.id).toBe(modelTextOnly.id)
+                expect(request?.systemPrompt).toContain('You are a sub-agent named Reviewer')
+                if (workLocation === 'worktree') expect(request?.systemPrompt).toContain(worktreePath)
+                expect(resumed).toMatchObject({ status: 'completed', lastMessage: 'Review done' })
+            }
+        } finally {
+            unmount()
+            __resetAgentStreamForTests(runtimeService)
+            await runtimeService.dispose()
+            useSettingsStore.setState({ settings: previousSettings })
+        }
     })
 
     it('rehydrates subagents loaded after host binding before replaying a pending spawn call', async () => {

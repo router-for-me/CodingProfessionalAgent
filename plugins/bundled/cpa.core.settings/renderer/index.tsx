@@ -316,6 +316,12 @@ export const settingsRendererEntry = definePluginEntry({
                         keywords: ['system prompt', 'builder model', 'model'],
                     },
                     {
+                        id: 'systemPromptEnhancementAppliedModels',
+                        labelKey: 'settings.personalization.systemPromptEnhancement.appliedModels',
+                        descriptionKey: 'settings.personalization.systemPromptEnhancement.appliedModels.desc',
+                        keywords: ['system prompt', 'model scope', 'target models'],
+                    },
+                    {
                         id: 'systemPromptEnhancementMultilingual',
                         labelKey: 'settings.personalization.systemPromptEnhancement.multilingual',
                         descriptionKey:

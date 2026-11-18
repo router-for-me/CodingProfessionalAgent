@@ -1945,6 +1945,7 @@ function createRuntimeSettingsResolver(targetSessionId: string) {
             reasoningEffort: session?.reasoningEffort ?? settings.reasoningLevel,
             speed: session?.speed ?? settings.speed,
             modelSettings: settings.modelSettings,
+            systemPromptEnhancement: settings.systemPromptEnhancement,
         }
     }
 }
@@ -2178,6 +2179,7 @@ interface PrepareExecutionRunParams {
     scheduleId?: string | null
     signal: AbortSignal
     allowSetup?: boolean
+    resumeSubAgentsOnly?: boolean
 }
 
 type PrepareExecutionRunResult =
@@ -2216,6 +2218,7 @@ async function prepareExecutionRun(
                 localMemoryEnabled: params.settings.localMemoryEnabled,
                 scheduleId: params.scheduleId ?? null,
                 sessionId: params.sessionId,
+                resumeSubAgentsOnly: params.resumeSubAgentsOnly,
                 subagentsSettings: params.settings.subagents,
                 skillsSettings: params.settings.skills,
                 gitSettings: params.settings.git,
@@ -2350,6 +2353,7 @@ async function prepareExecutionRun(
             localMemoryEnabled: params.settings.localMemoryEnabled,
             scheduleId: params.scheduleId ?? null,
             sessionId: params.sessionId,
+            resumeSubAgentsOnly: params.resumeSubAgentsOnly,
             subagentsSettings: params.settings.subagents,
             skillsSettings: params.settings.skills,
             gitSettings: params.settings.git,
@@ -4796,6 +4800,7 @@ function applyTurnPauseDelta(entries: readonly ConversationEntry[]): Conversatio
                         scheduleId: session.scheduleId ?? null,
                         signal: ac.signal,
                         allowSetup: false,
+                        resumeSubAgentsOnly: true,
                     })
                 } catch (error) {
                     const aborted =

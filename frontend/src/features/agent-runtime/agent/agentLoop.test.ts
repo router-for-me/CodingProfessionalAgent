@@ -4418,6 +4418,30 @@ it.each([true, false])('keeps enhanced prompt immutable through tool policy fall
     expect((events as AgentRunEvent[]).some((event) => event.type === 'user-entry' && JSON.stringify(event.entry).includes('[System notice]'))).toBe(true)
 })
 
+it.each([true, false])('blocks middleware rerouting across the enhancement scope (enhanced=%s)', async (selected) => {
+    const client = new FakeCPAClient()
+    const otherModel = { ...model, id: 'fallback-model' }
+    const loop = new AgentLoop({
+        client,
+        middlewares: [{
+            id: 'reroute',
+            order: 10,
+            onRequest: (input) => ({ ...input, model: otherModel }),
+        }],
+    })
+
+    const events = await collect(loop.run({
+        runId: 'r-reroute', sessionId: 's-reroute', model, entries: [], tools: [],
+        systemPrompt: selected ? 'LOCKED_ENHANCED' : 'RAW',
+        enhancedSystemPrompt: selected ? 'LOCKED_ENHANCED' : undefined,
+        enhancementModelIds: [selected ? model.id : otherModel.id],
+    }))
+    expect(client.calls).toHaveLength(0)
+    expect((events as AgentRunEvent[]).find((event) => event.type === 'error')).toMatchObject({
+        message: 'Middleware cannot route a request outside its system prompt enhancement scope',
+    })
+})
+
 it('fails closed at dispatch boundary when onRequest middleware mutates locked enhancedSystemPrompt', async () => {
     const client = new FakeCPAClient()
     client.queue({ kind: 'stream', final: (seed) => doneAssistant(seed, { stopReason: 'stop' }) })

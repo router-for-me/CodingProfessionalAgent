@@ -97,6 +97,8 @@ export interface AgentPrepareInput {
     scheduleId?: string | null
     /** Optional target session identifier. */
     sessionId?: string | null
+    /** Prepare parent context only to resume subagents, without a parent model request. */
+    resumeSubAgentsOnly?: boolean
     /** Optional loader for session entries used by subagent resume/spawn. */
     getEntries?: (sessionId: string) => Promise<ConversationEntry[]> | ConversationEntry[]
     /** Optional Git worktree runtime policy constraints. */
@@ -173,12 +175,13 @@ export interface AgentStreamChatInput {
     signal?: AbortSignal
     /** Reports when this run starts or finishes building a new enhanced system prompt. */
     onSystemPromptBuildChange?: (active: boolean) => void
-    /** Optional dynamic runtime settings resolver called before each LLM turn/request */
+    /** Resolves live settings for model requests, including background cache refreshes. */
     getRuntimeSettings?: () => {
         reasoningEffort?: string
         reasoningLevel?: string
         speed?: string
         modelSettings?: ModelSettingsConfig
+        systemPromptEnhancement?: SystemPromptEnhancementSettings
     } | undefined
     /** Optional callback returning a pending steer user entry to inject after the current LLM request or tool execution */
     consumeSteerEntry?: () => UserEntry | undefined

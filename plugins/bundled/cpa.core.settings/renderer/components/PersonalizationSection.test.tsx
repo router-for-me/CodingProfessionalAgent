@@ -1,9 +1,10 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '@/i18n'
 import { HostServicesProvider } from '@cpa/plugin-ui'
 import { createHostServices, setHostServices } from '@/application/services/createHostServices'
-import type { HostServices, PersonalizationService } from '@cpa/plugin-api'
+import type { HostServices, ModelCatalogEntry, PersonalizationService } from '@cpa/plugin-api'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useModelCatalogStore } from '@/stores/modelCatalogStore'
 import { useUiStore } from '@/stores/uiStore'
@@ -380,6 +381,167 @@ describe('PersonalizationSection', () => {
             ).toEqual(['ja'])
         })
     })
+    describe('models the system prompt enhancement applies to', () => {
+        const alpha: ModelCatalogEntry = {
+            id: 'gateway/alpha',
+            label: 'Alpha',
+            supportsFast: false,
+            reasoningLevels: [],
+            input: ['text'],
+            contextWindow: 128_000,
+            maxTokens: 8_192,
+        }
+        const beta = { ...alpha, id: 'gateway/beta', label: 'Beta' }
+        const offline = { ...alpha, id: 'gateway/third', label: 'Offline Model' }
+
+        function renderModelScope(appliedModelIds?: string[] | null) {
+            useModelCatalogStore.setState({ models: [alpha, beta, offline] })
+            useSettingsStore.setState({
+                settings: {
+                    ...useSettingsStore.getState().settings,
+                    modelSettings: {
+                        enableAll: false,
+                        models: { 'gateway/third': { enabled: false } },
+                    },
+                    systemPromptEnhancement: {
+                        enabled: true,
+                        multilingualEnabled: false,
+                        allowedLanguages: ['en'],
+                        modelId: 'gateway/alpha',
+                        appliedModelIds,
+                    },
+                },
+            })
+            return renderWithServices(<BasePersonalizationSection />)
+        }
+
+        const storedScope = () => useSettingsStore.getState().settings.systemPromptEnhancement?.appliedModelIds
+
+        it('shows the saved partial scope and filters the full catalog by name and ID without closing on toggles', async () => {
+            const user = userEvent.setup()
+            renderModelScope(['gateway/beta'])
+            const trigger = screen.getByRole('button', { name: /apply to models/i })
+            expect(trigger).toHaveTextContent('1 model selected')
+            expect(trigger.closest('[data-setting-id]')).toBe(
+                document.getElementById('systemPromptEnhancementModel')?.nextElementSibling,
+            )
+            await user.click(trigger)
+            const dialog = within(screen.getByRole('dialog', { name: 'Apply to models' }))
+            const all = dialog.getByRole('checkbox', { name: 'All models' })
+            expect(all).toBePartiallyChecked()
+            expect(dialog.getByRole('checkbox', { name: 'Beta' })).toBeChecked()
+            expect(dialog.getByRole('checkbox', { name: 'Alpha' })).not.toBeChecked()
+            expect(dialog.getByRole('checkbox', { name: 'Offline Model' })).not.toBeChecked()
+
+            const search = dialog.getByRole('searchbox', { name: 'Search models' })
+            await user.type(search, 'OFFLINE')
+            expect(dialog.getAllByRole('checkbox')).toHaveLength(2)
+            expect(all).toBePartiallyChecked()
+            const model = dialog.getByRole('checkbox', { name: 'Offline Model' })
+            await user.click(model)
+            expect(model).toBeChecked()
+            expect(storedScope()).toEqual(['gateway/beta', 'gateway/third'])
+            expect(trigger).toHaveTextContent('2 models selected')
+
+            await user.clear(search)
+            await user.type(search, 'gateway/third')
+            expect(dialog.getAllByRole('checkbox')).toHaveLength(2)
+            await user.click(dialog.getByRole('checkbox', { name: 'Offline Model' }))
+            expect(dialog.getByRole('checkbox', { name: 'Offline Model' })).not.toBeChecked()
+            expect(storedScope()).toEqual(['gateway/beta'])
+        })
+
+        it.each([undefined, null])('shows the dynamic scope (%s) checked and unchecks against the unfiltered catalog', async (value) => {
+            const user = userEvent.setup()
+            renderModelScope(value)
+            const trigger = screen.getByRole('button', { name: /apply to models/i })
+            expect(trigger).toHaveTextContent('All models')
+            await user.click(trigger)
+            const dialog = within(screen.getByRole('dialog', { name: 'Apply to models' }))
+            const all = dialog.getByRole('checkbox', { name: 'All models' })
+            for (const checkbox of dialog.getAllByRole('checkbox')) {
+                expect(checkbox).toBeChecked()
+            }
+
+            await user.type(dialog.getByRole('searchbox'), 'alpha')
+            const model = dialog.getByRole('checkbox', { name: 'Alpha' })
+            await user.click(model)
+            expect(storedScope()).toEqual(['gateway/beta', 'gateway/third'])
+            expect(all).toBePartiallyChecked()
+            await user.click(model)
+            expect(storedScope()).toEqual(['gateway/beta', 'gateway/third', 'gateway/alpha'])
+            expect(all).toBePartiallyChecked()
+        })
+
+        it('uses the always-visible bulk checkbox for dynamic all and clear even with no matches', async () => {
+            const user = userEvent.setup()
+            renderModelScope([])
+            const trigger = screen.getByRole('button', { name: /apply to models/i })
+            expect(trigger).toHaveTextContent('No models selected')
+            await user.click(trigger)
+            const dialog = within(screen.getByRole('dialog', { name: 'Apply to models' }))
+            const all = dialog.getByRole('checkbox', { name: 'All models' })
+            expect(all).not.toBeChecked()
+            expect(dialog.getByRole('checkbox', { name: 'Beta' })).not.toBeChecked()
+
+            const search = dialog.getByRole('searchbox')
+            await user.type(search, 'no-such-model')
+            expect(dialog.getByRole('status')).toHaveTextContent('No matching models')
+            expect(dialog.getAllByRole('checkbox')).toEqual([all])
+            await user.click(all)
+            expect(storedScope()).toBeNull()
+            expect(all).toBeChecked()
+            await user.click(all)
+            expect(storedScope()).toEqual([])
+            expect(all).not.toBeChecked()
+            await user.click(all)
+            expect(storedScope()).toBeNull()
+
+            act(() => {
+                useModelCatalogStore.setState({ models: [alpha, beta, offline, { ...alpha, id: 'gateway/new', label: 'New Model' }] })
+            })
+            await user.clear(search)
+            expect(dialog.getByRole('checkbox', { name: 'New Model' })).toBeChecked()
+        })
+
+        it('supports keyboard selection within the portal and restores trigger focus on Escape', async () => {
+            const user = userEvent.setup()
+            const { container } = renderModelScope(['gateway/beta'])
+            const trigger = screen.getByRole('button', { name: /apply to models/i })
+            trigger.focus()
+            await user.keyboard('{Enter}')
+            const popup = screen.getByRole('dialog', { name: 'Apply to models' })
+            expect(container).not.toContainElement(popup)
+            expect(popup).toHaveClass('fixed', 'z-[70]')
+            expect(trigger).toHaveAttribute('aria-controls', popup.id)
+            expect(within(popup).getByRole('searchbox')).toHaveFocus()
+            await user.keyboard('offline')
+            await user.tab()
+            expect(within(popup).getByRole('checkbox', { name: 'All models' })).toHaveFocus()
+            await user.keyboard(' ')
+            expect(storedScope()).toBeNull()
+            await user.tab()
+            expect(within(popup).getByRole('checkbox', { name: 'Offline Model' })).toHaveFocus()
+            await user.keyboard(' ')
+            expect(storedScope()).toEqual(['gateway/alpha', 'gateway/beta'])
+            const onGlobalKey = vi.fn((event: KeyboardEvent) => {
+                if (event.shiftKey && event.key === 'Tab') event.preventDefault()
+            })
+            window.addEventListener('keydown', onGlobalKey)
+            try {
+                await user.tab({ shift: true })
+                expect(within(popup).getByRole('checkbox', { name: 'All models' })).toHaveFocus()
+                expect(onGlobalKey).not.toHaveBeenCalledWith(expect.objectContaining({ key: 'Tab' }))
+            } finally {
+                window.removeEventListener('keydown', onGlobalKey)
+            }
+            await user.keyboard('{Escape}')
+            expect(popup).not.toBeInTheDocument()
+            expect(trigger).toHaveFocus()
+            expect(trigger).toHaveAttribute('aria-expanded', 'false')
+        })
+    })
+
     it.each(['en', 'zh-CN'])('describes the global default model and shows empty catalog label in %s', async (locale) => {
         await i18n.changeLanguage(locale)
         useModelCatalogStore.setState({ models: [] })
@@ -388,6 +550,12 @@ describe('PersonalizationSection', () => {
         expect(i18n.t(prefix + 'modelDesc')).toMatch(locale === 'en' ? /global default model/i : /全局默认模型/)
         expect(i18n.t(prefix + 'modelPlaceholder')).toMatch(locale === 'en' ? /global default model/i : /全局默认模型/)
         expect(screen.getByRole('combobox', { name: locale === 'en' ? 'Builder model' : '构建模型' })).toHaveTextContent(locale === 'en' ? 'No models available' : '暂无可用模型')
+        const scopeLabel = locale === 'en' ? 'Apply to models' : '应用到的模型'
+        fireEvent.click(screen.getByRole('button', { name: new RegExp(scopeLabel, 'i') }))
+        const scope = within(screen.getByRole('dialog', { name: scopeLabel }))
+        const all = scope.getByRole('checkbox', { name: locale === 'en' ? 'All models' : '全部模型' })
+        expect(all).toBeEnabled()
+        expect(scope.getByRole('status')).toHaveTextContent(locale === 'en' ? 'No models available' : '暂无可用模型')
     })
 
     it('inherits --ui-font-size and --font-weight-ui typography tokens in the System Prompt Enhancement block', () => {

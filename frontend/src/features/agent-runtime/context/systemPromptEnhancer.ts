@@ -99,6 +99,14 @@ async function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
     })
 }
 
+/** This scope also applies to an already persisted prompt, even when new builds are disabled. */
+export function isEnhancementAppliedToModel(
+    enhancement: SystemPromptEnhancementSettings | undefined,
+    modelId: string,
+): boolean {
+    return enhancement?.appliedModelIds?.includes(modelId) ?? true
+}
+
 /**
  * Resolve the model used to synthesize an enhanced system prompt.
  * Respects `modelSettings` ordering and enablement filtering.

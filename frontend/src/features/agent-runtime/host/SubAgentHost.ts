@@ -18,6 +18,7 @@ import {
 } from '@cpa/plugin-api'
 import { formatSubagentRolesForPrompt } from '@cpa/plugin-sdk'
 import { buildSystemPrompt } from '../context/systemPrompt'
+import { isEnhancementAppliedToModel } from '../context/systemPromptEnhancer'
 import { formatWorktreeModePrompt } from '../context/worktreeMode'
 import { HookProvider } from '../providers/HookProvider'
 import { resolveDynamicReasoningEffort } from '../agent/agentLoop'
@@ -1555,12 +1556,16 @@ export class SubAgentHost {
             record.roleName ||
             this.findMatchingRole(record.roleId || record.name, config)?.name
 
-        const parentEnhancedPrompt = config.resolveEnhancedSystemPrompt
-            ? await config.resolveEnhancedSystemPrompt(
-                  record.parentSessionId,
-                  runtime.controller.signal,
-              )
-            : config.getEnhancedSystemPrompt?.(record.parentSessionId)
+        const enhancement = config.prepared.systemPromptEnhancement
+        const appliesToModel = isEnhancementAppliedToModel(enhancement, model.id)
+        const parentEnhancedPrompt = !appliesToModel
+            ? undefined
+            : config.resolveEnhancedSystemPrompt
+              ? await config.resolveEnhancedSystemPrompt(
+                    record.parentSessionId,
+                    runtime.controller.signal,
+                )
+              : config.getEnhancedSystemPrompt?.(record.parentSessionId)
         if (runtime.controller.signal.aborted) {
             const abortErr = new Error('Sub-agent aborted')
             abortErr.name = 'AbortError'
@@ -1568,7 +1573,7 @@ export class SubAgentHost {
         }
         const hasParentEnhancedPrompt =
             typeof parentEnhancedPrompt === 'string' && parentEnhancedPrompt.trim().length > 0
-        if (config.prepared?.systemPromptEnhancement?.enabled && !hasParentEnhancedPrompt) {
+        if (appliesToModel && enhancement?.enabled && !hasParentEnhancedPrompt) {
             throw new Error('Enhanced system prompt is unavailable for sub-agent execution')
         }
         const trimmedRolePrompt = (effectiveRolePrompt || '').trim()

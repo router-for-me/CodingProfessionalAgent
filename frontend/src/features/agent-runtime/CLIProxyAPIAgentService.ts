@@ -73,6 +73,7 @@ import {
     SET_SESSION_TITLE_TOOL_NAME,
 } from './context/systemPrompt'
 import {
+    isEnhancementAppliedToModel,
     resolveEnhancementModel,
     synthesizeEnhancedSystemPrompt,
 } from './context/systemPromptEnhancer'
@@ -1012,6 +1013,7 @@ export class CLIProxyAPIAgentService implements AgentService {
         {
             namespace: string
             protocolProviderId?: string
+            enhancedSystemPrompt?: string
             context: CachedCompactionContext
         }
     >()
@@ -1203,7 +1205,11 @@ export class CLIProxyAPIAgentService implements AgentService {
 
             const models = (input.models ?? (input.model ? [input.model] : []))
                 .map(applyModelSettingsOverrides)
-            if (input.systemPromptEnhancement?.enabled) {
+            if (
+                !input.resumeSubAgentsOnly &&
+                input.systemPromptEnhancement?.enabled &&
+                isEnhancementAppliedToModel(input.systemPromptEnhancement, input.model?.id ?? input.modelId)
+            ) {
                 const builderModel = resolveEnhancementModel(
                     models,
                     input.systemPromptEnhancement,
@@ -1800,6 +1806,7 @@ export class CLIProxyAPIAgentService implements AgentService {
             })
             this.sessionWarmers.set(sessionId, warmer)
 
+            let enhancedPromptForCache: string | undefined
             loop = this.createLoop({
                 client,
                 approvals: this.approvals,
@@ -1822,16 +1829,36 @@ export class CLIProxyAPIAgentService implements AgentService {
                         this.sessionWarmers.set(sessionId, warmer)
                     }
                     const ttlMs = resolveSessionCacheTtlMs(streamInput.model.id)
+                    const replaysEnhancedPrompt =
+                        enhancedPromptForCache !== undefined &&
+                        streamInput.systemPrompt === enhancedPromptForCache
+                    let scopeInvalidated = false
                     warmer?.start(
                         {
                             sessionId,
                             streamInput,
                             ttlMs,
                         },
-                        () =>
-                            !controller.signal.aborted &&
-                            !this.disposed &&
-                            (isContextCurrent ? isContextCurrent() : true),
+                        () => {
+                            if (
+                                controller.signal.aborted ||
+                                this.disposed ||
+                                isContextCurrent?.() === false
+                            ) {
+                                return false
+                            }
+                            // Once invalidated, the generation lease may already have been released.
+                            if (replaysEnhancedPrompt && !scopeInvalidated) {
+                                const enhancement =
+                                    input.getRuntimeSettings?.()?.systemPromptEnhancement ??
+                                    prepared.systemPromptEnhancement
+                                scopeInvalidated = !isEnhancementAppliedToModel(
+                                    enhancement,
+                                    streamInput.model.id,
+                                )
+                            }
+                            return !scopeInvalidated
+                        },
                     )
                 },
                 onTurnCached: (ctx) => {
@@ -1855,6 +1882,7 @@ export class CLIProxyAPIAgentService implements AgentService {
                     this.sessionCachedContexts.set(sessionId, {
                         namespace,
                         protocolProviderId: effectiveProviderId,
+                        enhancedSystemPrompt: enhancedPromptForCache,
                         context: {
                             ...ctx,
                             lastCachedAt: nowTime,
@@ -1891,6 +1919,7 @@ export class CLIProxyAPIAgentService implements AgentService {
                     signal: controller.signal,
                     onBuildChange: input.onSystemPromptBuildChange,
                 })
+            enhancedPromptForCache = isEnhanced ? effectiveSystemPrompt : undefined
 
             const runInput: AgentRunInput = {
                 runId,
@@ -1904,7 +1933,8 @@ export class CLIProxyAPIAgentService implements AgentService {
                     : input.userEntry,
                 model: prepared.model,
                 systemPrompt: effectiveSystemPrompt,
-                ...(isEnhanced ? { enhancedSystemPrompt: effectiveSystemPrompt } : {}),
+                ...(enhancedPromptForCache ? { enhancedSystemPrompt: enhancedPromptForCache } : {}),
+                enhancementModelIds: prepared.systemPromptEnhancement?.appliedModelIds ?? undefined,
                 tools: effectiveTools,
                 requestApproval: prepared.requestApproval,
                 requiredToolPolicy: prepared.requiredToolPolicy,
@@ -1920,6 +1950,7 @@ export class CLIProxyAPIAgentService implements AgentService {
                           sessionId,
                           namespace,
                           effectiveProviderId,
+                          enhancedPromptForCache,
                       ),
                 getRuntimeSettings: (input as AgentStreamChatInput).getRuntimeSettings,
                 consumeSteerEntry: (input as AgentStreamChatInput).consumeSteerEntry,
@@ -2108,11 +2139,14 @@ export class CLIProxyAPIAgentService implements AgentService {
                     }
                 }
 
-                let persistedSessionPrompt = await this.resolvePersistedEnhancedPrompt(
-                    sessionId,
-                    controller.signal,
+                const appliesToModel = isEnhancementAppliedToModel(
+                    prepared.systemPromptEnhancement,
+                    prepared.model.id,
                 )
-                if (!persistedSessionPrompt && prepared.systemPromptEnhancement?.enabled) {
+                let persistedSessionPrompt = appliesToModel
+                    ? await this.resolvePersistedEnhancedPrompt(sessionId, controller.signal)
+                    : undefined
+                if (appliesToModel && !persistedSessionPrompt && prepared.systemPromptEnhancement?.enabled) {
                     const promptInputs = await this.resolveSessionPromptInputs({
                         prepared,
                         sessionId,
@@ -2133,19 +2167,14 @@ export class CLIProxyAPIAgentService implements AgentService {
                         ? effectivePrompt.systemPrompt
                         : undefined
                 }
-                const rawCachedContext = prepared.fastContextCompaction
+                const cachedContext = prepared.fastContextCompaction
                     ? undefined
                     : this.getValidCachedContext(
                           sessionId,
                           namespace,
                           effectiveProviderId,
+                          persistedSessionPrompt,
                       )
-                const cachedContext =
-                    persistedSessionPrompt &&
-                    rawCachedContext &&
-                    rawCachedContext.systemPrompt !== persistedSessionPrompt
-                        ? undefined
-                        : rawCachedContext
 
                 const result = await this.compactFn(
                     expandUserSkillEntries(input.entries, prepared.skills),
@@ -2347,6 +2376,7 @@ export class CLIProxyAPIAgentService implements AgentService {
                     model: request.model,
                     systemPrompt: request.systemPrompt,
                     enhancedSystemPrompt: request.enhancedSystemPrompt,
+                    enhancementModelIds: request.prepared.systemPromptEnhancement?.appliedModelIds ?? undefined,
                     developerPrompt: request.developerPrompt,
                     tools: request.tools as AgentTool[],
                     requestApproval: false,
@@ -2485,7 +2515,8 @@ export class CLIProxyAPIAgentService implements AgentService {
     private getValidCachedContext(
         sessionId: string,
         expectedNamespace: string,
-        expectedProviderId?: string,
+        expectedProviderId: string | undefined,
+        expectedEnhancedPrompt: string | undefined,
     ): CachedCompactionContext | undefined {
         const nowTime = this.now()
         this.pruneSessionCachedContexts(nowTime)
@@ -2493,7 +2524,9 @@ export class CLIProxyAPIAgentService implements AgentService {
         if (!record) return undefined
         if (
             record.namespace !== expectedNamespace ||
-            record.protocolProviderId !== expectedProviderId
+            record.protocolProviderId !== expectedProviderId ||
+            record.enhancedSystemPrompt !== expectedEnhancedPrompt ||
+            (expectedEnhancedPrompt !== undefined && record.context.systemPrompt !== expectedEnhancedPrompt)
         ) {
             this.sessionCachedContexts.delete(sessionId)
             return undefined
@@ -3031,9 +3064,13 @@ export class CLIProxyAPIAgentService implements AgentService {
             signal,
         } = params
 
-        const existing = await this.resolvePersistedEnhancedPrompt(sessionId, signal)
-        if (existing) {
-            return { systemPrompt: existing, isEnhanced: true }
+        const enhancement = prepared.systemPromptEnhancement
+        const appliesToModel = isEnhancementAppliedToModel(enhancement, prepared.model.id)
+        if (appliesToModel) {
+            const existing = await this.resolvePersistedEnhancedPrompt(sessionId, signal)
+            if (existing) {
+                return { systemPrompt: existing, isEnhanced: true }
+            }
         }
         if (signal.aborted) {
             throw new AgentPreflightError(
@@ -3043,8 +3080,7 @@ export class CLIProxyAPIAgentService implements AgentService {
             )
         }
 
-        const enhancement = prepared.systemPromptEnhancement
-        if (!enhancement?.enabled) {
+        if (!appliesToModel || !enhancement?.enabled) {
             let fallback = augmentSystemPromptForSessionTitle(prepared.systemPrompt)
             if (additionalContexts.length > 0) {
                 fallback += '\n\n' + additionalContexts.join('\n\n')
