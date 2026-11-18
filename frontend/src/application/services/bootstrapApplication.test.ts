@@ -74,7 +74,78 @@ describe('bootstrapApplication', () => {
         expect(useMessageStore.getState().getEntries(id)).toHaveLength(2)
     })
 
-    it('does not erase a newer run event with a slow stale active-runs response', async () => {
+    it('restores prompt building from the initial snapshot and clears it on reconnect without stream events', async () => {
+        vi.spyOn(Date, 'now').mockReturnValue(10000)
+        localStorage.clear()
+        useSessionStore.setState({ sessions: [], currentSessionId: null })
+        useSessionRunStore.setState({ activeRuns: {} })
+        const run = { sessionId: 'building-reconnect', runId: 'run-building', clientId: 'desktop-main',
+            status: 'building-system-prompt', updatedAt: Date.now() }
+        const SessionGetActiveRuns = vi.fn().mockResolvedValueOnce([run]).mockResolvedValue([])
+        let reconnect!: () => void
+        setHostBridge({
+            StorageGet: vi.fn().mockResolvedValue(null), StorageSet: vi.fn(),
+            PluginsScan: vi.fn().mockResolvedValue([]), SessionGetActiveRuns,
+            onReconnect: (listener: () => void) => { reconnect = listener; return () => {} },
+        } as any)
+
+        await bootstrapApplication()
+        expect(useSessionRunStore.getState().activeRuns['building-reconnect']).toEqual(run)
+        reconnect()
+        await vi.waitFor(() => expect(useSessionRunStore.getState().activeRuns['building-reconnect']).toBeUndefined())
+    })
+
+    it.each(['thinking', 'idle'] as const)('restores prompt building when an unrelated %s event arrives during snapshot fetch', async (status) => {
+        useSessionRunStore.setState({ activeRuns: {} })
+        let resolveRuns!: (runs: unknown[]) => void
+        setHostBridge({ SessionGetActiveRuns: () => new Promise(resolve => { resolveRuns = resolve }) } as any)
+        const sync = resyncFromMain()
+        useSessionRunStore.getState().setRun('other-live', {
+            sessionId: 'other-live', runId: 'live-run', clientId: 'host', status, updatedAt: Date.now(),
+        })
+        resolveRuns([{ sessionId: 'building-snapshot', runId: 'run-building', clientId: 'host',
+            status: 'building-system-prompt', updatedAt: Date.now() }])
+        await sync
+
+        expect(useSessionRunStore.getState().activeRuns['building-snapshot']?.status).toBe('building-system-prompt')
+        expect(useSessionRunStore.getState().activeRuns['other-live']?.status).toBe(status === 'idle' ? undefined : status)
+    })
+
+    it.each(['running', 'idle'] as const)('does not resurrect a prompt build superseded by live %s during snapshot fetch', async (status) => {
+        useSessionRunStore.setState({ activeRuns: {} })
+        let resolveRuns!: (runs: unknown[]) => void
+        setHostBridge({ SessionGetActiveRuns: () => new Promise(resolve => { resolveRuns = resolve }) } as any)
+        const run = { sessionId: 'building-race', runId: 'run-building', clientId: 'host', updatedAt: Date.now() }
+        useSessionRunStore.getState().setRun(run.sessionId, { ...run, status: 'building-system-prompt' })
+        const sync = resyncFromMain()
+        useSessionRunStore.getState().setRun(run.sessionId, { ...run, status })
+        resolveRuns([{ ...run, status: 'building-system-prompt' }])
+        await sync
+
+        expect(useSessionRunStore.getState().activeRuns[run.sessionId]?.status).toBe(status === 'idle' ? undefined : status)
+    })
+
+    it.each([false, true])('does not resurrect a prompt build completed before initial hydration (observed start: %s)', async (observedStart) => {
+        useSessionRunStore.setState({ activeRuns: {} })
+        let resolveRuns!: (runs: unknown[]) => void
+        setHostBridge({ SessionGetActiveRuns: () => new Promise(resolve => { resolveRuns = resolve }) } as any)
+        const sync = resyncFromMain()
+        const run = { sessionId: 'initial-building-race', runId: 'run-building', clientId: 'host', updatedAt: Date.now() }
+        if (observedStart) {
+            useSessionRunStore.getState().setRun(run.sessionId, { ...run, status: 'building-system-prompt' })
+        }
+        useSessionRunStore.getState().setRun(run.sessionId, { ...run, status: 'idle' })
+        useSessionRunStore.getState().setRun('other-live', {
+            sessionId: 'other-live', runId: 'other-run', clientId: 'host', status: 'thinking', updatedAt: Date.now(),
+        })
+        resolveRuns([{ ...run, status: 'building-system-prompt' }])
+        await expect(sync).resolves.toBe(false)
+
+        expect(useSessionRunStore.getState().activeRuns[run.sessionId]).toBeUndefined()
+        expect(useSessionRunStore.getState().activeRuns['other-live']?.runId).toBe('other-run')
+    })
+
+    it.each(['running', 'building-system-prompt'] as const)('does not erase a newer %s event with a slow stale active-runs response', async (status) => {
         let resolveRuns!: (runs: unknown[]) => void
         let now = 10000
         vi.spyOn(Date, 'now').mockImplementation(() => now)
@@ -82,7 +153,7 @@ describe('bootstrapApplication', () => {
         setHostBridge({ SessionGetActiveRuns: vi.fn(() => new Promise(resolve => { resolveRuns = resolve })) } as any)
         const sync = resyncFromMain()
         useSessionRunStore.getState().setRun('audit', {
-            sessionId: 'audit', status: 'running', runId: 'new-run', clientId: 'host', updatedAt: now,
+            sessionId: 'audit', status, runId: 'new-run', clientId: 'host', updatedAt: now,
         })
         now += 3000
         resolveRuns([])

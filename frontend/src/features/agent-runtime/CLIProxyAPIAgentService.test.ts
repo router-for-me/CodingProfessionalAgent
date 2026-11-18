@@ -5882,6 +5882,9 @@ function createWorktreePrepareInput(
 
             // Turn 1 streamChat triggers 1 build call + 1 main call
             const u1 = userEntry('u1', 'Hello', 's-wt')
+            const buildProgress = vi.fn((active: boolean) => {
+                expect(fakeClient.calls).toHaveLength(active ? 0 : 1)
+            })
             await collect(
                 service.streamChat({
                     prepared: preparedWt,
@@ -5889,9 +5892,11 @@ function createWorktreePrepareInput(
                     runId: 'r1',
                     entries: [],
                     userEntry: u1,
+                    onSystemPromptBuildChange: buildProgress,
                 }),
             )
 
+            expect(buildProgress.mock.calls).toEqual([[true], [false]])
             expect(fakeClient.calls).toHaveLength(2)
             expect(fakeClient.calls[0]?.model.id).toBe('builder-model')
             const expectedLockedPrompt =
@@ -5911,6 +5916,7 @@ function createWorktreePrepareInput(
                 sessionId: 's-wt',
                 systemPromptEnhancement: { ...enhancement, enabled: false },
             })
+            buildProgress.mockClear()
             await collect(
                 service.streamChat({
                     prepared: preparedTurn2,
@@ -5918,9 +5924,11 @@ function createWorktreePrepareInput(
                     runId: 'r2',
                     entries: [u1],
                     userEntry: userEntry('u2', 'Next turn', 's-wt'),
+                    onSystemPromptBuildChange: buildProgress,
                 }),
             )
 
+            expect(buildProgress).not.toHaveBeenCalled()
             expect(fakeClient.calls).toHaveLength(3)
             expect(fakeClient.calls[2]?.systemPrompt).toBe(expectedLockedPrompt)
 
@@ -5933,6 +5941,37 @@ function createWorktreePrepareInput(
             })
             expect(compactMock).toHaveBeenCalledTimes(1)
             expect(compactMock.mock.calls[0]?.[1]?.sessionSystemPrompt).toBe(expectedLockedPrompt)
+        })
+
+        it('ends prompt build progress when the run is cancelled before the main request', async () => {
+            const { service, fakeClient } = createService()
+            fakeClient.queue({ kind: 'throw', error: new Error('builder unavailable') })
+            const sessionId = 's-build-cancel'
+            const runId = 'r-build-cancel'
+            const prepared = await service.prepare({
+                baseUrl: 'http://127.0.0.1:8317',
+                apiKey: 'sk-test',
+                modelId: modelBase.id,
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                sessionId,
+                systemPromptEnhancement: {
+                    enabled: true,
+                    multilingualEnabled: false,
+                    allowedLanguages: ['en'],
+                    modelId: '',
+                },
+            })
+            const progress = vi.fn((active: boolean) => {
+                if (active) queueMicrotask(() => service.abort(runId))
+            })
+            await expect(collect(service.streamChat({
+                prepared, sessionId, runId, entries: [],
+                userEntry: userEntry('u-cancel', 'Hello', sessionId),
+                onSystemPromptBuildChange: progress,
+            }))).rejects.toMatchObject({ code: 'aborted' })
+            expect(progress.mock.calls).toEqual([[true], [false]])
         })
 
         it('throws AgentPreflightError(system_prompt_enhancement_no_model) in prepareRun when enhancement is enabled and no enabled model exists', async () => {
@@ -6537,12 +6576,18 @@ function createWorktreePrepareInput(
             })
 
             const u1 = userEntry('u1', 'Old turn', 's-preexisting')
+            const progress = vi.fn((active: boolean) => {
+                expect(fakeClient.calls).toHaveLength(active ? 0 : 1)
+                expect(compactMock).not.toHaveBeenCalled()
+            })
             await service.compact({
                 prepared,
                 sessionId: 's-preexisting',
                 runId: 'r-cmp-hook',
                 entries: [u1],
+                onSystemPromptBuildChange: progress,
             })
+            expect(progress.mock.calls).toEqual([[true], [false]])
 
             // Builder call received SessionStart additionalContexts and dynamic title tool requirement
             expect(fakeClient.calls).toHaveLength(1)

@@ -986,6 +986,7 @@
   "turn.expandHistory": "展开工具记录",
   "turn.collapseHistory": "收起工具记录",
   "run.loadingResources": "正在加载资源…",
+  "run.buildingSystemPrompt": "正在构建增强性系统提示词",
   "run.compacting": "正在压缩上下文…",
   "run.connecting": "正在连接…",
   "run.retrying": "正在重试…",

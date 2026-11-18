@@ -191,7 +191,7 @@ describe('browserBridge', () => {
         client.dispose()
     })
 
-    it('handles hello message and attaches clientId in SessionBroadcastRunStatus', async () => {
+    it.each(['running', 'building-system-prompt', 'error'] as const)('attaches the hello clientId when broadcasting %s', async (status) => {
         const client = new BrowserBridgeClient()
         const bridge = createBrowserBridge(client)
 
@@ -210,7 +210,7 @@ describe('browserBridge', () => {
         // Call SessionBroadcastRunStatus without explicit clientId
         const broadcastPromise = bridge.SessionBroadcastRunStatus(
             'sess-test',
-            'running',
+            status,
             'run-test',
             '',
         )
@@ -219,7 +219,7 @@ describe('browserBridge', () => {
         expect(sentData.method).toBe('session:broadcastRunStatus')
         expect(sentData.args).toEqual([
             'sess-test',
-            'running',
+            status,
             'run-test',
             'client_ws_42_12345678',
         ])
@@ -233,6 +233,26 @@ describe('browserBridge', () => {
         })
 
         await broadcastPromise
+        client.dispose()
+    })
+
+    it('returns an existing prompt-build snapshot without requiring a stream event', async () => {
+        const client = new BrowserBridgeClient()
+        const bridge = createBrowserBridge(client)
+        const call = bridge.SessionGetActiveRuns()
+        const request = JSON.parse(lastCreatedWs!.send.mock.calls[0][0])
+        expect(request.method).toBe('session:getActiveRuns')
+        expect(request.args).toEqual([])
+
+        lastCreatedWs!.onmessage?.({ data: JSON.stringify({ type: 'rpc_result', id: request.id, result: [{
+            sessionId: 'building-session', runId: 'building-run', clientId: 'desktop-main',
+            status: 'building-system-prompt', updatedAt: 1234,
+        }] }) })
+
+        await expect(call).resolves.toEqual([{
+            sessionId: 'building-session', runId: 'building-run', clientId: 'desktop-main',
+            status: 'building-system-prompt', updatedAt: 1234,
+        }])
         client.dispose()
     })
 

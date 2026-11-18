@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '@/i18n'
 import { HostServicesProvider } from '@cpa/plugin-ui'
@@ -84,6 +84,42 @@ describe('ChatView', () => {
         expect(screen.getByTestId('message-list-scroller')).toBeInTheDocument()
         expect(mockServices.sessions.setCurrentSessionId).toHaveBeenCalledWith('test-session-1')
         expect(mockServices.chatMessages.ensureSessionLoaded).toHaveBeenCalledWith('test-session-1')
+    })
+
+    it('subscribes to actual prompt building and clears the status without writing history', () => {
+        let building = false
+        const listeners = new Set<() => void>()
+        mockServices.chatMessages.isBuildingSystemPrompt = () => building
+        mockServices.chatMessages.subscribeSystemPromptBuild = (_sessionId: string, listener: () => void) => {
+            listeners.add(listener)
+            return () => listeners.delete(listener)
+        }
+        mockAgentRunState = { isStreaming: true, activeRunId: 'run-1' }
+        const { unmount } = render(
+            <HostServicesProvider services={mockServices}>
+                <ChatView sessionId="test-session-1" />
+            </HostServicesProvider>,
+        )
+        expect(screen.queryByTestId('system-prompt-build-status')).not.toBeInTheDocument()
+
+        act(() => {
+            building = true
+            listeners.forEach((listener) => listener())
+        })
+        expect(screen.getByRole('status')).toHaveTextContent('Building enhanced system prompt')
+        expect(screen.queryByTestId('tool-activity')).not.toBeInTheDocument()
+
+        act(() => {
+            building = false
+            listeners.forEach((listener) => listener())
+        })
+        expect(screen.queryByTestId('system-prompt-build-status')).not.toBeInTheDocument()
+        expect(mockMessages).toEqual([])
+        expect(mockEntries).toEqual([])
+        expect(mockServices.chatMessages.replaceSessionEntries).not.toHaveBeenCalled()
+        expect(mockServices.chatMessages.schedulePersist).not.toHaveBeenCalled()
+        unmount()
+        expect(listeners.size).toBe(0)
     })
 
     it('reflects active running status from agent run state', () => {

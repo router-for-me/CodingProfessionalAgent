@@ -133,6 +133,34 @@ describe('Session Sync IPC & Broadcast', () => {
         expect(activeRuns[0]?.status).toBe('running')
     })
 
+    it('retains prompt building in the main snapshot and keeps its lifecycle active', async () => {
+        await invokeRpc('session:broadcastRunStatus', 'sess-building', 'building-system-prompt', 'run-building', 'spoofed-client')
+
+        const runs = await invokeRpc('session:getActiveRuns')
+        expect(runs).toEqual([{
+            sessionId: 'sess-building', runId: 'run-building', clientId: 'desktop-main',
+            status: 'building-system-prompt', updatedAt: expect.any(Number),
+        }])
+        const event = sentEvents.find((item) => item.kind === 'session:run-status')
+        expect(JSON.parse(event!.data!)).toEqual((runs as unknown[])[0])
+        expect(services.powerSaveService.getActiveSessionCount()).toBe(1)
+
+        const server = await services.webServerService.start({ host: '127.0.0.1', port: 0 })
+        const response = await fetch(`http://127.0.0.1:${server.port}/api/rpc`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: 'late-web-reader', method: 'SessionGetActiveRuns', args: [] }),
+        })
+        expect(response.status).toBe(200)
+        expect((await response.json()).result).toEqual(runs)
+
+        await invokeRpc('session:broadcastRunStatus', 'sess-building', 'running', 'run-building', '')
+        expect(services.powerSaveService.getActiveSessionCount()).toBe(1)
+        await invokeRpc('session:broadcastRunStatus', 'sess-building', 'idle', 'run-building', '')
+        expect(await invokeRpc('session:getActiveRuns')).toEqual([])
+        expect(services.powerSaveService.getActiveSessionCount()).toBe(0)
+    })
+
     it('handles session:broadcastRunStatus and session:getActiveRuns via IPC', async () => {
         expect(ipcHandlers.has('session:broadcastRunStatus')).toBe(false)
         expect(ipcHandlers.has('cpa:capability:invoke')).toBe(true)
@@ -204,7 +232,7 @@ describe('Session Sync IPC & Broadcast', () => {
         ])
     })
 
-    it('attaches main window listeners, cleans up runs, and reloads a crashed renderer', () => {
+    it.each(['running', 'building-system-prompt'] as const)('cleans up %s runs and reloads a crashed renderer', (status) => {
         let destroyedHandler: (() => void) | undefined
         let goneHandler: ((event: unknown, details: { reason: string }) => void) | undefined
         const mockWin: any = {
@@ -230,26 +258,30 @@ describe('Session Sync IPC & Broadcast', () => {
             sessionId: 'sess-desktop',
             runId: 'run-desktop',
             clientId: 'desktop-main',
-            status: 'running',
+            status,
         })
         expect(services.sessionRunRegistry.getActiveRuns()).toHaveLength(1)
+        expect(services.powerSaveService.getActiveSessionCount()).toBe(1)
 
         // Trigger destroyed
         destroyedHandler?.()
         expect(services.sessionRunRegistry.getActiveRuns()).toHaveLength(0)
+        expect(services.powerSaveService.getActiveSessionCount()).toBe(0)
 
         // Register desktop-main run again and test render-process-gone
         services.sessionRunRegistry.registerOrUpdate({
             sessionId: 'sess-desktop-2',
             runId: 'run-desktop-2',
             clientId: 'desktop-main',
-            status: 'running',
+            status,
         })
         expect(services.sessionRunRegistry.getActiveRuns()).toHaveLength(1)
+        expect(services.powerSaveService.getActiveSessionCount()).toBe(1)
 
         // Trigger render-process-gone
         goneHandler?.({}, { reason: 'crashed' })
         expect(services.sessionRunRegistry.getActiveRuns()).toHaveLength(0)
+        expect(services.powerSaveService.getActiveSessionCount()).toBe(0)
         expect(mockWin.webContents.reload).toHaveBeenCalledTimes(1)
     })
 

@@ -165,6 +165,33 @@ describe('sessionRunStore', () => {
         expect(runs['sess-stale-unlisted']).toBeUndefined()
     })
 
+    it('removes an unlisted prompt build immediately while retaining other recent statuses', () => {
+        const now = Date.now()
+        for (const status of ['building-system-prompt', 'running', 'thinking', 'tool', 'error'] as const) {
+            useSessionRunStore.getState().setRun(status, {
+                sessionId: status, runId: `run-${status}`, clientId: 'host', status, updatedAt: now,
+            })
+        }
+
+        useSessionRunStore.getState().hydrate([])
+
+        expect(useSessionRunStore.getState().activeRuns['building-system-prompt']).toBeUndefined()
+        for (const status of ['running', 'thinking', 'tool', 'error']) {
+            expect(useSessionRunStore.getState().activeRuns[status]?.status).toBe(status)
+        }
+    })
+
+    it.each([
+        ['building-system-prompt', 'running'],
+        ['running', 'building-system-prompt'],
+    ] as const)('reconciles %s to authoritative %s despite an earlier host timestamp', (localStatus, remoteStatus) => {
+        const run = { sessionId: 'building-clock', runId: 'run-building', clientId: 'host', updatedAt: Date.now() }
+        useSessionRunStore.getState().setRun(run.sessionId, { ...run, status: localStatus })
+        useSessionRunStore.getState().hydrate([{ ...run, status: remoteStatus, updatedAt: run.updatedAt - 1000 }])
+
+        expect(useSessionRunStore.getState().activeRuns[run.sessionId]?.status).toBe(remoteStatus)
+    })
+
     it('marks non-current session as unread (normal) when completed normally', () => {
         useSessionStore.setState({
             sessions: [

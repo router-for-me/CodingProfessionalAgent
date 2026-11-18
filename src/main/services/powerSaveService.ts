@@ -75,7 +75,7 @@ export class PowerSaveService {
 
   /**
    * Updates session run status and adjusts sleep blocker accordingly.
-   * Active statuses: 'running' | 'thinking' | 'tool'.
+   * Active statuses: 'running' | 'thinking' | 'tool' | 'building-system-prompt'.
    * Inactive statuses: 'idle' | 'error' | 'aborted'.
    */
   public handleRunStatus(sessionId: string, status: string, clientId = 'desktop-main'): void {
@@ -83,7 +83,7 @@ export class PowerSaveService {
       return
     }
 
-    if (status === 'running' || status === 'thinking' || status === 'tool') {
+    if (status === 'running' || status === 'thinking' || status === 'tool' || status === 'building-system-prompt') {
       this.activeSessions.set(sessionId, clientId)
     } else if (status === 'idle' || status === 'error' || status === 'aborted') {
       this.activeSessions.delete(sessionId)

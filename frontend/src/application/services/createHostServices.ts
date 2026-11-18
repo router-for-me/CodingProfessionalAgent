@@ -80,6 +80,7 @@ import {
 } from '@/stores/messageStore'
 import { useToolOverlayStore } from '@/stores/toolOverlayStore'
 import { useCompactionOverlayStore } from '@/stores/compactionOverlayStore'
+import { useSystemPromptBuildStore } from '@/stores/systemPromptBuildStore'
 import { useProjectStore } from '@/stores/projectStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useUiStore } from '@/stores/uiStore'
@@ -2021,6 +2022,27 @@ export function createHostServices(options: CreateHostServicesOptions = {}): Hos
             return useCompactionOverlayStore.subscribe(() => {
                 listener()
             })
+        },
+        isBuildingSystemPrompt(sessionId: string): boolean {
+            const local = useSystemPromptBuildStore.getState().bySession.get(sessionId)
+            const remote = useSessionRunStore.getState().activeRuns[sessionId]
+            if (local?.active || (local && local.runId === remote?.runId)) return local.active
+            return remote?.status === 'building-system-prompt'
+        },
+        subscribeSystemPromptBuild(sessionId: string, listener: () => void): () => void {
+            const unsubscribeLocal = useSystemPromptBuildStore.subscribe((state, previous) => {
+                if (state.bySession.get(sessionId) !== previous.bySession.get(sessionId)) listener()
+            })
+            const unsubscribeRuns = useSessionRunStore.subscribe((state, previous) => {
+                const current = state.activeRuns[sessionId]
+                const old = previous.activeRuns[sessionId]
+                if (current !== old && (current?.status === 'building-system-prompt' ||
+                    old?.status === 'building-system-prompt')) listener()
+            })
+            return () => {
+                unsubscribeLocal()
+                unsubscribeRuns()
+            }
         },
         getWorktreeSetup(sessionId: string): any {
             return useWorktreeSetupStore.getState().setups[sessionId]

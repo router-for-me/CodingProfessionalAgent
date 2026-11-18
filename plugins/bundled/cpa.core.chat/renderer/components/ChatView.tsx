@@ -7,6 +7,7 @@ import {
     useChatMessageService,
     useDisplayMessages,
     useHostServices,
+    useIsBuildingSystemPrompt,
     useIsCompacting,
     useSessions,
     useToolOverlays,
@@ -50,6 +51,7 @@ export function ChatView(props: ChatViewProps) {
     const messages = useDisplayMessages(sessionId)
     const toolOverlays = useToolOverlays(sessionId)
     const isCompacting = useIsCompacting(sessionId)
+    const isBuildingSystemPrompt = useIsBuildingSystemPrompt(sessionId)
     const worktreeSetup = useWorktreeSetup(sessionId)
     const agentRunState = useAgentRunState(sessionId)
     const activeRun = useActiveRun(sessionId)
@@ -335,6 +337,7 @@ export function ChatView(props: ChatViewProps) {
                     isRunActive={isRunActive || isRestartingWorktree}
                     activeTurnStartedAt={worktreeRestart?.startedAt}
                     isCompacting={isCompacting}
+                    isBuildingSystemPrompt={isBuildingSystemPrompt}
                     contentTestId="message-list-content"
                 />
             </div>

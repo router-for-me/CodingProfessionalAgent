@@ -378,6 +378,26 @@ export function useIsCompacting(sessionId: string): boolean {
     return useSyncExternalStore(subscribe, getSnapshot, () => false)
 }
 
+export function useIsBuildingSystemPrompt(sessionId: string): boolean {
+    const chatService = useChatMessageService()
+    const subscribe = useCallback(
+        (callback: () => void) => {
+            if (sessionId && chatService?.subscribeSystemPromptBuild) {
+                return chatService.subscribeSystemPromptBuild(sessionId, callback)
+            }
+            return () => {}
+        },
+        [chatService, sessionId],
+    )
+    const getSnapshot = useCallback(() => {
+        return chatService && sessionId && chatService.isBuildingSystemPrompt
+            ? chatService.isBuildingSystemPrompt(sessionId)
+            : false
+    }, [chatService, sessionId])
+
+    return useSyncExternalStore(subscribe, getSnapshot, () => false)
+}
+
 export function useWorktreeSetup(sessionId: string): any {
     const chatService = useChatMessageService()
     const subscribe = useCallback(

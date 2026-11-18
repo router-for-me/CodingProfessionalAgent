@@ -1,5 +1,5 @@
 import { definePluginEntry } from '@cpa/plugin-sdk'
-import type { PluginContext, RpcDescriptor, ServiceDescriptor } from '@cpa/plugin-api'
+import type { AgentRunStatus, PluginContext, RpcDescriptor, ServiceDescriptor } from '@cpa/plugin-api'
 import { SessionService, type SessionServiceOptions } from './sessionService.js'
 import { SessionRunRegistry } from './sessionRunRegistry.js'
 import type {
@@ -172,7 +172,7 @@ export const sessionManagerMainEntry = definePluginEntry({
                 invoke: async (rpcCtx, args) => {
                     return sessionRunRegistry.registerOrUpdate({
                         sessionId: args[0] as string,
-                        status: args[1] as 'running' | 'thinking' | 'tool' | 'idle',
+                        status: args[1] as AgentRunStatus,
                         runId: args[2] as string,
                         clientId: rpcCtx.clientId || (args[3] as string) || 'desktop-main',
                     })

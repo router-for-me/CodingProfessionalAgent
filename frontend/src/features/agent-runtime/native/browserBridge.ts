@@ -4,7 +4,7 @@ import {
     requireAuthenticatedResponse,
     WebAuthenticationRequiredError,
 } from '@/features/web-auth/webAuthClient'
-import { deserializeCapabilityError } from '@cpa/plugin-api'
+import { deserializeCapabilityError, type AgentRunStatus } from '@cpa/plugin-api'
 import {
     createHostCapabilityFacade,
     type HostTransportApi,
@@ -602,7 +602,7 @@ export function createBrowserBridge(client?: BrowserBridgeClient): ElectronBridg
         getProfilingReport: async () => {
             return fetch('/api/profile/report').then((r) => readWebApiJson(r))
         },
-        SessionBroadcastRunStatus: (sessionId: string, status: 'running' | 'thinking' | 'tool' | 'idle', runId: string, clientId: string) =>
+        SessionBroadcastRunStatus: (sessionId: string, status: AgentRunStatus, runId: string, clientId: string) =>
             c.invoke(c.getClientId(), 'session:broadcastRunStatus', [sessionId, status, runId, clientId || c.getClientId()]) as Promise<void>,
     }
 

@@ -988,6 +988,7 @@
   "turn.expandHistory": "Show tool history",
   "turn.collapseHistory": "Hide tool history",
   "run.loadingResources": "Loading resources…",
+  "run.buildingSystemPrompt": "Building enhanced system prompt",
   "run.compacting": "Compacting context…",
   "run.connecting": "Connecting…",
   "run.retrying": "Retrying…",

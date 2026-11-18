@@ -42,6 +42,37 @@ describe('PowerSaveService', () => {
     expect(mockBlocker.start).toHaveBeenCalledWith('prevent-app-suspension')
   })
 
+    it.each(['idle', 'error', 'aborted'])('keeps prompt building active until %s', (terminalStatus) => {
+        const service = new PowerSaveService({ blocker: mockBlocker })
+
+        service.handleRunStatus('building-session', 'building-system-prompt', 'desktop-main')
+        expect(service.getActiveSessionCount()).toBe(1)
+        expect(service.isBlockerActive()).toBe(true)
+
+        service.handleRunStatus('building-session', 'running', 'desktop-main')
+        service.handleRunStatus('building-session', 'building-system-prompt', 'desktop-main')
+        expect(service.getActiveSessionCount()).toBe(1)
+        expect(mockBlocker.start).toHaveBeenCalledTimes(1)
+
+        service.handleRunStatus('building-session', terminalStatus, 'desktop-main')
+        expect(service.getActiveSessionCount()).toBe(0)
+        expect(service.isBlockerActive()).toBe(false)
+    })
+
+    it('cleans up the prompt builder without releasing another client task', () => {
+        const service = new PowerSaveService({ blocker: mockBlocker })
+        service.handleRunStatus('building-session', 'building-system-prompt', 'desktop-main')
+        service.handleRunStatus('web-session', 'building-system-prompt', 'web-client')
+
+        service.cleanupClient('desktop-main')
+        expect(service.getActiveSessionCount()).toBe(1)
+        expect(service.isBlockerActive()).toBe(true)
+
+        service.cleanupClient('web-client')
+        expect(service.getActiveSessionCount()).toBe(0)
+        expect(service.isBlockerActive()).toBe(false)
+    })
+
   it('supports thinking and tool statuses as active tasks', () => {
     const service = new PowerSaveService({ blocker: mockBlocker, preventSleepEnabled: true })
 

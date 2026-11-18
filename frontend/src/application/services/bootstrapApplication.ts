@@ -151,27 +151,37 @@ export async function resyncFromMain(
     let runsKnown = false
     if (typeof bridge?.SessionGetActiveRuns === 'function') {
         const runsAtRequest = useSessionRunStore.getState().activeRuns
+        const changedIds = new Set<string>()
+        const stopTracking = useSessionRunStore.subscribe((state, previous) => {
+            if (state.lastRemoval && state.lastRemoval !== previous.lastRemoval) {
+                changedIds.add(state.lastRemoval.sessionId)
+            }
+            if (state.activeRuns === previous.activeRuns) return
+            const ids = Object.keys({ ...previous.activeRuns, ...state.activeRuns })
+            for (const id of ids) {
+                if (state.activeRuns[id] !== previous.activeRuns[id]) changedIds.add(id)
+            }
+        })
         try {
             const runs = await bridge.SessionGetActiveRuns()
+            stopTracking()
             if (!stillActive()) {
                 onRunsReady?.(false)
                 return false
             }
             const currentRuns = useSessionRunStore.getState().activeRuns
-            if (Array.isArray(runs) && (targetSessionId
-                ? currentRuns[targetSessionId] === runsAtRequest[targetSessionId]
-                : currentRuns === runsAtRequest)) {
-                const changedIds = Object.keys({ ...runsAtRequest, ...currentRuns })
-                    .filter((id) => id !== targetSessionId && currentRuns[id] !== runsAtRequest[id])
-                const freshRuns = runs.filter((run: ActiveRunInfo) => !changedIds.includes(run.sessionId))
+            if (Array.isArray(runs) && (!targetSessionId || !changedIds.has(targetSessionId))) {
+                const freshRuns = runs.filter((run: ActiveRunInfo) => !changedIds.has(run.sessionId))
                 for (const id of changedIds) {
                     if (currentRuns[id]) freshRuns.push(currentRuns[id])
                 }
                 useSessionRunStore.getState().hydrate(freshRuns)
-                runsKnown = true
+                runsKnown = Boolean(targetSessionId) || currentRuns === runsAtRequest
             }
         } catch (err) {
             console.error('Failed to resync active runs from main:', err)
+        } finally {
+            stopTracking()
         }
     }
     onRunsReady?.(runsKnown)

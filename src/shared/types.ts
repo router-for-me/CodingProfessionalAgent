@@ -427,7 +427,7 @@ export interface ActiveRunInfo {
   sessionId: string
   runId: string
   clientId: string
-  status: 'running' | 'thinking' | 'tool' | 'idle' | 'error'
+  status: AgentRunStatus
   error?: string
   updatedAt: number
 }
@@ -721,7 +721,7 @@ export interface ElectronBridgeApi {
   SessionSetMeta(session: Partial<SessionItem> & { id: string }): Promise<void>
   SessionBroadcastRunStatus(
     sessionId: string,
-    status: 'running' | 'thinking' | 'tool' | 'idle',
+    status: AgentRunStatus,
     runId: string,
     clientId: string,
   ): Promise<void>

@@ -6,6 +6,8 @@ export type SessionRunState = ActiveRunInfo
 
 export interface SessionRunStoreState {
     activeRuns: Record<string, SessionRunState>
+    /** Identifies an idle update even when the session was not in activeRuns. */
+    lastRemoval?: { sessionId: string }
     setRun: (sessionId: string, state: SessionRunState) => void
     clearRun: (sessionId: string) => void
     hydrate: (runs: SessionRunState[]) => void
@@ -33,7 +35,7 @@ export const useSessionRunStore = create<SessionRunStoreState>((set, get) => ({
             set((state) => {
                 const next = { ...state.activeRuns }
                 delete next[sessionId]
-                return { activeRuns: next }
+                return { activeRuns: next, lastRemoval: { sessionId } }
             })
         } else if (runState.status === 'error') {
             if (!isViewing) {
@@ -58,7 +60,7 @@ export const useSessionRunStore = create<SessionRunStoreState>((set, get) => ({
         set((state) => {
             const next = { ...state.activeRuns }
             delete next[sessionId]
-            return { activeRuns: next }
+            return { activeRuns: next, lastRemoval: { sessionId } }
         })
     },
     hydrate: (runs) => {
@@ -67,17 +69,21 @@ export const useSessionRunStore = create<SessionRunStoreState>((set, get) => ({
             for (const run of runs) {
                 if (run && run.sessionId && run.status !== 'idle') {
                     const existing = map[run.sessionId]
-                    if (!existing || (run.updatedAt && run.updatedAt >= (existing.updatedAt || 0))) {
+                    // Bootstrap excludes runs changed during the fetch; prompt-build snapshots are authoritative.
+                    if (!existing || run.status === 'building-system-prompt' ||
+                        existing.status === 'building-system-prompt' ||
+                        (run.updatedAt && run.updatedAt >= (existing.updatedAt || 0))) {
                         map[run.sessionId] = run
                     }
                 }
             }
-            // Remove any activeRuns not present in the remote active runs list unless updated recently (within 2s)
+            // Prompt builds absent from the snapshot ended; preserve the 2s grace period for other statuses.
             const remoteIds = new Set(runs.map((r) => r?.sessionId).filter(Boolean))
             for (const id of Object.keys(map)) {
                 if (!remoteIds.has(id)) {
                     const existing = map[id]
-                    if (!existing || Date.now() - (existing.updatedAt || 0) > 2000) {
+                    if (!existing || existing.status === 'building-system-prompt' ||
+                        Date.now() - (existing.updatedAt || 0) > 2000) {
                         delete map[id]
                     }
                 }

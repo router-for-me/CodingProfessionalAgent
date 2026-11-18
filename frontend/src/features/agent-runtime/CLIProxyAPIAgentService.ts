@@ -1889,6 +1889,7 @@ export class CLIProxyAPIAgentService implements AgentService {
                     additionalContexts,
                     effectiveTools,
                     signal: controller.signal,
+                    onBuildChange: input.onSystemPromptBuildChange,
                 })
 
             const runInput: AgentRunInput = {
@@ -2126,6 +2127,7 @@ export class CLIProxyAPIAgentService implements AgentService {
                         additionalContexts: promptInputs.additionalContexts,
                         effectiveTools: promptInputs.effectiveTools,
                         signal: controller.signal,
+                        onBuildChange: input.onSystemPromptBuildChange,
                     })
                     persistedSessionPrompt = effectivePrompt.isEnhanced
                         ? effectivePrompt.systemPrompt
@@ -3017,6 +3019,7 @@ export class CLIProxyAPIAgentService implements AgentService {
         additionalContexts: readonly string[]
         effectiveTools: readonly AgentTool[]
         signal: AbortSignal
+        onBuildChange?: (active: boolean) => void
     }): Promise<{ systemPrompt: string; isEnhanced: boolean }> {
         const {
             prepared,
@@ -3066,33 +3069,39 @@ export class CLIProxyAPIAgentService implements AgentService {
             )
         }
 
-        const buildController = new AbortController()
-        const buildPromise = this.synthesizeAndPersistEnhancedPrompt({
-            prepared,
-            sessionId,
-            client,
-            entries,
-            additionalContexts,
-            effectiveTools,
-            signal: buildController.signal,
-        })
-        observePromise(buildPromise)
+        params.onBuildChange?.(true)
+        try {
+            throwIfAborted(signal)
+            const buildController = new AbortController()
+            const buildPromise = this.synthesizeAndPersistEnhancedPrompt({
+                prepared,
+                sessionId,
+                client,
+                entries,
+                additionalContexts,
+                effectiveTools,
+                signal: buildController.signal,
+            })
+            observePromise(buildPromise)
 
-        const entry: InFlightPromptBuild = {
-            promise: buildPromise,
-            controller: buildController,
-            activeWaiters: new Set(),
-        }
-        this.inFlightPromptBuilds.set(sessionId, entry)
-        const cleanup = (): void => {
-            if (this.inFlightPromptBuilds.get(sessionId) === entry) {
-                this.inFlightPromptBuilds.delete(sessionId)
+            const entry: InFlightPromptBuild = {
+                promise: buildPromise,
+                controller: buildController,
+                activeWaiters: new Set(),
             }
-        }
-        void buildPromise.then(cleanup, cleanup)
+            this.inFlightPromptBuilds.set(sessionId, entry)
+            const cleanup = (): void => {
+                if (this.inFlightPromptBuilds.get(sessionId) === entry) {
+                    this.inFlightPromptBuilds.delete(sessionId)
+                }
+            }
+            void buildPromise.then(cleanup, cleanup)
 
-        const built = await this.awaitInFlightPromptBuild(sessionId, entry, signal)
-        return { systemPrompt: built, isEnhanced: true }
+            const built = await this.awaitInFlightPromptBuild(sessionId, entry, signal)
+            return { systemPrompt: built, isEnhanced: true }
+        } finally {
+            params.onBuildChange?.(false)
+        }
     }
 
     private abortChildOps(): void {

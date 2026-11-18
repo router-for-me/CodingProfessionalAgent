@@ -703,7 +703,7 @@ export class ElectronNativeBridge implements NativeBridge {
 
     async SessionBroadcastRunStatus(
         sessionId: string,
-        status: 'running' | 'thinking' | 'tool' | 'idle',
+        status: ActiveRunInfo['status'],
         runId: string,
         clientId: string,
     ): Promise<void> {

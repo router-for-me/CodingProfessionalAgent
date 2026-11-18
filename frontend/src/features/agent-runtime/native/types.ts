@@ -3,6 +3,8 @@
  * Wire events stay string/base64; file APIs expose Uint8Array.
  */
 
+import type { AgentRunStatus } from '@cpa/plugin-api'
+
 export type NativeEventEncoding = 'utf8' | 'base64'
 
 export type NativeEventKind =
@@ -100,7 +102,7 @@ export interface ActiveRunInfo {
     sessionId: string
     runId: string
     clientId: string
-    status: 'running' | 'thinking' | 'tool' | 'idle' | 'error'
+    status: AgentRunStatus
     error?: string
     updatedAt: number
 }
@@ -151,7 +153,7 @@ export interface NativeBridge {
     cancel(operationId: string): Promise<void>
     SessionBroadcastRunStatus(
         sessionId: string,
-        status: 'running' | 'thinking' | 'tool' | 'idle',
+        status: AgentRunStatus,
         runId: string,
         clientId: string,
     ): Promise<void>
@@ -203,7 +205,7 @@ export interface NativeBridgeBindings {
     CancelOperation(operationId: string): Promise<void>
     SessionBroadcastRunStatus(
         sessionId: string,
-        status: 'running' | 'thinking' | 'tool' | 'idle',
+        status: AgentRunStatus,
         runId: string,
         clientId: string,
     ): Promise<void>

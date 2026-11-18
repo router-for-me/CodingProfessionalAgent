@@ -59,7 +59,7 @@ export type PersonalityTone =
 
 export type ActionPlatform = 'darwin' | 'linux' | 'win32'
 
-export type AgentRunStatus = 'running' | 'thinking' | 'tool' | 'idle' | 'error'
+export type AgentRunStatus = 'running' | 'thinking' | 'tool' | 'building-system-prompt' | 'idle' | 'error'
 
 export type ComposerAttachmentKind = 'image' | 'file' | 'folder'
 
@@ -92,7 +92,7 @@ export interface ActiveRunInfo {
   sessionId: string
   runId: string
   clientId: string
-  status: 'running' | 'thinking' | 'tool' | 'idle' | 'error'
+  status: AgentRunStatus
   error?: string
   updatedAt: number
 }
@@ -973,6 +973,8 @@ export interface ChatMessageService {
     subscribeToolOverlays?(sessionId: string, listener: () => void): () => void
     isCompacting?(sessionId: string): boolean
     subscribeCompaction?(sessionId: string, listener: () => void): () => void
+    isBuildingSystemPrompt?(sessionId: string): boolean
+    subscribeSystemPromptBuild?(sessionId: string, listener: () => void): () => void
     getWorktreeSetup?(sessionId: string): any
     subscribeWorktreeSetup?(sessionId: string, listener: () => void): () => void
     retryWorktreeSetup?(sessionId: string): Promise<{ ok: boolean }>

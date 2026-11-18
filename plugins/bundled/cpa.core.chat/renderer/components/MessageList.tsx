@@ -18,6 +18,7 @@ import {
 } from '../utils/groupChatTurns.js'
 import { MessageItem } from './MessageItem.js'
 import { TurnHeader } from './TurnHeader.js'
+import { SystemPromptBuildStatus } from './SystemPromptBuildStatus.js'
 import { hasVisibleTurnContent, trailingAssistantText } from '../utils/toolActivity.js'
 
 const STICK_TO_BOTTOM_PX = 48
@@ -42,6 +43,8 @@ export interface MessageListProps {
   activeTurnStartedAt?: number
   /** True while this session is summarizing context. */
   isCompacting?: boolean
+  /** Ephemeral status while this session builds an enhanced system prompt. */
+  isBuildingSystemPrompt?: boolean
   /** Identity used to reset stick-to-bottom when switching conversations. */
   sessionKey?: string
   worktreeSetup?: WorktreeSessionSetup
@@ -107,6 +110,7 @@ export function MessageList({
   isRunActive = false,
   activeTurnStartedAt,
   isCompacting = false,
+  isBuildingSystemPrompt = false,
   sessionKey,
   worktreeSetup,
   onRetryWorktreeSetup,
@@ -177,7 +181,7 @@ export function MessageList({
     if (!scroller || !pinnedRef.current) return
     scroller.scrollTop = scroller.scrollHeight
     lastKnownScrollTopRef.current = scroller.scrollTop
-  }, [scrollKey])
+  }, [scrollKey, isBuildingSystemPrompt])
 
   useEffect(() => {
     const scroller = scrollerRef.current
@@ -344,6 +348,7 @@ export function MessageList({
           {!compactActivity && isCompacting ? (
             <CompactionDivider pending />
           ) : null}
+          {isBuildingSystemPrompt ? <SystemPromptBuildStatus /> : null}
           </div>
           <div
             ref={floatingInsetRef}

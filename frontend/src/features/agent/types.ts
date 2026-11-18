@@ -171,6 +171,8 @@ export interface AgentStreamChatInput {
     entries: readonly ConversationEntry[]
     userEntry?: UserEntry
     signal?: AbortSignal
+    /** Reports when this run starts or finishes building a new enhanced system prompt. */
+    onSystemPromptBuildChange?: (active: boolean) => void
     /** Optional dynamic runtime settings resolver called before each LLM turn/request */
     getRuntimeSettings?: () => {
         reasoningEffort?: string
@@ -191,6 +193,7 @@ export interface AgentCompactInput {
     entries: readonly ConversationEntry[]
     customInstructions?: string
     signal?: AbortSignal
+    onSystemPromptBuildChange?: (active: boolean) => void
 }
 
 export type AgentCompactResult =

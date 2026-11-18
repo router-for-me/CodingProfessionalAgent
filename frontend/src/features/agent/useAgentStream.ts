@@ -64,6 +64,7 @@ import { useProjectStore } from '@/stores/projectStore'
 import type { Session } from '@/types/models'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useSessionRunStore } from '@/stores/sessionRunStore'
+import { useSystemPromptBuildStore } from '@/stores/systemPromptBuildStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useSubAgentStore } from '@/stores/subAgentStore'
 import { useWorktreeSetupStore } from '@/stores/worktreeSetupStore'
@@ -645,6 +646,7 @@ function bindNativeSync(service: AgentService): void {
                         if (oldest) rt.deletedSessionIds.delete(oldest)
                         else break
                     }
+                    useSystemPromptBuildStore.getState().clearSession(prevId)
                     useUiStore.getState().clearSessionComposerDraft(prevId)
                 }
             }
@@ -1116,6 +1118,7 @@ function handleSessionDeleted(
     bumpSessionActionEpoch(sessionId)
 
     clearForkedSessionPromptState(sessionId)
+    useSystemPromptBuildStore.getState().clearSession(sessionId)
     useSessionStore.getState().removeRemoteSession(sessionId)
     useUiStore.getState().clearSessionComposerDraft(sessionId)
 
@@ -1692,6 +1695,25 @@ function releaseFlight(
     }
 }
 
+function reportSystemPromptBuild(
+    rt: ServiceRuntime,
+    sessionId: string,
+    runId: string,
+    flightToken: number,
+): (active: boolean) => void {
+    return (active) => {
+        const flight = rt.runs.get(sessionId)
+        const isCurrent = flight?.flightToken === flightToken &&
+            !flight.abortController.signal.aborted && !rt.disposed && !rt.deletedSessionIds.has(sessionId)
+        if (!active || isCurrent) useSystemPromptBuildStore.getState().setBuilding(sessionId, runId, active)
+        if (isCurrent) {
+            void getHostBridge()?.SessionBroadcastRunStatus(
+                sessionId, active ? 'building-system-prompt' : 'running', runId, '',
+            )
+        }
+    }
+}
+
 function abortFlightAndCleanup(
     rt: ServiceRuntime,
     service: AgentService,
@@ -1701,6 +1723,7 @@ function abortFlightAndCleanup(
     const runId = flight.runId
     flight.abortController.abort()
     if (runId) {
+        useSystemPromptBuildStore.getState().setBuilding(sessionId, runId, false)
         try {
             service.abort(runId)
         } catch {
@@ -2717,6 +2740,7 @@ export function useAgentStream(
                     entries,
                     customInstructions: focus?.trim() || undefined,
                     signal: ac.signal,
+                    onSystemPromptBuildChange: reportSystemPromptBuild(rt, sessionId, runId, token),
                 })
 
                 for (const event of result.events ?? []) {
@@ -3511,6 +3535,7 @@ export function useAgentStream(
                             entries,
                             userEntry,
                             signal: ac.signal,
+                            onSystemPromptBuildChange: reportSystemPromptBuild(rt, boundSessionId!, boundRunId!, token),
                             getRuntimeSettings: createRuntimeSettingsResolver(boundSessionId!),
                             consumeSteerEntries: () => {
                                 const steers = rt.pendingSteers.get(boundSessionId!)
@@ -4346,6 +4371,7 @@ export function useAgentStream(
                         runId: boundRunId,
                         entries,
                         signal: ac.signal,
+                        onSystemPromptBuildChange: reportSystemPromptBuild(rt, boundSessionId, boundRunId, token),
                         getRuntimeSettings: createRuntimeSettingsResolver(boundSessionId),
                         consumeSteerEntries: () => {
                             const steers = rt.pendingSteers.get(boundSessionId)

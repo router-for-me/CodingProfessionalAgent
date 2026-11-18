@@ -24,6 +24,7 @@ import {
     useAgentStream,
 } from './useAgentStream'
 import { useMessageStore } from '@/stores/messageStore'
+import { createHostServices } from '@/application/services/createHostServices'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useModelCatalogStore } from '@/stores/modelCatalogStore'
@@ -889,6 +890,58 @@ describe('useAgentStreamSync', () => {
         entries = useMessageStore.getState().getEntries(remoteSessionId)
         expect(entries).toHaveLength(1)
         expect((entries[0] as any).status).toBe('done')
+    })
+
+    it('publishes local prompt build status without adding a conversation entry', async () => {
+        const chat = createHostServices().chatMessages!
+        const visibleWhileBuilding: boolean[] = []
+        const visibleAfterCompletion: boolean[] = []
+        service.streamChat = async function* (input) {
+            input.onSystemPromptBuildChange?.(true)
+            visibleWhileBuilding.push(chat.isBuildingSystemPrompt!(input.sessionId))
+            expect(useMessageStore.getState().getEntries(input.sessionId).map((entry) => entry.kind)).toEqual(['user'])
+            // Main already echoed the build but has not processed the end status yet.
+            useSessionRunStore.getState().setRun(input.sessionId, {
+                sessionId: input.sessionId, runId: input.runId, clientId: 'desktop',
+                status: 'building-system-prompt', updatedAt: Date.now(),
+            })
+            input.onSystemPromptBuildChange?.(false)
+            visibleAfterCompletion.push(chat.isBuildingSystemPrompt!(input.sessionId))
+            yield { type: 'agent-end', sessionId: input.sessionId, runId: input.runId }
+        }
+        const { result } = renderHook(() => useAgentStream(), { wrapper: createWrapper(service) })
+        await act(async () => {
+            await result.current.send('Build prompt and respond')
+        })
+        await waitFor(() => {
+            const statuses = broadcastRunStatusMock.mock.calls.map((call: unknown[]) => call[1])
+            expect(statuses.slice(0, 3)).toEqual(['running', 'building-system-prompt', 'running'])
+            expect(statuses.at(-1)).toBe('idle')
+        })
+        expect(visibleWhileBuilding).toEqual([true])
+        expect(visibleAfterCompletion).toEqual([false])
+    })
+
+    it('exposes remote prompt build progress from the active-run snapshot', () => {
+        const sessionId = 'remote-build'
+        const chat = createHostServices().chatMessages!
+        const updates: boolean[] = []
+        const unsubscribe = chat.subscribeSystemPromptBuild!(sessionId, () => {
+            updates.push(chat.isBuildingSystemPrompt!(sessionId))
+        })
+        try {
+            useSessionRunStore.getState().hydrate([{
+                sessionId, runId: 'remote-run', clientId: 'desktop',
+                status: 'building-system-prompt', updatedAt: Date.now(),
+            }])
+            expect(chat.isBuildingSystemPrompt!(sessionId)).toBe(true)
+            expect(chat.isBuildingSystemPrompt!('other')).toBe(false)
+            useSessionRunStore.getState().hydrate([])
+            expect(updates).toEqual([true, false])
+            expect(useMessageStore.getState().getEntries(sessionId)).toEqual([])
+        } finally {
+            unsubscribe()
+        }
     })
 
     it('Mirror mode ignores session:stream-event for non-current session', async () => {
