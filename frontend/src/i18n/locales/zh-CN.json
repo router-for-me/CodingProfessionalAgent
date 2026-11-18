@@ -968,6 +968,8 @@
   "message.hookSuccess": "会话结束 Hook 执行完成",
   "message.hookFailed": "Hook 执行失败",
   "message.edit": "编辑",
+  "message.followUpQueued": "排队中",
+  "message.followUpSteering": "待调整方向",
   "message.recallAndEdit": "撤回并编辑",
   "message.recalledToComposer": "已撤回至输入框",
   "message.editInput": "编辑历史消息",

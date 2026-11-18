@@ -969,6 +969,8 @@
   "message.hookSuccess": "Session completion hook executed",
   "message.hookFailed": "Failed to execute hook",
   "message.edit": "Edit",
+  "message.followUpQueued": "Queued",
+  "message.followUpSteering": "Steering",
   "message.recallAndEdit": "Recall & Edit",
   "message.recalledToComposer": "Recalled to input",
   "message.editInput": "Edit historical message",

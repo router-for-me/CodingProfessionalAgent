@@ -797,6 +797,22 @@ describe('useAgentStreamSync', () => {
         expect(entries[0]?.id).toBe('msg-remote-1')
         expect(entries[0]?.kind).toBe('assistant')
 
+        // Follow-up metadata is not a Web conversation event.
+        const activeRuns = useSessionRunStore.getState().activeRuns
+        act(() => {
+            for (const event of [
+                { type: 'follow-up-pending', userEntryId: 'u-remote', pendingStatus: 'queue', createdAt: 1100 },
+                { type: 'follow-up-removed', userEntryId: 'u-remote' },
+            ]) {
+                emitNative({
+                    kind: 'session:stream-event',
+                    data: JSON.stringify({ sessionId: remoteSessionId, runId: remoteRunId, event }),
+                })
+            }
+        })
+        expect(useMessageStore.getState().getEntries(remoteSessionId)).toEqual(entries)
+        expect(useSessionRunStore.getState().activeRuns).toBe(activeRuns)
+
         // 3. Remote assistant-update
         act(() => {
             emitNative({
@@ -4044,23 +4060,39 @@ describe('useAgentStreamSync', () => {
         expect(hostSessionId).toBeTruthy()
         expect(result.current.isStreaming).toBe(true)
 
-        // 2. Deliver queue delegation while session is actively running (followUpMode: queue)
+        // 2. A delegation without a follow-up override uses the desktop setting.
         const queueReq = {
             requestId: 'queued-req-1',
             sessionId: hostSessionId,
+            userEntryId: 'u-queued-req-1',
             text: 'Queued prompt message',
             modelId: 'gemini-3.8-flash',
             reasoningEffort: 'high',
             speed: 'fast' as const,
-            followUpMode: 'queue' as const,
         }
 
         const emitNative = nativeEventListeners[0]!
-        await act(async () => {
-            emitNative({
-                kind: 'session:delegate-run',
-                data: JSON.stringify(queueReq),
+        const { settings, setEditorSettings } = useSettingsStore.getState()
+        setEditorSettings({ followUpMode: 'queue' })
+        try {
+            await act(async () => {
+                emitNative({
+                    kind: 'session:delegate-run',
+                    data: JSON.stringify(queueReq),
+                })
             })
+        } finally {
+            setEditorSettings({ followUpMode: settings.editor?.followUpMode })
+        }
+
+        const pendingEntry = useMessageStore.getState().getEntries(hostSessionId!)
+            .find((entry) => entry.id === queueReq.userEntryId)
+        expect(pendingEntry).toMatchObject({ kind: 'user', pendingStatus: 'queue' })
+        expect(broadcastStreamEventMock).toHaveBeenCalledWith(hostSessionId, expect.any(String), {
+            type: 'follow-up-pending',
+            userEntryId: queueReq.userEntryId,
+            pendingStatus: 'queue',
+            createdAt: pendingEntry!.createdAt,
         })
 
         // Queued request must NOT be ACKed yet
@@ -4084,6 +4116,17 @@ describe('useAgentStreamSync', () => {
             modelId: 'gemini-3.8-flash',
             reasoningLevel: 'high',
             speed: 'fast',
+        })
+
+        const activatedEntries = useMessageStore.getState().getEntries(hostSessionId!)
+            .filter((entry) => entry.id === queueReq.userEntryId)
+        expect(activatedEntries).toHaveLength(1)
+        expect(activatedEntries[0]).toMatchObject({ kind: 'user', pendingStatus: undefined })
+        expect(broadcastStreamEventMock).toHaveBeenCalledWith(hostSessionId, expect.any(String), {
+            type: 'user-entry',
+            sessionId: hostSessionId,
+            runId: expect.any(String),
+            entry: expect.objectContaining({ id: queueReq.userEntryId, pendingStatus: undefined }),
         })
 
         // Queued request must STILL NOT be ACKed because its execution is in flight!
@@ -4286,6 +4329,7 @@ describe('useAgentStreamSync', () => {
         const steerReq = {
             requestId: 'steer-during-resume',
             sessionId: sessId,
+            userEntryId: 'u-steer-during-resume',
             text: 'Steer during resume prompt',
         }
 
@@ -4298,16 +4342,26 @@ describe('useAgentStreamSync', () => {
         })
 
         expect(ackMock).not.toHaveBeenCalledWith('steer-during-resume')
+        const pendingEntry = useMessageStore.getState().getEntries(sessId)
+            .find((entry) => entry.id === steerReq.userEntryId)
+        expect(pendingEntry).toMatchObject({ kind: 'user', pendingStatus: 'steer' })
 
-        // 3. Complete resumed flight
+        // 3. Complete resumed flight without consuming the steer.
         await act(async () => {
             releaseResumedHold()
         })
 
-        // Steer arriving during runPreparedChat must be ACKed on stream finish
         await waitFor(() => {
             expect(ackMock).toHaveBeenCalledWith('steer-during-resume')
         })
+        expect(broadcastStreamEventMock.mock.calls.filter(([, , event]: any[]) =>
+            event.type === 'follow-up-pending' && event.userEntryId === steerReq.userEntryId,
+        )).toEqual(['steer', 'queue'].map((pendingStatus) => [sessId, expect.any(String), {
+            type: 'follow-up-pending',
+            userEntryId: steerReq.userEntryId,
+            pendingStatus,
+            createdAt: pendingEntry!.createdAt,
+        }]))
 
         unmount()
     })
@@ -5273,13 +5327,22 @@ describe('useAgentStreamSync', () => {
 
         const emitNative = nativeEventListeners[0]!
 
-        // 2. Deliver steer delegation while run 1 is paused right at teardown
-        act(() => {
+        // 2. Deliver steer delegation while run 1 is paused right at teardown.
+        const preseededEntry: UserEntry = {
+            id: 'u-late-steer',
+            sessionId: sessId,
+            createdAt: Date.now() - 1000,
+            kind: 'user',
+            content: [{ type: 'text', text: 'Late steer message during stream close' }],
+        }
+        useMessageStore.getState().appendEntry(preseededEntry)
+        await act(async () => {
             emitNative({
                 kind: 'session:delegate-run',
                 data: JSON.stringify({
                     requestId: 'late-steer-req',
                     sessionId: sessId,
+                    userEntryId: preseededEntry.id,
                     text: 'Late steer message during stream close',
                     followUpMode: 'steer' as const,
                 }),
@@ -5299,6 +5362,15 @@ describe('useAgentStreamSync', () => {
         await waitFor(() => {
             expect(runCount).toBe(2)
         })
+
+        expect(broadcastStreamEventMock.mock.calls.filter(([, , event]: any[]) =>
+            event.type === 'follow-up-pending' && event.userEntryId === preseededEntry.id,
+        )).toEqual(['steer', 'queue'].map((pendingStatus) => [sessId, expect.any(String), {
+            type: 'follow-up-pending',
+            userEntryId: preseededEntry.id,
+            pendingStatus,
+            createdAt: preseededEntry.createdAt,
+        }]))
 
         // Finally, upon completion of run 2, the late steer is safely ACKed!
         await waitFor(() => {
@@ -5523,7 +5595,7 @@ describe('useAgentStreamSync', () => {
         unmount()
     })
 
-    it('preserves userEntryId on queued delegation and allows withdrawal via original ID', async () => {
+    it.each(['recall', 'stop'] as const)('preserves userEntryId on queued delegation and removes the pending entry on %s', async (action) => {
         Object.defineProperty(navigator, 'userAgent', {
             value: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) CPA/1.0.0 Chrome/120.0.0.0 Electron/28.0.0 Safari/537.36',
             configurable: true,
@@ -5606,16 +5678,24 @@ describe('useAgentStreamSync', () => {
             expect(rt.sessionQueues.get(sessId)?.[0]?.entry.id).toBe('u-queue-withdraw-id')
         })
 
-        // 3. Withdraw via the original userEntryId
+        // 3. Withdraw via the original userEntryId, or stop the active session.
         act(() => {
-            const rt = getRuntime(queueWithdrawService)
-            dequeueQueuedMessage(rt, sessId, 'u-queue-withdraw-id')
+            if (action === 'stop') {
+                result.current.stop(sessId)
+            } else {
+                dequeueQueuedMessage(getRuntime(queueWithdrawService), sessId, 'u-queue-withdraw-id')
+            }
         })
 
-        // Queued request must be ACKed and settled immediately upon withdrawal!
         expect(ackMock).toHaveBeenCalledWith('queue-withdraw-req')
-
-        // Queue in runtime must be empty
+        expect(broadcastStreamEventMock.mock.calls.filter(([, , event]: any[]) =>
+            event.type === 'follow-up-removed',
+        )).toEqual([[sessId, expect.any(String), {
+            type: 'follow-up-removed',
+            userEntryId: 'u-queue-withdraw-id',
+        }]])
+        expect(useMessageStore.getState().getEntries(sessId).filter((entry) => entry.kind === 'user'))
+            .toEqual([expect.objectContaining({ content: [{ type: 'text', text: 'First prompt' }] })])
         expect(getRuntime(queueWithdrawService).sessionQueues.get(sessId)).toBeUndefined()
 
         // Release run 1

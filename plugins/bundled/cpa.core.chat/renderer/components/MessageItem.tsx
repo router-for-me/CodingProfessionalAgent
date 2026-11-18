@@ -678,6 +678,12 @@ export const UserMessageRenderer = memo(function UserMessageRenderer(
                             {formatMessageTime(message.createdAt, i18n.resolvedLanguage)}
                         </time>
                         <span aria-hidden="true">·</span>
+                        {isPending && (
+                            <>
+                                <span>{message.pendingStatus === 'steer' ? t('message.followUpSteering') : t('message.followUpQueued')}</span>
+                                <span aria-hidden="true">·</span>
+                            </>
+                        )}
                         {isPending ? (
                             <button
                                 type="button"

@@ -1067,6 +1067,7 @@ function handleSessionAbort(
     if (steers) {
         rt.pendingSteers.delete(sessionId)
         for (const steer of steers) {
+            removeStoppedFollowUp(sessionId, steer.id, flight?.runId)
             const cbs = rt.pendingSteerCallbacks.get(steer.id)
             rt.pendingSteerCallbacks.delete(steer.id)
             rt.pendingSteerItems.delete(steer.id)
@@ -1086,6 +1087,7 @@ function handleSessionAbort(
     if (queue) {
         rt.sessionQueues.delete(sessionId)
         for (const item of queue) {
+            removeStoppedFollowUp(sessionId, item.entry.id, flight?.runId)
             try {
                 item.payload.onRunFinish?.(false)
             } catch {
@@ -1530,9 +1532,42 @@ function extractUserEntryImages(entry: UserEntry): ComposerImage[] {
         }))
 }
 
-function removeEntryFromStore(sessionId: string, entryId: string): void {
+function broadcastFollowUpPending(entry: UserEntry, runId: string): void {
+    if (!entry.pendingStatus) return
+    void getHostBridge()?.SessionBroadcastStreamEvent?.(entry.sessionId, runId, {
+        type: 'follow-up-pending',
+        userEntryId: entry.id,
+        pendingStatus: entry.pendingStatus,
+        createdAt: entry.createdAt,
+    })
+}
+
+function markSteerQueued(steer: UserEntry): UserEntry {
+    const store = useMessageStore.getState()
+    const existing = store.getEntries(steer.sessionId).find((entry) => entry.id === steer.id)
+    const queued: UserEntry = {
+        ...(existing?.kind === 'user' ? existing : steer),
+        pendingStatus: 'queue',
+    }
+    store.replaceEntry(queued)
+    return queued
+}
+
+function removePendingFollowUp(sessionId: string, entryId: string, runId = ''): void {
     useMessageStore.getState().removeEntry(sessionId, entryId)
     schedulePersist(true)
+    void getHostBridge()?.SessionBroadcastStreamEvent?.(sessionId, runId, {
+        type: 'follow-up-removed',
+        userEntryId: entryId,
+    })
+}
+
+function removeStoppedFollowUp(sessionId: string, entryId: string, runId?: string): void {
+    // Never remove an entry that has already been activated into regular history.
+    const entry = useMessageStore.getState().getEntries(sessionId).find((entry) => entry.id === entryId)
+    if (entry?.kind === 'user' && entry.pendingStatus) {
+        removePendingFollowUp(sessionId, entryId, runId)
+    }
 }
 
 function processNextQueuedMessage(rt: ServiceRuntime, sessionId: string): void {
@@ -1637,7 +1672,7 @@ export function dequeueQueuedMessage(
             }
             const text = joinUserEntryText(removed)
             const images = extractUserEntryImages(removed)
-            removeEntryFromStore(sessionId, messageId)
+            removePendingFollowUp(sessionId, messageId, rt.runs.get(sessionId)?.runId)
             emit(rt)
             return { text, images }
         }
@@ -1659,7 +1694,7 @@ export function dequeueQueuedMessage(
             }
             const text = joinUserEntryText(removed.entry)
             const images = extractUserEntryImages(removed.entry)
-            removeEntryFromStore(sessionId, messageId)
+            removePendingFollowUp(sessionId, messageId, rt.runs.get(sessionId)?.runId)
             emit(rt)
             return { text, images }
         }
@@ -1671,7 +1706,7 @@ export function dequeueQueuedMessage(
     if (entry && entry.kind === 'user' && entry.pendingStatus) {
         const text = joinUserEntryText(entry)
         const images = extractUserEntryImages(entry)
-        removeEntryFromStore(sessionId, messageId)
+        removePendingFollowUp(sessionId, messageId, rt.runs.get(sessionId)?.runId)
         emit(rt)
         return { text, images }
     }
@@ -2485,9 +2520,10 @@ export function useAgentStream(
                         rt.pendingPreflights.clear()
                         handledLocally = true
                     }
-                    for (const steers of rt.pendingSteers.values()) {
+                    for (const [sessionId, steers] of rt.pendingSteers) {
                         handledLocally = true
                         for (const steer of steers) {
+                            removeStoppedFollowUp(sessionId, steer.id)
                             const cbs = rt.pendingSteerCallbacks.get(steer.id)
                             rt.pendingSteerCallbacks.delete(steer.id)
                             rt.pendingSteerItems.delete(steer.id)
@@ -2503,9 +2539,10 @@ export function useAgentStream(
                         }
                     }
                     rt.pendingSteers.clear()
-                    for (const queue of rt.sessionQueues.values()) {
+                    for (const [sessionId, queue] of rt.sessionQueues) {
                         handledLocally = true
                         for (const item of queue) {
+                            removeStoppedFollowUp(sessionId, item.entry.id)
                             try {
                                 item.payload.onRunFinish?.(false)
                             } catch {
@@ -2971,99 +3008,77 @@ export function useAgentStream(
                     })
                 }
 
+                const store = useMessageStore.getState()
+                const existingEntry = payload.userEntryId
+                    ? store.getEntries(targetSessionId).find((e): e is UserEntry => e.id === payload.userEntryId && e.kind === 'user')
+                    : undefined
+                const pendingEntry: UserEntry = existingEntry ? {
+                    ...existingEntry,
+                    pendingStatus: effectiveFollowUpMode,
+                    ...(payload.reasoningEffort !== undefined ? { reasoningEffort: effectiveEffort } : {}),
+                } : {
+                    ...buildUserEntry(targetSessionId, trimmed, images, effectiveEffort, payload.skillReferences),
+                    ...(payload.userEntryId ? { id: payload.userEntryId } : {}),
+                    pendingStatus: effectiveFollowUpMode,
+                }
+                if (existingEntry) {
+                    store.replaceEntry(pendingEntry)
+                } else {
+                    store.appendEntry(pendingEntry)
+                }
+
                 if (effectiveFollowUpMode === 'steer') {
-                    const steerEntry: UserEntry = {
-                        ...buildUserEntry(targetSessionId, trimmed, images, effectiveEffort, payload.skillReferences),
-                        pendingStatus: 'steer',
-                    }
-                    if (payload.userEntryId) {
-                        steerEntry.id = payload.userEntryId
-                    }
-                    const existing = useMessageStore.getState().getEntries(targetSessionId)
-                    const existingEntry = payload.userEntryId
-                        ? existing.find((e): e is UserEntry => e.id === payload.userEntryId && e.kind === 'user')
-                        : undefined
-                    if (existingEntry) {
-                        useMessageStore.getState().replaceEntry({
-                            ...existingEntry,
-                            pendingStatus: 'steer',
-                            ...(payload.reasoningEffort !== undefined ? { reasoningEffort: effectiveEffort } : {}),
-                        })
-                    } else {
-                        useMessageStore.getState().appendEntry(steerEntry)
-                    }
                     let steerList = rt.pendingSteers.get(targetSessionId)
                     if (!steerList) {
                         steerList = []
                         rt.pendingSteers.set(targetSessionId, steerList)
                     }
-                    if (!steerList.some((s) => s.id === steerEntry.id)) {
-                        steerList.push(steerEntry)
+                    const steerIndex = steerList.findIndex((entry) => entry.id === pendingEntry.id)
+                    if (steerIndex === -1) {
+                        steerList.push(pendingEntry)
+                    } else {
+                        steerList[steerIndex] = pendingEntry
                     }
                     if (payload.onRunFinish) {
-                        let cbs = rt.pendingSteerCallbacks.get(steerEntry.id)
+                        let cbs = rt.pendingSteerCallbacks.get(pendingEntry.id)
                         if (!cbs) {
                             cbs = []
-                            rt.pendingSteerCallbacks.set(steerEntry.id, cbs)
+                            rt.pendingSteerCallbacks.set(pendingEntry.id, cbs)
                         }
                         cbs.push(payload.onRunFinish)
                     }
-                    rt.pendingSteerItems.set(steerEntry.id, {
-                        entry: steerEntry,
+                    rt.pendingSteerItems.set(pendingEntry.id, {
+                        entry: pendingEntry,
                         payload: {
                             ...payload,
                             sessionId: targetSessionId,
                         },
                         options: opts,
                     })
-                    schedulePersist(true)
-                    const onAccepted = payload.onSessionAccepted ?? opts?.onSessionAccepted
-                    onAccepted?.(targetSessionId)
-                    emit(rt)
-                    return targetSessionId
                 } else {
-                    const queueEntry: UserEntry = {
-                        ...buildUserEntry(targetSessionId, trimmed, images, effectiveEffort, payload.skillReferences),
-                        pendingStatus: 'queue',
-                    }
-                    if (payload.userEntryId) {
-                        queueEntry.id = payload.userEntryId
-                    }
-                    const existing = useMessageStore.getState().getEntries(targetSessionId)
-                    const existingEntry = payload.userEntryId
-                        ? existing.find((e): e is UserEntry => e.id === payload.userEntryId && e.kind === 'user')
-                        : undefined
-                    if (existingEntry) {
-                        useMessageStore.getState().replaceEntry({
-                            ...existingEntry,
-                            pendingStatus: 'queue',
-                            ...(payload.reasoningEffort !== undefined ? { reasoningEffort: effectiveEffort } : {}),
-                        })
-                    } else {
-                        useMessageStore.getState().appendEntry(queueEntry)
-                    }
                     let queue = rt.sessionQueues.get(targetSessionId)
                     if (!queue) {
                         queue = []
                         rt.sessionQueues.set(targetSessionId, queue)
                     }
                     queue.push({
-                        entry: queueEntry,
+                        entry: pendingEntry,
                         payload: {
                             ...payload,
                             sessionId: targetSessionId,
-                            userEntryId: queueEntry.id,
-                            userEntryCreatedAt: queueEntry.createdAt,
+                            userEntryId: pendingEntry.id,
+                            userEntryCreatedAt: pendingEntry.createdAt,
                             onRunFinish: payload.onRunFinish,
                         },
                         options: opts,
                     })
-                    schedulePersist(true)
-                    const onAccepted = payload.onSessionAccepted ?? opts?.onSessionAccepted
-                    onAccepted?.(targetSessionId)
-                    emit(rt)
-                    return targetSessionId
                 }
+                schedulePersist(true)
+                broadcastFollowUpPending(pendingEntry, activeFlight.runId)
+                const onAccepted = payload.onSessionAccepted ?? opts?.onSessionAccepted
+                onAccepted?.(targetSessionId)
+                emit(rt)
+                return targetSessionId
             } else if (targetSessionId && rt.runs.has(targetSessionId)) {
                 if (payload.isQueuedExecution) {
                     // A queued execution must NEVER interrupt an active flight!
@@ -3749,10 +3764,7 @@ export function useAgentStream(
                                     const cbs = rt.pendingSteerCallbacks.get(steer.id)
                                     rt.pendingSteerItems.delete(steer.id)
                                     rt.pendingSteerCallbacks.delete(steer.id)
-                                    useMessageStore.getState().replaceEntry({
-                                        ...steer,
-                                        pendingStatus: 'queue',
-                                    })
+                                    const queuedEntry = markSteerQueued(steer)
                                     const combinedCb = cbs && cbs.length > 0
                                         ? (succeeded: boolean) => {
                                               for (const cb of cbs) {
@@ -3767,19 +3779,21 @@ export function useAgentStream(
 
                                     queue.push(item ? {
                                         ...item,
+                                        entry: queuedEntry,
                                         payload: {
                                             ...item.payload,
                                             onRunFinish: combinedCb,
                                         },
                                     } : {
-                                        entry: steer,
+                                        entry: queuedEntry,
                                         payload: {
-                                            text: joinUserEntryText(steer),
-                                            images: extractUserEntryImages(steer),
+                                            text: joinUserEntryText(queuedEntry),
+                                            images: extractUserEntryImages(queuedEntry),
                                             sessionId: boundSessionId!,
                                             onRunFinish: combinedCb,
                                         },
                                     })
+                                    broadcastFollowUpPending(queuedEntry, boundRunId!)
                                 }
                                 schedulePersist(true)
                             }
@@ -4561,10 +4575,7 @@ export function useAgentStream(
                                 const cbs = rt.pendingSteerCallbacks.get(steer.id)
                                 rt.pendingSteerItems.delete(steer.id)
                                 rt.pendingSteerCallbacks.delete(steer.id)
-                                useMessageStore.getState().replaceEntry({
-                                    ...steer,
-                                    pendingStatus: 'queue',
-                                })
+                                const queuedEntry = markSteerQueued(steer)
                                 const combinedCb = cbs && cbs.length > 0
                                     ? (succeeded: boolean) => {
                                           for (const cb of cbs) {
@@ -4579,19 +4590,21 @@ export function useAgentStream(
 
                                 queue.push(item ? {
                                     ...item,
+                                    entry: queuedEntry,
                                     payload: {
                                         ...item.payload,
                                         onRunFinish: combinedCb,
                                     },
                                 } : {
-                                    entry: steer,
+                                    entry: queuedEntry,
                                     payload: {
-                                        text: joinUserEntryText(steer),
-                                        images: extractUserEntryImages(steer),
+                                        text: joinUserEntryText(queuedEntry),
+                                        images: extractUserEntryImages(queuedEntry),
                                         sessionId: boundSessionId,
                                         onRunFinish: combinedCb,
                                     },
                                 })
+                                broadcastFollowUpPending(queuedEntry, boundRunId)
                             }
                             schedulePersist(true)
                         }

@@ -471,6 +471,21 @@ describe('MessageItem user actions', () => {
     await waitFor(() => expect(writeClipboard).toHaveBeenCalledWith('$demo /skill:demo'))
   })
 
+  it('distinguishes queued and steering follow-ups and removes the label when activated', () => {
+    const item = (pendingStatus?: 'queue' | 'steer') => (
+      <MessageItem message={{ ...message, pendingStatus }} />
+    )
+    const { rerender } = render(item('queue'))
+    expect(screen.getByText('Queued')).toBeInTheDocument()
+
+    rerender(item('steer'))
+    expect(screen.getByText('Steering')).toBeInTheDocument()
+    expect(screen.queryByText('Queued')).not.toBeInTheDocument()
+
+    rerender(item())
+    expect(screen.queryByText('Steering')).not.toBeInTheDocument()
+  })
+
   it('renders recall icon button instead of copy/edit for queued/pending user message', async () => {
     const dequeueMessage = vi.fn().mockResolvedValue({ text: 'Content to recall' })
     const setComposerDraft = vi.fn()
