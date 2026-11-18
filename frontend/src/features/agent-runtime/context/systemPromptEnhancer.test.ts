@@ -489,4 +489,122 @@ describe('systemPromptEnhancer', () => {
         expect(fromFinal).toBe('Full intro: Use read and bash in /workspace/app carefully and accurately.')
     })
 
+    it('enforces Code Mode Promise.all, tools., and text() identifiers when source prompt includes them with exec', async () => {
+        const sourceWithExec = [
+            'You are CPA.',
+            'Available tools:',
+            '- exec: Prefer one exec call with Promise.all whenever 2 or more eligible tool calls are needed. Await tools.<name>(input). Example: const [a, b] = await Promise.all([tools.tool_a({}), tools.tool_b({})]); text({ a, b });',
+            'Current working directory: /workspace/app',
+        ].join('\n')
+
+        const missingPromiseAll = validateEnhancedCorePrompt(
+            'Always run exec in /workspace/app using tools.read and return output via text(result). '.repeat(2),
+            {
+                requiredToolNames: ['exec'],
+                requiredCwd: '/workspace/app',
+                mutableCorePrompt: sourceWithExec,
+            },
+        )
+        expect(missingPromiseAll.ok).toBe(false)
+        if (!missingPromiseAll.ok) {
+            expect(missingPromiseAll.reasons.some((r) => r.includes('Promise.all'))).toBe(true)
+        }
+
+        const missingToolsPrefix = validateEnhancedCorePrompt(
+            'Always run exec in /workspace/app using Promise.all and return output via text(result). '.repeat(2),
+            {
+                requiredToolNames: ['exec'],
+                requiredCwd: '/workspace/app',
+                mutableCorePrompt: sourceWithExec,
+            },
+        )
+        expect(missingToolsPrefix.ok).toBe(false)
+        if (!missingToolsPrefix.ok) {
+            expect(missingToolsPrefix.reasons.some((r) => r.includes('tools.<name>'))).toBe(true)
+        }
+
+        const missingTextCall = validateEnhancedCorePrompt(
+            'Always run exec in /workspace/app with Promise.all([tools.read({ path: "a" })]). '.repeat(2),
+            {
+                requiredToolNames: ['exec'],
+                requiredCwd: '/workspace/app',
+                mutableCorePrompt: sourceWithExec,
+            },
+        )
+        expect(missingTextCall.ok).toBe(false)
+        if (!missingTextCall.ok) {
+            expect(missingTextCall.reasons.some((r) => r.includes('text(...)'))).toBe(true)
+        }
+
+        const validCodeMode = validateEnhancedCorePrompt(
+            'In /workspace/app, prioritize consolidating 2+ eligible tool calls into one exec call using Promise.all([tools.read({ path: "a" }), tools.bash({ command: "ls" })]) and emit results via text({ out }).',
+            {
+                requiredToolNames: ['exec'],
+                requiredCwd: '/workspace/app',
+                mutableCorePrompt: sourceWithExec,
+            },
+        )
+        expect(validCodeMode.ok).toBe(true)
+    })
+
+    it('instructs builder model to prioritize parallel exec and retries if draft drops Promise.all', async () => {
+        const capturedUserPrompts: string[] = []
+        let callIndex = 0
+        const client: ProtocolClient = {
+            async *stream(input) {
+                const firstEntry = input.entries[0]
+                const userText =
+                    firstEntry && 'content' in firstEntry && Array.isArray(firstEntry.content)
+                        ? firstEntry.content.find((b) => b.type === 'text')
+                        : undefined
+                if (userText && userText.type === 'text') {
+                    capturedUserPrompts.push(userText.text)
+                }
+                const draft =
+                    callIndex++ === 0
+                        ? 'Operate in /workspace/app using exec with tools.read and output via text(res). Prefer single calls.'
+                        : 'Operate in /workspace/app: batch 2+ independent calls into one exec via Promise.all([tools.read({ path: "a" }), tools.bash({ command: "ls" })]) and output via text(res).'
+                yield {
+                    type: 'done',
+                    reason: 'stop',
+                    message: {
+                        id: `m-${callIndex}`,
+                        sessionId: 's',
+                        createdAt: 1000,
+                        kind: 'assistant',
+                        model: 'gpt-6-astra',
+                        content: [{ type: 'text', text: draft }],
+                        status: 'done',
+                        stopReason: 'stop',
+                    },
+                }
+            },
+        }
+
+        const result = await synthesizeEnhancedSystemPrompt({
+            client,
+            model: makeModel('gpt-6-astra'),
+            mutableCorePrompt:
+                'Use exec in /workspace/app. Batch calls with Promise.all([tools.read({}), tools.bash({})]) and return via text(out).',
+            verbatimContextPrompt: '',
+            enhancement: {
+                enabled: true,
+                multilingualEnabled: false,
+                allowedLanguages: ['en'],
+                modelId: 'gpt-6-astra',
+            },
+            requiredToolNames: ['exec'],
+            requiredCwd: '/workspace/app',
+            sleep: vi.fn(async () => undefined),
+            generateId: () => 'code-mode-synth',
+            now: () => 1000,
+        })
+
+        expect(capturedUserPrompts).toHaveLength(2)
+        expect(capturedUserPrompts[0]).toContain('Code Mode orchestration priority')
+        expect(capturedUserPrompts[0]).toContain('Promise.all')
+        expect(capturedUserPrompts[1]).toContain('Promise.all')
+        expect(result).toContain('Promise.all')
+    })
+
 })

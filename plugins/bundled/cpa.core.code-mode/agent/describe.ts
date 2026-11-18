@@ -146,30 +146,42 @@ export interface ExecDescriptionOptions {
 }
 
 export function codeModeBatchGuidance(mode: ToolMode): string | undefined {
-    if (mode !== 'code') return undefined
-    return [
-        'Direct tools and code mode are both available.',
-        DIRECT_TOOL_GUIDANCE,
-        'Do not use `code mode` for single or standalone tool invocations. Call the specific native tool directly (e.g., `bash`) whenever a task requires only a single operation.',
-        'Reserve `code mode` strictly for multi-tool parallel orchestration, batch tasks, or operations requiring in-memory data filtering and aggregation.',
-        'Put the independent calls in that same exec and start them together with Promise.all.',
-        'If a later call depends on reading an earlier result before you can decide, use direct tool calls instead of guessing inside exec.',
-    ].join('\n')
+    if (mode === 'code') {
+        return [
+            'Direct tools and Code Mode (`exec`) are both available.',
+            DIRECT_TOOL_GUIDANCE,
+            'Prefer `exec` whenever you need 2 or more eligible tool calls: when a task requires multiple independent or parallel tool calls (for example, reading several files, running multiple searches or commands, or inspecting/modifying multiple targets), batch them into a SINGLE `exec` call using `Promise.all([...])` instead of calling multiple native tools in parallel at the top level.',
+            'Use `exec` with `Promise.all` for multi-tool parallel orchestration, batch tasks, deterministic multi-step workflows, or in-memory data filtering and aggregation.',
+            'Call a specific native tool directly only when you need just ONE standalone eligible operation (e.g., a single `bash` call), when calling a direct-only tool, or when a later call truly depends on inspecting an earlier result yourself before deciding.',
+            'Put all planned independent calls in that same `exec` and start them together with Promise.all (awaiting dependent follow-up calls in order inside that same `exec` when their inputs can be computed in JavaScript).',
+        ].join('\n')
+    }
+    if (mode === 'code-only') {
+        return [
+            'Code-only mode is active: ordinary eligible tools (such as `read`, `bash`, `edit`, `write`, `skill_search`, etc.) are NOT exposed as top-level tools — invoke them inside `exec` via `await tools.<name>(input)`.',
+            DIRECT_TOOL_GUIDANCE,
+            'Maximize parallelism and batching inside `exec`: combine all planned independent calls into ONE `exec` call using `Promise.all([...])`, and chain deterministic dependent calls in the same `exec` instead of splitting them into single-tool `exec` turns.',
+        ].join('\n')
+    }
+    return undefined
 }
 
-export function renderExecDescription(
+function buildExecRules(
     mode: Exclude<ToolMode, 'direct'>,
-    tools: readonly NamedNestedTool[],
     options: ExecDescriptionOptions = {},
 ): string {
     const defaults = options.defaults ?? DEFAULT_EXEC_OPTIONS
-    const rules = [
+    const batchingRule =
+        mode === 'code'
+            ? 'Prefer one exec call with Promise.all whenever 2 or more eligible tool calls are needed instead of calling multiple top-level tools in parallel. Batch planned nested tool calls into the same exec; do not spend one exec on one standalone tool when a direct call suffices.'
+            : 'Batch all planned eligible nested tool calls into the same exec rather than spending one exec on one single tool call.'
+    return [
         'Execute the source string as an async JavaScript function in a backend QuickJS-ng WASM cell with guest promises.',
         'No Node, filesystem, network, console, Atomics, SharedArrayBuffer, WebAssembly, or imports.',
         'Await tools.<name>(input) to call approved tools; every nested call keeps its own approval and hooks.',
         `Also pass description: one short user-visible sentence about what this batch does, written in ${interfaceLanguage(options.locale)}. It is the activity label, not a copy of the source.`,
         DIRECT_TOOL_GUIDANCE,
-        'Batch eligible nested tool calls you can already plan into the same exec. Do not spend one exec on one tool when direct calls are available.',
+        batchingRule,
         'Start independent calls together with Promise.all. If a later call needs an earlier result, await them in order inside that same exec.',
         'Start another exec only after you must read the combined result and decide the next step yourself.',
         'Example: const [a, b] = await Promise.all([tools.tool_a({ path: "a" }), tools.tool_b({ path: "b" })]); text({ a, b });',
@@ -184,6 +196,29 @@ export function renderExecDescription(
         'ALL_TOOLS lists { name, description } with normalized JavaScript names for lookup on tools.',
         'exec and wait are never nested tools.',
     ].join('\n')
+}
+
+export function renderExecPromptDescription(
+    mode: Exclude<ToolMode, 'direct'>,
+    tools: readonly NamedNestedTool[],
+    options: ExecDescriptionOptions = {},
+): string {
+    const rules = buildExecRules(mode, options)
+    if (mode === 'code') return rules
+    const summary = tools.length > 0
+        ? tools
+            .map((tool) => (tool.identifier === tool.name ? `tools.${tool.identifier}` : `tools.${tool.identifier} (${tool.name})`))
+            .join(', ')
+        : '(none)'
+    return `${rules}\n\nEligible nested tools available on \`tools\`: ${summary}. Full TypeScript parameter schemas are attached to the \`exec\` tool definition.`
+}
+
+export function renderExecDescription(
+    mode: Exclude<ToolMode, 'direct'>,
+    tools: readonly NamedNestedTool[],
+    options: ExecDescriptionOptions = {},
+): string {
+    const rules = buildExecRules(mode, options)
     if (mode === 'code') return rules
 
     const budget = options.schemaBudgetBytes ?? DEFAULT_SCHEMA_BUDGET_BYTES

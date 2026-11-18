@@ -402,4 +402,79 @@ describe('AgentGenerationSnapshot & AgentProviderRegistry', () => {
 
         mw1()
     })
+
+    it('uses previewToolSet in AgentProviderRegistry.createSnapshot when loading resources directly', async () => {
+        const loadCalls: Array<{ tools?: unknown[]; nestedTools?: unknown[] }> = []
+        const registry = new AgentProviderRegistry({
+            extensionRegistry,
+            bridge,
+            createClient: () => testClient,
+            loadResources: async (input) => {
+                loadCalls.push({
+                    tools: input.tools ? [...input.tools] : undefined,
+                    nestedTools: input.nestedTools ? [...input.nestedTools] : undefined,
+                })
+                return {
+                    contextFiles: [],
+                    skills: [],
+                    prompts: [],
+                    systemPrompt: 'ok',
+                    diagnostics: [],
+                }
+            },
+        })
+
+        const readTool = {
+            name: 'read',
+            label: 'read',
+            description: 'Read',
+            parameters: { type: 'object', properties: {} },
+            validate: (v: unknown) => (v ?? {}) as Record<string, unknown>,
+            execute: async () => ({ content: [] }),
+        }
+        const execTool = {
+            name: 'exec',
+            label: 'exec',
+            description: 'Full',
+            promptDescription: 'Concise',
+            parameters: { type: 'object', properties: {} },
+            exposure: 'direct' as const,
+            needsNestedDispatcher: true,
+            toolPolicyId: 'code-only',
+            previewToolSet: vi.fn(async (tools: readonly any[]) => ({
+                policyId: 'code-only',
+                tools: tools.filter((t) => t.name === 'exec'),
+                nestedTools: tools.filter((t) => t.name === 'read'),
+            })),
+            prepareToolSet: vi.fn(async () => ({ policyId: 'code-only', tools: [], nestedTools: [] })),
+            validate: (v: unknown) => (v ?? {}) as Record<string, unknown>,
+            execute: async () => ({ content: [] }),
+        }
+
+        const snapshot = await registry.createSnapshot(
+            {
+                baseUrl: 'http://127.0.0.1:8080',
+                apiKey: 'test-key',
+                modelId: 'test-model',
+                models: [modelBase],
+                reasoningLevel: 'medium',
+                speed: 'standard',
+                requestApproval: false,
+                projectPath: '/test-project',
+            },
+            {
+                tools: [readTool, execTool],
+            },
+        )
+
+        expect(execTool.previewToolSet).toHaveBeenCalledTimes(1)
+        expect(execTool.prepareToolSet).not.toHaveBeenCalled()
+        expect(loadCalls).toEqual([
+            {
+                tools: [{ name: 'exec', description: 'Concise', promptDescription: 'Concise' }],
+                nestedTools: [{ name: 'read', description: 'Read' }],
+            },
+        ])
+        expect(snapshot.tools.map((t) => t.name)).toEqual(['read', 'exec'])
+    })
 })

@@ -618,4 +618,48 @@ describe('ResourceProvider', () => {
         expect(snapshotDisabled.systemPrompt).not.toContain('Skill One')
         expect(snapshotDisabled.skills.map((s) => s.name)).toEqual(['s1'])
     })
+
+    it('preserves skills and capability guidelines when read, skill_search, and bash live in nestedTools', async () => {
+        bridge.setFile(
+            `${AGENT}/skills/alpha-skill/SKILL.md`,
+            skillMd('alpha-skill', 'Alpha skill description', 'Body'),
+        )
+
+        const snapshot = await loadResourcesFromProviders({
+            cwd: REPO,
+            agentDir: AGENT,
+            bridge,
+            agentTarget: 'main',
+            extensionRegistry: registry,
+            tools: [
+                {
+                    name: 'exec',
+                    description: 'Full TS schema payload',
+                    promptDescription: 'Concise exec summary',
+                },
+                {
+                    name: 'wait',
+                    description: 'Observe cell',
+                },
+            ],
+            nestedTools: [
+                { name: 'read', description: 'Read files' },
+                { name: 'skill_search', description: 'Search skills' },
+                { name: 'bash', description: 'Execute shell commands' },
+            ],
+        })
+
+        expect((snapshot.searchableSkills ?? []).map((s) => s.name)).toEqual(['alpha-skill'])
+        for (const prompt of [snapshot.systemPrompt, snapshot.mutableCoreSystemPrompt ?? '']) {
+            expect(prompt).toContain('<skill_names>')
+            expect(prompt).toContain('- alpha-skill')
+            expect(prompt).toContain('- exec: Concise exec summary')
+            expect(prompt).toContain('- wait: Observe cell')
+            expect(prompt).not.toContain('Full TS schema payload')
+            expect(prompt).not.toContain('- read:')
+            expect(prompt).not.toContain('- bash:')
+            expect(prompt).toContain('Use bash for file operations like ls')
+            expect(prompt).toContain('Use read to examine files instead of cat or sed')
+        }
+    })
 })

@@ -2100,4 +2100,84 @@ describe('SubAgentHost', () => {
         expect(requests).toHaveLength(0)
         expect(host.list().find((a) => a.id === 'sa-stop-synth')?.status).toBe('aborted')
     })
+
+    it('previews code-only tools and loads async system-prompt resource providers for sub-agent prompts', async () => {
+        const requests: SubAgentRunRequest[] = []
+        const host = new SubAgentHost({
+            generateId: () => `id-${requests.length + 1}`,
+            now: () => 1000,
+            async *run(request) {
+                requests.push(request)
+                yield {
+                    type: 'assistant-end',
+                    entry: assistant(request.sessionId, 'done'),
+                }
+            },
+        })
+
+        const execTool: AgentTool = {
+            name: 'exec',
+            label: 'Execute Code',
+            description: 'INITIAL_EXEC_DESC',
+            promptDescription: 'INITIAL_EXEC_PROMPT',
+            parameters: { type: 'object', properties: {} },
+            exposure: 'direct',
+            needsNestedDispatcher: true,
+            toolPolicyId: 'code-only',
+            previewToolSet: vi.fn(async (tools: readonly AgentTool[]) => ({
+                policyId: 'code-only',
+                tools: tools
+                    .filter((t) => t.name === 'exec')
+                    .map((t) => ({
+                        ...t,
+                        description: 'FULL_SUBAGENT_TS_DECL',
+                        promptDescription: 'SUBAGENT_CODE_ONLY_EXEC_SUMMARY',
+                    })),
+                nestedTools: tools.filter((t) => t.name === 'read'),
+            })),
+            prepareToolSet: vi.fn(async () => ({ policyId: 'code-only', tools: [], nestedTools: [] })),
+            validate: (input) => (input ?? {}) as Record<string, unknown>,
+            execute: async () => ({ content: [] }),
+        }
+
+        const providerLoad = vi.fn(async (input: { tools?: Array<{ name: string }> }) => [
+            {
+                id: 'code-mode-batch-guidance',
+                content: `SUBAGENT_BATCH_GUIDANCE:${(input.tools ?? []).map((t) => t.name).join(',')}`,
+                order: 80,
+            },
+        ])
+
+        const registry = {
+            getSystemPrompts: () => [],
+            getHookContributions: () => [],
+            getResourceProviders: (kind?: string, target?: string) =>
+                kind === 'system-prompt' && (target === 'subagent' || target === 'all')
+                    ? [{ id: 'code-mode-batch-guidance', kind: 'system-prompt', order: 80, targetAgent: 'all', load: providerLoad }]
+                    : [],
+        }
+
+        host.configure({
+            prepared: preparedRun(),
+            codingTools: [readTool, execTool],
+            allTools: [readTool, execTool],
+            models: [model],
+            extensionRegistry: registry,
+        })
+        host.setParentContext({ sessionId: 'parent-s', runId: 'parent-r' })
+
+        const res = await host.spawn('inspect repo', { name: 'helper' })
+        expect(res.isError).toBeFalsy()
+        expect(requests).toHaveLength(1)
+        const childReq = requests[0]!
+        expect(execTool.previewToolSet).toHaveBeenCalledTimes(1)
+        expect(providerLoad).toHaveBeenCalledTimes(1)
+        expect(childReq.systemPrompt).toContain('- exec: SUBAGENT_CODE_ONLY_EXEC_SUMMARY')
+        expect(childReq.systemPrompt).not.toContain('FULL_SUBAGENT_TS_DECL')
+        expect(childReq.systemPrompt).not.toContain('- read:')
+        expect(childReq.systemPrompt).toContain('Use read to examine files instead of cat or sed')
+        expect(childReq.systemPrompt).toContain('SUBAGENT_BATCH_GUIDANCE:exec')
+        // Request retains full tools so child AgentLoop can run prepareToolSet() at execution time.
+        expect(childReq.tools.map((t) => t.name)).toEqual(['read', 'exec'])
+    })
 })

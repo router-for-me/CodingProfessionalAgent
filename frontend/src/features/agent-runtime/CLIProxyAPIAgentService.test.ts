@@ -8372,5 +8372,142 @@ function createWorktreePrepareInput(
                 })
             }
         })
+
+        it('previews code-only tool policy before resource loading and enhancement without invoking prepareToolSet during prepare', async () => {
+            const bridge = new FakeNativeBridge()
+            bridge.setFile('/repo/.cpa/keep', '')
+            const runtimeInfo = await bridge.runtimeInfo()
+            bridge.setFile(
+                `${buildAgentDir(runtimeInfo.userConfigDir)}/skills/code-skill/SKILL.md`,
+                '---\nname: code-skill\ndescription: Skill visible in code-only\n---\n\nDetails',
+            )
+            const registry = new ExtensionRegistry()
+            resourcesAgentEntry.activate({
+                register: (contrib: any) => {
+                    if (contrib.kind === 'resource-provider') {
+                        registry.registerResourceProvider(contrib.value)
+                    }
+                },
+                getService: () => undefined,
+            } as any)
+
+            const readTool = makeTool('read')
+            const skillSearchTool = makeTool('skill_search')
+            const spawnAgentTool = { ...makeTool('spawn_agent'), exposure: 'direct' as const }
+            const prepareToolSetSpy = vi.fn(async (allTools: readonly AgentTool[]) => ({
+                policyId: 'code-only',
+                tools: allTools.filter((t) => t.name === 'exec' || t.name === 'spawn_agent').map((t) =>
+                    t.name === 'exec'
+                        ? { ...t, description: 'FULL_EXEC_TS_DECL_read_skill_search', promptDescription: 'CONCISE_EXEC_PROMPT_read_skill_search' }
+                        : t,
+                ),
+                nestedTools: allTools.filter((t) => t.name === 'read' || t.name === 'skill_search'),
+            }))
+            const execTool: AgentTool = {
+                ...makeTool('exec'),
+                description: 'INITIAL_CODE_MODE_DESC',
+                promptDescription: 'INITIAL_CODE_MODE_PROMPT_DESC',
+                exposure: 'direct',
+                needsNestedDispatcher: true,
+                toolPolicyId: 'code-only',
+                previewToolSet: vi.fn(async (allTools: readonly AgentTool[]) => ({
+                    policyId: 'code-only',
+                    tools: allTools
+                        .filter((t) => t.name === 'exec' || t.name === 'spawn_agent')
+                        .map((t) =>
+                            t.name === 'exec'
+                                ? {
+                                      ...t,
+                                      description: 'FULL_EXEC_TS_DECL_read_skill_search',
+                                      promptDescription:
+                                          'CONCISE_EXEC_PROMPT_read_skill_search Promise.all tools.read text(out)',
+                                  }
+                                : t,
+                        ),
+                    nestedTools: allTools.filter((t) => t.name === 'read' || t.name === 'skill_search'),
+                })),
+                prepareToolSet: prepareToolSetSpy,
+            }
+
+            const fakeClient = new FakeCPAClient()
+            const service = new CLIProxyAPIAgentService({
+                bridge,
+                extensionRegistry: registry,
+                createClient: () => fakeClient as unknown as CPAClient,
+                createTools: async () => [readTool, skillSearchTool, spawnAgentTool, execTool],
+                generateId: (() => {
+                    let n = 0
+                    return () => `code-only-id-${++n}`
+                })(),
+                now: () => 1_700_000_000_000,
+            })
+
+            const prepared = await service.prepare({
+                ...createWorktreePrepareInput(),
+                projectPath: '/repo',
+                projectPaths: ['/repo'],
+                worktreePolicy: undefined,
+                requiredToolPolicy: 'code-only',
+                systemPromptEnhancement: {
+                    enabled: true,
+                    multilingualEnabled: false,
+                    allowedLanguages: ['en'],
+                    modelId: modelBase.id,
+                },
+            })
+
+            // prepare() must use previewToolSet without invoking prepareToolSet, while keeping full prepared.tools.
+            expect(prepareToolSetSpy).not.toHaveBeenCalled()
+            expect(execTool.previewToolSet).toHaveBeenCalledTimes(1)
+            expect(prepared.tools.map((t) => t.name)).toEqual(['read', 'skill_search', 'spawn_agent', 'exec'])
+            expect(prepared.systemPrompt).toContain('CONCISE_EXEC_PROMPT_read_skill_search')
+            expect(prepared.systemPrompt).not.toContain('FULL_EXEC_TS_DECL_read_skill_search')
+            expect(prepared.systemPrompt).not.toContain('- read:')
+            expect(prepared.systemPrompt).toContain('<skill_names>')
+            expect(prepared.systemPrompt).toContain('- code-skill')
+
+            fakeClient.queue({
+                kind: 'stream',
+                final: (seed) => ({
+                    ...doneAssistant(seed, { stopReason: 'stop' }),
+                    content: [
+                        {
+                            type: 'text',
+                            text: 'Enhanced code-only workspace instructions for /repo: ordinary tools are hidden inside the sandboxed executor rather than exposed top-level, while direct orchestration uses spawn_agent when delegating independent tasks. Whenever executing file reads, searches, or shell operations, call exec and invoke nested tools via await tools.read({}) and await tools.skill_search({}), combining parallel calls inside Promise.all([tools.read({})]) and emitting structured output via text(res). Always verify file paths and obey workspace constraints carefully before concluding your work in /repo.',
+                        },
+                    ],
+                }),
+            })
+            fakeClient.queue({ kind: 'stream', final: (seed) => doneAssistant(seed, { stopReason: 'stop' }) })
+
+            const events = await collect(
+                service.streamChat({
+                    prepared,
+                    sessionId: 's-code-only-preview',
+                    runId: 'run-code-only-preview',
+                    entries: [userEntry('u1', 'hello', 's-code-only-preview')],
+                }),
+            )
+
+            expect(events.some((e) => e.type === 'error')).toBe(false)
+            // Synthesis prompt builder sees ONLY top-level tools (not nested read/skill_search), plus Promise.all requirement.
+            const synthReq = fakeClient.calls[0]!
+            const firstSynthEntry = synthReq.entries[0]
+            const synthUserText =
+                firstSynthEntry && 'content' in firstSynthEntry && Array.isArray(firstSynthEntry.content)
+                    ? firstSynthEntry.content.find((b) => b.type === 'text')
+                    : undefined
+            expect(synthUserText && synthUserText.type === 'text' ? synthUserText.text : '').toContain(
+                'Exact tool names that MUST appear verbatim in your output: spawn_agent, exec',
+            )
+            // Runtime execution call invokes prepareToolSet and sends full exec description in body.tools.
+            expect(prepareToolSetSpy).toHaveBeenCalledTimes(1)
+            const runtimeReq = fakeClient.calls[1]!
+            expect((runtimeReq.tools ?? []).map((t) => t.name)).toEqual(['spawn_agent', 'exec'])
+            expect((runtimeReq.tools ?? []).find((t) => t.name === 'exec')?.description).toBe(
+                'FULL_EXEC_TS_DECL_read_skill_search',
+            )
+            await service.dispose()
+        })
     })
 })

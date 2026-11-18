@@ -13,6 +13,7 @@ export const TITLE_TOOL_NAME = 'title'
 export interface SystemPromptTool {
     name: string
     description: string
+    promptDescription?: string
 }
 
 export interface SystemPromptContextFile {
@@ -29,8 +30,10 @@ export interface BuildSystemPromptOptions {
     cwd?: string
     /** Instruction files in injection order (global → ancestor → cwd). */
     contextFiles?: readonly SystemPromptContextFile[]
-    /** Actually available tools; drives capability claims and tool list. */
+    /** Actually available top-level tools; drives tool list and direct-only guidelines. */
     tools?: readonly SystemPromptTool[]
+    /** Nested tools callable inside orchestration tools such as Code Mode `exec`. */
+    nestedTools?: readonly SystemPromptTool[]
     /** Extra guideline lines (optional). */
     promptGuidelines?: readonly string[]
     /** User's selected UI language / locale (e.g. 'zh-CN', 'en'). */
@@ -56,6 +59,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
     const cwd = options.cwd
     const contextFiles = options.contextFiles ?? []
     const tools = options.tools ?? []
+    const nestedTools = options.nestedTools ?? []
     const promptGuidelines = options.promptGuidelines ?? []
 
     const toolNames = new Set(
@@ -63,6 +67,13 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
             .map((tool) => sanitizeSingleLine(tool.name))
             .filter((name) => name.length > 0),
     )
+    const capabilityToolNames = new Set(toolNames)
+    for (const tool of nestedTools) {
+        const sanitized = sanitizeSingleLine(tool.name)
+        if (sanitized.length > 0) {
+            capabilityToolNames.add(sanitized)
+        }
+    }
     const appendSection = appendSystemPrompt ? `\n\n${appendSystemPrompt}` : ''
     const languageGuideline = resolveLanguageGuideline(options.language)
     const personalityGuideline = resolvePersonalityGuideline(options.personality)
@@ -81,7 +92,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
         if (personalityGuideline) {
             customGuidelines.push(personalityGuideline)
         }
-        if (toolNames.has('title') || toolNames.has('set_session_title')) {
+        if (capabilityToolNames.has('title') || capabilityToolNames.has('set_session_title')) {
             customGuidelines.push(
                 options.conditionalToolGuidelines
                     ? CONDITIONAL_TITLE_GUIDELINE
@@ -95,6 +106,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
         prompt = buildDefaultBasePrompt(
             tools,
             toolNames,
+            capabilityToolNames,
             promptGuidelines,
             languageGuideline,
             personalityGuideline,
@@ -131,7 +143,8 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 
 function buildDefaultBasePrompt(
     tools: readonly SystemPromptTool[],
-    toolNames: Set<string>,
+    topLevelToolNames: Set<string>,
+    capabilityToolNames: Set<string>,
     promptGuidelines: readonly string[],
     languageGuideline?: string,
     personalityGuideline?: string,
@@ -142,15 +155,16 @@ function buildDefaultBasePrompt(
             ? tools
                   .map((tool) => {
                       const name = sanitizeToolName(tool.name)
-                      const description = sanitizeSingleLine(tool.description)
+                      const description = sanitizeSingleLine(tool.promptDescription ?? tool.description)
                       return `- ${name}: ${description}`
                   })
                   .join('\n')
             : '(none)'
 
-    const role = buildRoleSentence(toolNames)
+    const role = buildRoleSentence(topLevelToolNames, capabilityToolNames)
     const guidelines = buildGuidelines(
-        toolNames,
+        topLevelToolNames,
+        capabilityToolNames,
         promptGuidelines,
         languageGuideline,
         personalityGuideline,
@@ -167,24 +181,34 @@ Guidelines:
 ${guidelines}`
 }
 
-function buildRoleSentence(toolNames: Set<string>): string {
+function buildRoleSentence(
+    topLevelToolNames: Set<string>,
+    capabilityToolNames: Set<string>,
+): string {
     const actions: string[] = []
-    if (toolNames.has('read')) {
+    if (capabilityToolNames.has('read')) {
         actions.push('reading files')
     }
-    if (toolNames.has('bash') || toolNames.has('pwsh') || toolNames.has('powershell')) {
+    if (
+        capabilityToolNames.has('bash') ||
+        capabilityToolNames.has('pwsh') ||
+        capabilityToolNames.has('powershell')
+    ) {
         actions.push('executing commands')
     }
-    if (toolNames.has('edit')) {
+    if (capabilityToolNames.has('edit')) {
         actions.push('editing code')
     }
-    if (toolNames.has('write')) {
+    if (capabilityToolNames.has('write')) {
         actions.push('writing new files')
     }
-    if (toolNames.has('spawn_agent')) {
+    if (topLevelToolNames.has('exec')) {
+        actions.push('orchestrating tool workflows via code execution')
+    }
+    if (topLevelToolNames.has('spawn_agent')) {
         actions.push('dispatching sub-agents')
     }
-    if (toolNames.has('ask')) {
+    if (capabilityToolNames.has('ask')) {
         actions.push('asking clarification questions')
     }
 
@@ -279,7 +303,8 @@ export function resolvePersonalityGuideline(personality?: string): string | unde
 }
 
 function buildGuidelines(
-    toolNames: Set<string>,
+    topLevelToolNames: Set<string>,
+    capabilityToolNames: Set<string>,
     promptGuidelines: readonly string[],
     languageGuideline?: string,
     personalityGuideline?: string,
@@ -298,11 +323,11 @@ function buildGuidelines(
         guidelinesList.push(normalized)
     }
 
-    const hasBash = toolNames.has('bash')
-    const hasPwsh = toolNames.has('pwsh') || toolNames.has('powershell')
-    const hasRead = toolNames.has('read')
-    const hasEdit = toolNames.has('edit')
-    const hasWrite = toolNames.has('write')
+    const hasBash = capabilityToolNames.has('bash')
+    const hasPwsh = capabilityToolNames.has('pwsh') || capabilityToolNames.has('powershell')
+    const hasRead = capabilityToolNames.has('read')
+    const hasEdit = capabilityToolNames.has('edit')
+    const hasWrite = capabilityToolNames.has('write')
 
     // Exploration via bash or pwsh only when present.
     if (hasBash) {
@@ -335,7 +360,7 @@ function buildGuidelines(
         add('Show file paths clearly when working with files')
     }
 
-    if (toolNames.has('title') || toolNames.has('set_session_title')) {
+    if (capabilityToolNames.has('title') || capabilityToolNames.has('set_session_title')) {
         add(
             conditionalToolGuidelines
                 ? CONDITIONAL_TITLE_GUIDELINE
@@ -343,7 +368,7 @@ function buildGuidelines(
         )
     }
 
-    if (toolNames.has('spawn_agent')) {
+    if (topLevelToolNames.has('spawn_agent')) {
         if (conditionalToolGuidelines) {
             add('Only when spawn_agent is present in the declared tool set for this request, use it to delegate independent work to a sub-agent (if running in a delegated sub-task without it, skip delegation and complete your assigned task directly)')
         } else {
@@ -353,21 +378,21 @@ function buildGuidelines(
         add('When calling spawn_agent, pass the catalog model id the sub-agent should use in the model field')
         add('Use a fresh name for each sub-agent and never let sub-agents spawn their own sub-agents')
     }
-    if (toolNames.has('send_message')) {
+    if (topLevelToolNames.has('send_message')) {
         add(
             conditionalToolGuidelines
                 ? 'Only when send_message is present in the declared tool set, use it to send follow-up instructions to an existing sub-agent'
                 : 'Use send_message to send follow-up instructions to an existing sub-agent',
         )
     }
-    if (toolNames.has('stop_agent')) {
+    if (topLevelToolNames.has('stop_agent')) {
         add(
             conditionalToolGuidelines
                 ? 'Only when stop_agent is present in the declared tool set, use it to abort a running sub-agent'
                 : 'Use stop_agent to abort a running sub-agent',
         )
     }
-    if (toolNames.has('ask')) {
+    if (capabilityToolNames.has('ask')) {
         add('Use the ask tool whenever you need to ask the user a question, clarify requirements, confirm choices, or gather user input')
         add('When calling ask, provide a clear question and optionally structured choices in options with title and description')
     }

@@ -43,7 +43,19 @@ export const entry = definePluginEntry({
             kind: 'resource-provider', id: 'code-mode-batch-guidance',
             value: {
                 id: 'code-mode-batch-guidance', kind: 'system-prompt', order: 80, targetAgent: 'all',
-                async load() {
+                async load(input) {
+                    if (
+                        Array.isArray(input?.tools) &&
+                        !input.tools.some(
+                            (item) =>
+                                item !== null &&
+                                typeof item === 'object' &&
+                                'name' in item &&
+                                (item as { name?: unknown }).name === 'exec',
+                        )
+                    ) {
+                        return []
+                    }
                     const settings = context.getService(SettingsServiceToken)
                     const snapshot = settings.getSnapshot?.() ?? await settings.get()
                     const guidance = codeModeBatchGuidance(codeModeConfiguration(snapshot).toolMode)

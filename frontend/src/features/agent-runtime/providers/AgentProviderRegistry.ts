@@ -44,6 +44,10 @@ import {
 import type {
     AgentGenerationSnapshot,
 } from './generationSnapshot'
+import {
+    previewToolSetForPrompt,
+    toSystemPromptToolDescriptors,
+} from '../agent/toolSetPreview'
 
 export interface AgentProviderRegistryOptions {
     extensionRegistry?: RendererRegistry
@@ -293,13 +297,19 @@ export class AgentProviderRegistry {
             resources = options.resources
         } else {
             const bridge = options.bridge ?? this.bridge
+            const toolPreview = await previewToolSetForPrompt(tools, {
+                sessionId: input.sessionId ?? undefined,
+            })
+            const promptTools = toSystemPromptToolDescriptors(toolPreview.tools)
+            const promptNestedTools = toSystemPromptToolDescriptors(toolPreview.nestedTools)
             if (this.customLoadResources) {
                 resources = await this.customLoadResources({
                     cwd: input.projectPath ?? undefined,
                     projectPaths: input.projectPaths ?? [],
                     agentDir: '',
                     bridge,
-                    tools: tools.map((t) => ({ name: t.name, description: t.description })),
+                    tools: promptTools,
+                    nestedTools: promptNestedTools,
                     language: input.language,
                     personality: input.personality,
                     localMemoryEnabled: input.localMemoryEnabled,
@@ -314,7 +324,8 @@ export class AgentProviderRegistry {
                     projectPaths: input.projectPaths ?? (input.projectPath ? [input.projectPath] : []),
                     agentDir: '/default-agent-dir',
                     bridge,
-                    tools: tools.map((t) => ({ name: t.name, description: t.description })),
+                    tools: promptTools,
+                    nestedTools: promptNestedTools,
                     language: input.language,
                     personality: input.personality,
                     localMemoryEnabled: input.localMemoryEnabled,

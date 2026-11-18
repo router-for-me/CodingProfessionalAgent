@@ -22,6 +22,10 @@ import { isEnhancementAppliedToModel } from '../context/systemPromptEnhancer'
 import { formatWorktreeModePrompt } from '../context/worktreeMode'
 import { HookProvider } from '../providers/HookProvider'
 import { resolveDynamicReasoningEffort } from '../agent/agentLoop'
+import {
+    previewToolSetForPrompt,
+    toSystemPromptToolDescriptors,
+} from '../agent/toolSetPreview'
 import type { PreparedAgentRun } from '@/features/agent/types'
 
 const DEFAULT_SUBAGENT_SETTINGS: SubagentsSettings = {
@@ -139,13 +143,22 @@ export function buildSubAgentDeveloperPrompt(
         : `You must strictly act according to the following role prompt instructions:\n${trimmed}`
 }
 
+export interface SubAgentExtraPromptPart {
+    id?: string
+    content: string
+    order?: number
+}
+
 export function buildSubAgentSystemPrompt(
     prepared: any,
     codingTools: readonly AgentTool[],
     agentName: string,
     options?: {
         extensionRegistry?: any
+        nestedTools?: readonly AgentTool[]
         promptGuidelines?: readonly string[]
+        extraGuidelines?: readonly string[]
+        extraPromptContents?: readonly SubAgentExtraPromptPart[]
         allowSubagents?: boolean
         roles?: readonly SubagentRole[]
         rolePrompt?: string
@@ -157,9 +170,28 @@ export function buildSubAgentSystemPrompt(
     const pluginGuidelines = (pluginPrompts || [])
         .map((p: any) => p.guideline)
         .filter((g: any): g is string => typeof g === 'string' && g.trim().length > 0)
-    const pluginContents = (pluginPrompts || [])
-        .map((p: any) => p.content)
-        .filter((c: any): c is string => typeof c === 'string' && c.trim().length > 0)
+    const promptParts: Array<{ id?: string; content: string; order: number }> = []
+    for (const part of options?.extraPromptContents ?? []) {
+        const trimmed = typeof part?.content === 'string' ? part.content.trim() : ''
+        if (!trimmed) continue
+        if (part.id && promptParts.some((existing) => existing.id === part.id)) continue
+        promptParts.push({
+            id: part.id,
+            content: trimmed,
+            order: typeof part.order === 'number' ? part.order : 100,
+        })
+    }
+    for (const p of pluginPrompts || []) {
+        const trimmed = typeof p?.content === 'string' ? p.content.trim() : ''
+        if (!trimmed) continue
+        if (p?.id && promptParts.some((existing) => existing.id === p.id)) continue
+        promptParts.push({
+            id: typeof p?.id === 'string' ? p.id : undefined,
+            content: trimmed,
+            order: typeof p?.order === 'number' ? p.order : 100,
+        })
+    }
+    promptParts.sort((a, b) => a.order - b.order)
 
     const appendParts: string[] = []
     if (prepared?.snapshot?.appendSystem?.content) {
@@ -176,21 +208,22 @@ export function buildSubAgentSystemPrompt(
                 'When finished, provide a clear final answer. Do not spawn other agents.',
         )
     }
-    for (const content of pluginContents) {
-        appendParts.push(content)
+    for (const part of promptParts) {
+        appendParts.push(part.content)
     }
 
     const effectiveGuidelines = [
         ...(options?.promptGuidelines ?? []),
+        ...(options?.extraGuidelines ?? []),
         ...pluginGuidelines,
     ]
 
     const systemPrompt = buildSystemPrompt({
         cwd: prepared?.projectCwd,
-        tools: codingTools.map((tool) => ({
-            name: tool.name,
-            description: tool.description,
-        })),
+        tools: toSystemPromptToolDescriptors(codingTools),
+        nestedTools: options?.nestedTools
+            ? toSystemPromptToolDescriptors(options.nestedTools)
+            : undefined,
         contextFiles: (prepared?.snapshot?.contextFiles ?? []).map((file: any) => ({
             path: file.path,
             content: file.content,
@@ -1587,6 +1620,92 @@ export class SubAgentHost {
                   effectiveRoleName,
                   effectiveRolePrompt,
               )
+        let fallbackSystemPrompt: string | undefined
+        if (!hasParentEnhancedPrompt) {
+            const toolPreview = await previewToolSetForPrompt(effectiveTools, {
+                sessionId: record.sessionId,
+            })
+            const extraGuidelines: string[] = []
+            const extraPromptContents: SubAgentExtraPromptPart[] = []
+            const systemPromptProviders = config.extensionRegistry?.getResourceProviders
+                ? [...config.extensionRegistry.getResourceProviders('system-prompt', 'subagent')].sort(
+                      (a: any, b: any) => (a?.order ?? 100) - (b?.order ?? 100),
+                  )
+                : []
+            if (systemPromptProviders.length > 0) {
+                const providerTools = toSystemPromptToolDescriptors(toolPreview.tools)
+                const providerNestedTools = toSystemPromptToolDescriptors(toolPreview.nestedTools)
+                const providerInput = {
+                    cwd: config.prepared.projectCwd,
+                    projectPath: config.prepared.projectCwd,
+                    projectPaths:
+                        config.prepared.projectPaths ??
+                        (config.prepared.projectCwd ? [config.prepared.projectCwd] : []),
+                    sessionId: record.sessionId,
+                    agentTarget: 'subagent' as const,
+                    agentDir: config.prepared.agentDir ?? '',
+                    bridge: undefined,
+                    tools: providerTools,
+                    nestedTools: providerNestedTools,
+                    language: config.prepared.language,
+                    personality: config.prepared.personality,
+                    worktreePolicy: config.prepared.worktreePolicy,
+                    extensionRegistry: config.extensionRegistry,
+                }
+                for (const provider of systemPromptProviders) {
+                    try {
+                        const items = await provider.load(providerInput)
+                        for (const item of items ?? []) {
+                            if (!item || typeof item !== 'object') continue
+                            const pItem = item as {
+                                id?: unknown
+                                guideline?: unknown
+                                content?: unknown
+                                order?: unknown
+                            }
+                            if (typeof pItem.guideline === 'string' && pItem.guideline.trim().length > 0) {
+                                extraGuidelines.push(pItem.guideline.trim())
+                            }
+                            if (typeof pItem.content === 'string' && pItem.content.trim().length > 0) {
+                                const partId =
+                                    typeof pItem.id === 'string' && pItem.id.trim().length > 0
+                                        ? pItem.id
+                                        : provider.id
+                                extraPromptContents.push({
+                                    id: partId,
+                                    content: pItem.content.trim(),
+                                    order:
+                                        typeof pItem.order === 'number'
+                                            ? pItem.order
+                                            : (provider.order ?? 100),
+                                })
+                            }
+                        }
+                    } catch {
+                        // Fail-open so a broken system-prompt resource provider does not abort sub-agents.
+                    }
+                }
+            }
+            if (runtime.controller.signal.aborted) {
+                const abortErr = new Error('Sub-agent aborted')
+                abortErr.name = 'AbortError'
+                throw abortErr
+            }
+            fallbackSystemPrompt = buildSubAgentSystemPrompt(
+                config.prepared,
+                toolPreview.tools,
+                record.name,
+                {
+                    extensionRegistry: config.extensionRegistry,
+                    nestedTools: toolPreview.nestedTools,
+                    extraGuidelines,
+                    extraPromptContents,
+                    allowSubagents: canSpawnChildren,
+                    roles: canSpawnChildren ? config.subagentsSettings?.roles : undefined,
+                },
+            )
+        }
+
         const request: SubAgentRunRequest = {
             agentId,
             sessionId: record.sessionId,
@@ -1599,16 +1718,7 @@ export class SubAgentHost {
             speed: config.prepared.speed,
             systemPrompt: hasParentEnhancedPrompt
                 ? parentEnhancedPrompt!
-                : buildSubAgentSystemPrompt(
-                      config.prepared,
-                      effectiveTools,
-                      record.name,
-                      {
-                          extensionRegistry: config.extensionRegistry,
-                          allowSubagents: canSpawnChildren,
-                          roles: canSpawnChildren ? config.subagentsSettings?.roles : undefined,
-                      },
-                  ),
+                : fallbackSystemPrompt!,
             enhancedSystemPrompt: hasParentEnhancedPrompt ? parentEnhancedPrompt! : undefined,
             developerPrompt: developerPrompt || undefined,
             tools: effectiveTools,

@@ -419,6 +419,8 @@ export interface AgentTool<TArgs extends Record<string, unknown> = Record<string
     name: string
     label: string
     description: string
+    /** Optional concise description used when rendering system prompts. */
+    promptDescription?: string
     parameters: Record<string, unknown>
     targetAgent?: AgentTarget
     requiresScheduledSession?: boolean
@@ -427,6 +429,14 @@ export interface AgentTool<TArgs extends Record<string, unknown> = Record<string
     nestedToolNames?: readonly string[]
     /** Declares which required tool policy this preparer can enforce. */
     toolPolicyId?: string
+    /**
+     * Optional side-effect-free preview of how this tool policy partitions
+     * `tools` into top-level `tools` and `nestedTools` for prompt assembly.
+     */
+    previewToolSet?(
+        tools: readonly AgentTool[],
+        context?: { sessionId?: string | null },
+    ): Promise<ToolSetPreparation> | ToolSetPreparation
     prepareToolSet?(tools: readonly AgentTool[], context: { sessionId: string; signal: AbortSignal }): Promise<ToolSetPreparation>
     validate(input: unknown): TArgs
     execute(
@@ -490,6 +500,7 @@ export interface ResourceProviderInput {
     homeDir?: string
     bridge?: unknown
     tools?: readonly unknown[]
+    nestedTools?: readonly unknown[]
     promptGuidelines?: readonly string[]
     language?: string
     personality?: string

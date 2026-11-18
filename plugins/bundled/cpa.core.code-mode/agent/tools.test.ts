@@ -63,6 +63,24 @@ describe('Code Mode tools and exposure policy', () => {
         expect(exec.nestedToolNames).toEqual(['read'])
         client.dispose()
     })
+    it('previewToolSet partitions tools and renders code-only descriptions without touching client or mutating exec', async () => {
+        const { exec, tools, client, capability } = setup('code-only', true)
+        const originalDescription = exec.description
+        const originalPromptDescription = exec.promptDescription
+        const preview = await exec.previewToolSet!(tools.map((tool) => Object.freeze({ ...tool })), { sessionId: 'preview-session' })
+        expect(preview.policyId).toBe('code-only')
+        expect(preview.tools.map((tool) => tool.name)).toEqual(['standalone', 'sensitive', 'exec', 'wait'])
+        expect(preview.nestedTools.map((tool) => tool.name)).toEqual(['read'])
+        const previewExec = preview.tools.find((tool) => tool.name === 'exec')
+        expect(previewExec?.description).toContain('tools.read')
+        expect(previewExec?.promptDescription).toContain('tools.read')
+        expect(previewExec?.promptDescription).not.toContain('declare const tools')
+        expect(capability.invoke).not.toHaveBeenCalled()
+        expect(exec.description).toBe(originalDescription)
+        expect(exec.promptDescription).toBe(originalPromptDescription)
+        expect(exec.nestedToolNames).toBeUndefined()
+        client.dispose()
+    })
     it('fails closed without a nested dispatcher', async () => {
         const { exec, client } = setup()
         await expect(exec.execute('id', { source: 'text(2)' }, { sessionId: 's' })).rejects.toThrow('dispatchNestedTool')

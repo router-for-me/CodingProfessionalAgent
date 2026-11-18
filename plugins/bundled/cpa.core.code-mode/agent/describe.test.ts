@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { codeModeBatchGuidance, renderExecDescription, schemaToTypeScript } from './describe'
+import { codeModeBatchGuidance, renderExecDescription, renderExecPromptDescription, schemaToTypeScript } from './describe'
 import { selectNestedTools } from './names'
 import { DEFAULT_SCHEMA_BUDGET_BYTES } from './protocol'
 
@@ -92,13 +92,17 @@ describe('Code Mode schema to TypeScript', () => {
 })
 
 describe('Code Mode batch guidance', () => {
-    it('reserves code mode for multi-tool work and stays silent otherwise', () => {
+    it('prefers exec for parallel tool work in code, explains nested usage in code-only, and stays silent in direct', () => {
         const guidance = codeModeBatchGuidance('code')
-        expect(guidance).toContain('Do not use `code mode` for single or standalone tool invocations')
-        expect(guidance).toContain('Call the specific native tool directly (e.g., `bash`)')
-        expect(guidance).toContain('Reserve `code mode` strictly for multi-tool parallel orchestration')
+        expect(guidance).toContain('Prefer `exec` whenever you need 2 or more eligible tool calls')
+        expect(guidance).toContain('`Promise.all([...])` instead of calling multiple native tools in parallel at the top level')
+        expect(guidance).toContain('Call a specific native tool directly only when you need just ONE standalone eligible operation')
         expect(guidance).toContain('Promise.all')
-        expect(codeModeBatchGuidance('code-only')).toBeUndefined()
+        const codeOnlyGuidance = codeModeBatchGuidance('code-only')
+        expect(codeOnlyGuidance).toContain('Code-only mode is active')
+        expect(codeOnlyGuidance).toContain('await tools.<name>(input)')
+        expect(codeOnlyGuidance).toContain('Promise.all([...])')
+        expect(codeOnlyGuidance).toContain('direct-only')
         expect(codeModeBatchGuidance('direct')).toBeUndefined()
     })
 })
@@ -111,7 +115,8 @@ describe('Code Mode exec descriptions', () => {
         expect(description).toContain('Read a file.')
         expect(description).toContain('"path": string; "limit"?: number;')
         expect(description).toContain('ALL_TOOLS')
-        expect(description).toContain('Do not spend one exec on one tool')
+        expect(description).toContain('Batch all planned eligible nested tool calls into the same exec rather than spending one exec on one single tool call.')
+        expect(description).not.toContain('when direct calls are available')
         expect(description).toContain('Also pass description')
         expect(description).toContain('Simplified Chinese (zh-CN)')
         expect(description).toContain('Promise.all')
@@ -120,6 +125,15 @@ describe('Code Mode exec descriptions', () => {
         expect(description).toContain('No Node, filesystem, network, console')
         expect(description).toContain('Synchronous deadline overruns terminate, never resume')
         expect(description).toContain('approximated by characters')
+    })
+
+    it('renders concise prompt descriptions in code-only without full parameter schemas', () => {
+        const promptDesc = renderExecPromptDescription('code-only', selected)
+        expect(promptDesc).toContain('tools.file_read (file-read)')
+        expect(promptDesc).toContain('Full TypeScript parameter schemas are attached')
+        expect(promptDesc).not.toContain('declare const tools')
+        expect(promptDesc).not.toContain('"limit"?: number;')
+        expect(renderExecPromptDescription('code', selected)).toBe(renderExecDescription('code', selected))
     })
 
     it('does not repeat nested tool declarations in code', () => {
@@ -169,7 +183,13 @@ it.each(['code', 'code-only'] as const)('limits batching guidance to eligible to
     const description = renderExecDescription(mode, selected)
     expect(description).toContain('always call them at the top level, never inside exec')
     expect(description).toContain('not to poll subagents')
-    expect(description).toContain('Batch eligible nested tool calls')
+    if (mode === 'code') {
+        expect(description).toContain('Prefer one exec call with Promise.all whenever 2 or more eligible tool calls are needed')
+        expect(description).toContain('Batch planned nested tool calls into the same exec')
+        expect(codeModeBatchGuidance(mode)).toContain('direct-only')
+    } else {
+        expect(description).toContain('Batch all planned eligible nested tool calls into the same exec')
+        expect(codeModeBatchGuidance(mode)).toContain('direct-only')
+    }
     expect(description).not.toContain('Put every tool call')
-    if (mode === 'code') expect(codeModeBatchGuidance(mode)).toContain('direct-only')
 })

@@ -97,8 +97,10 @@ export interface LoadResourceSnapshotInput {
     agentDir: string
     homeDir?: string
     bridge: NativeBridge
-    /** Actual tools available for this run (closed-world). */
+    /** Actual top-level tools available for this run (closed-world). */
     tools?: readonly SystemPromptTool[]
+    /** Nested tools callable inside orchestration tools (e.g. Code Mode `exec`). */
+    nestedTools?: readonly SystemPromptTool[]
     promptGuidelines?: readonly string[]
     /** User's UI language / locale (e.g. 'zh-CN', 'en'). */
     language?: string
@@ -146,8 +148,10 @@ export async function loadResourcesFromProviders(
 ): Promise<ResourceSnapshot> {
     const diagnostics: ResourceDiagnostic[] = []
     const tools = input.tools ?? []
-    const hasReadTool = tools.some((tool) => tool.name === 'read')
-    const hasSkillSearchTool = tools.some((tool) => tool.name === SKILL_SEARCH_TOOL_NAME)
+    const nestedTools = input.nestedTools ?? []
+    const capabilityTools = [...tools, ...nestedTools]
+    const hasReadTool = capabilityTools.some((tool) => tool.name === 'read')
+    const hasSkillSearchTool = capabilityTools.some((tool) => tool.name === SKILL_SEARCH_TOOL_NAME)
     const agentTarget: AgentTarget = input.agentTarget ?? 'main'
 
     const agentCheck = validateAbsoluteResourcePath(input.agentDir, 'agentDir')
@@ -161,6 +165,7 @@ export async function loadResourcesFromProviders(
         })
         const fallbackBase = buildSystemPrompt({
             tools,
+            nestedTools,
             promptGuidelines: input.promptGuidelines,
             language: input.language,
             personality: input.personality,
@@ -168,6 +173,7 @@ export async function loadResourcesFromProviders(
         })
         const fallbackMutableCore = buildSystemPrompt({
             tools,
+            nestedTools,
             promptGuidelines: input.promptGuidelines,
             language: input.language,
             personality: input.personality,
@@ -235,6 +241,7 @@ export async function loadResourcesFromProviders(
         homeDir: input.homeDir,
         bridge: input.bridge,
         tools,
+        nestedTools,
         promptGuidelines: input.promptGuidelines,
         language: input.language,
         personality: input.personality,
@@ -393,6 +400,7 @@ export async function loadResourcesFromProviders(
         appendSystemPrompt: combinedAppendSystemPrompt || undefined,
         contextFiles,
         tools,
+        nestedTools,
         promptGuidelines: effectivePromptGuidelines,
         language: input.language,
         personality: input.personality,
@@ -429,6 +437,7 @@ export async function loadResourcesFromProviders(
         appendSystemPrompt: combinedAppendSystemPrompt || undefined,
         contextFiles: [],
         tools,
+        nestedTools,
         promptGuidelines: effectivePromptGuidelines,
         language: input.language,
         personality: input.personality,

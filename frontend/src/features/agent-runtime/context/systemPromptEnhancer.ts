@@ -228,6 +228,24 @@ export function validateEnhancedCorePrompt(
         }
     }
 
+    const hasSourceCodeModeContract =
+        options.requiredToolNames.includes('exec') &&
+        typeof options.mutableCorePrompt === 'string' &&
+        options.mutableCorePrompt.includes('Promise.all') &&
+        /\btools\./.test(options.mutableCorePrompt) &&
+        /\btext\s*\(/.test(options.mutableCorePrompt)
+    if (hasSourceCodeModeContract) {
+        if (!cleaned.includes('Promise.all')) {
+            reasons.push('Missing required Code Mode batching identifier: "Promise.all"')
+        }
+        if (!/\btools\./.test(cleaned)) {
+            reasons.push('Missing required Code Mode nested call convention: "tools.<name>"')
+        }
+        if (!/\btext\s*\(/.test(cleaned)) {
+            reasons.push('Missing required Code Mode output helper: "text(...)"')
+        }
+    }
+
     if (options.requiredCwd) {
         const normalizedCwd = options.requiredCwd.replace(/\\/g, '/')
         if (!cleaned.includes(normalizedCwd) && !cleaned.includes(options.requiredCwd)) {
@@ -284,14 +302,20 @@ function buildSynthesisUserPrompt(params: {
         '6. Output ONLY the final system prompt text. Do NOT wrap the output in ``` code fences or add explanatory remarks.',
     ]
 
+    let nextRuleNumber = 7
     if (params.requiredToolNames.length > 0) {
         lines.push(
-            `7. Exact tool names that MUST appear verbatim in your output: ${params.requiredToolNames.join(', ')}`,
+            `${nextRuleNumber++}. Exact tool names that MUST appear verbatim in your output: ${params.requiredToolNames.join(', ')}`,
         )
     }
     if (params.requiredCwd) {
         lines.push(
-            `8. Exact working directory path that MUST appear verbatim in your output: ${params.requiredCwd.replace(/\\/g, '/')}`,
+            `${nextRuleNumber++}. Exact working directory path that MUST appear verbatim in your output: ${params.requiredCwd.replace(/\\/g, '/')}`,
+        )
+    }
+    if (params.requiredToolNames.includes('exec')) {
+        lines.push(
+            `${nextRuleNumber++}. Code Mode orchestration priority and runtime contract preservation: When both direct tools and \`exec\` are available, make it an explicit priority to batch 2 or more independent or parallel eligible tool calls into ONE \`exec\` call with \`Promise.all([...])\` instead of calling multiple top-level tools in parallel (reserve direct top-level calls for a single standalone call, mandatory direct tools such as sub-agent orchestration, or sequential steps requiring manual inspection before deciding the next call). When Code-only mode is active, state unmistakably that ordinary tools are NOT top-level tools and MUST be invoked inside \`exec\` via \`await tools.<name>(input)\` using \`Promise.all([...])\` batching. Regardless of target authoring language, keep verbatim the exact QuickJS-ng execution identifiers and at least one concrete \`Promise.all\` + \`tools.<name>\` + \`text(...)\` example (\`await tools.<name>(input)\`, \`Promise.all\`, \`text(...)\`, \`image(...)\`, \`store\`, \`load\`, \`notify\`, \`yield_control\`, \`exit\`, \`ALL_TOOLS\`, \`// @exec:\`, and the \`description\` parameter requirement).`,
         )
     }
 

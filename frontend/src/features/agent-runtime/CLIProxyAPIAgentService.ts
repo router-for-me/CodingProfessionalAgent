@@ -96,6 +96,10 @@ import {
     type AgentGenerationSnapshot,
 } from './providers/generationSnapshot'
 import { CacheWarmer } from './agent/cacheWarmer.js'
+import {
+    previewToolSetForPrompt,
+    toSystemPromptToolDescriptors,
+} from './agent/toolSetPreview'
 import { ProtocolMiddlewarePipeline } from '@/plugins/protocol/ProtocolMiddlewarePipeline'
 
 interface InFlightPromptBuild {
@@ -1366,6 +1370,12 @@ export class CLIProxyAPIAgentService implements AgentService {
 
             const mainTools = effectiveToolsRaw.filter((tool) => tool.targetAgent !== 'subagent')
             const tools = freezeTools(mainTools)
+            const toolPreview = await abortablePromise(
+                previewToolSetForPrompt(tools, { sessionId: input.sessionId }),
+                signal,
+            )
+            throwIfAborted(signal)
+            this.assertNotDisposed()
 
             // Resource snapshot once after tools are known; invalid project → cwd undefined.
             const snapshot = await abortablePromise(
@@ -1375,15 +1385,14 @@ export class CLIProxyAPIAgentService implements AgentService {
                     agentDir,
                     homeDir: runtime.homeDir,
                     bridge: this.bridge,
-                    tools: tools.map((tool) => ({
-                        name: tool.name,
-                        description: tool.description,
-                    })),
+                    tools: toSystemPromptToolDescriptors(toolPreview.tools),
+                    nestedTools: toSystemPromptToolDescriptors(toolPreview.nestedTools),
                     language: input.language,
                     personality: input.personality,
                     localMemoryEnabled: input.localMemoryEnabled,
                     extensionRegistry: this.extensionRegistry,
                     worktreePolicy,
+                    sessionId: input.sessionId ?? undefined,
                     subagentsSettings,
                     skillsSettings,
                     gitSettings,
@@ -2789,11 +2798,20 @@ export class CLIProxyAPIAgentService implements AgentService {
                 )
             }
 
+            const toolPreview = await previewToolSetForPrompt(effectiveTools, { sessionId })
+            if (signal.aborted) {
+                throw new AgentPreflightError(
+                    'aborted',
+                    'System prompt enhancement aborted',
+                    'agent.preflight.aborted',
+                )
+            }
+
             let mutableCore =
                 prepared.snapshot.mutableCoreSystemPrompt ?? prepared.systemPrompt
-            const hasTitleTool = effectiveTools.some(
-                (tool) => tool.name === SET_SESSION_TITLE_TOOL_NAME,
-            )
+            const hasTitleTool =
+                toolPreview.tools.some((tool) => tool.name === SET_SESSION_TITLE_TOOL_NAME) ||
+                toolPreview.nestedTools.some((tool) => tool.name === SET_SESSION_TITLE_TOOL_NAME)
             if (
                 hasTitleTool &&
                 !mutableCore.includes(CONDITIONAL_TITLE_GUIDELINE) &&
@@ -2815,7 +2833,7 @@ export class CLIProxyAPIAgentService implements AgentService {
                         model: prepared.model,
                         systemPrompt: mutableCore,
                         entries: [...entries],
-                        tools: effectiveTools.map((t) => ({
+                        tools: toolPreview.tools.map((t) => ({
                             name: t.name,
                             description: t.description,
                             parameters: t.parameters,
@@ -2853,7 +2871,7 @@ export class CLIProxyAPIAgentService implements AgentService {
                 mutableCorePrompt: mutableCore,
                 verbatimContextPrompt: prepared.snapshot.verbatimContextPrompt ?? '',
                 enhancement,
-                requiredToolNames: effectiveTools.map((tool) => tool.name),
+                requiredToolNames: toolPreview.tools.map((tool) => tool.name),
                 requiredCwd: prepared.projectCwd,
                 hadGitSection: Boolean(prepared.gitSettings),
                 sessionId,

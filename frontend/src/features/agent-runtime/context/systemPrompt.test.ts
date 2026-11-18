@@ -691,3 +691,59 @@ describe('resolveLanguageGuideline', () => {
         expect(resolveLanguageGuideline('enoch')).toBeUndefined()
     })
 })
+
+describe('buildSystemPrompt with promptDescription and nestedTools', () => {
+    it('renders promptDescription in Available tools and uses nestedTools for capability claims without listing them top-level', () => {
+        const prompt = buildSystemPrompt({
+            cwd: '/repo',
+            tools: [
+                {
+                    name: 'exec',
+                    description: 'FULL_SCHEMA_SHOULD_NOT_BE_IN_PROMPT',
+                    promptDescription: 'Concise exec prompt rules',
+                },
+                {
+                    name: 'spawn_agent',
+                    description: 'Dispatch sub-agent',
+                },
+            ],
+            nestedTools: [
+                { name: 'read', description: 'Read files' },
+                { name: 'bash', description: 'Run commands' },
+                { name: 'title', description: 'Set title' },
+                { name: 'ask', description: 'Ask user' },
+            ],
+        })
+
+        const toolsSection = prompt.slice(
+            prompt.indexOf('Available tools:'),
+            prompt.indexOf('Guidelines:'),
+        )
+        expect(toolsSection).toContain('- exec: Concise exec prompt rules')
+        expect(toolsSection).toContain('- spawn_agent: Dispatch sub-agent')
+        expect(toolsSection).not.toContain('FULL_SCHEMA_SHOULD_NOT_BE_IN_PROMPT')
+        expect(toolsSection).not.toContain('- read:')
+        expect(toolsSection).not.toContain('- bash:')
+        expect(toolsSection).not.toContain('- title:')
+        expect(toolsSection).not.toContain('- ask:')
+
+        expect(prompt).toContain('reading files')
+        expect(prompt).toContain('executing commands')
+        expect(prompt).toContain('orchestrating tool workflows via code execution')
+        expect(prompt).toContain('dispatching sub-agents')
+        expect(prompt).toContain('asking clarification questions')
+        expect(prompt).toContain('Use bash for file operations like ls')
+        expect(prompt).toContain('Use read to examine files instead of cat or sed')
+        expect(prompt).toContain('call the title tool')
+        expect(prompt).toContain('Use the ask tool')
+    })
+
+    it('includes title guideline in custom SYSTEM when title is provided via nestedTools', () => {
+        const prompt = buildSystemPrompt({
+            customPrompt: 'CUSTOM SYSTEM BODY',
+            tools: [{ name: 'exec', description: 'Execute code' }],
+            nestedTools: [{ name: 'title', description: 'Set title' }],
+        })
+        expect(prompt).toContain('call the title tool')
+    })
+})
