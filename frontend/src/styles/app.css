@@ -610,6 +610,111 @@ select {
   will-change: transform;
 }
 
+/* 2 FPS clockwise missing-square animation for a 6-square grid (6 frames / 3s cycle) */
+@keyframes square-grid-6-step-0 {
+  0% {
+    opacity: 0;
+  }
+  16.6667%,
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes square-grid-6-step-1 {
+  0% {
+    opacity: 1;
+  }
+  16.6667% {
+    opacity: 0;
+  }
+  33.3333%,
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes square-grid-6-step-2 {
+  0% {
+    opacity: 1;
+  }
+  33.3333% {
+    opacity: 0;
+  }
+  50%,
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes square-grid-6-step-3 {
+  0% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+  66.6667%,
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes square-grid-6-step-4 {
+  0% {
+    opacity: 1;
+  }
+  66.6667% {
+    opacity: 0;
+  }
+  83.3333%,
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes square-grid-6-step-5 {
+  0% {
+    opacity: 1;
+  }
+  83.3333% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+.animate-square-grid-6-cell {
+  animation-duration: 3s;
+  animation-timing-function: step-end;
+  animation-iteration-count: infinite;
+}
+
+.animate-square-grid-6-step-0 {
+  animation-name: square-grid-6-step-0;
+}
+
+.animate-square-grid-6-step-1 {
+  animation-name: square-grid-6-step-1;
+}
+
+.animate-square-grid-6-step-2 {
+  animation-name: square-grid-6-step-2;
+}
+
+.animate-square-grid-6-step-3 {
+  animation-name: square-grid-6-step-3;
+}
+
+.animate-square-grid-6-step-4 {
+  animation-name: square-grid-6-step-4;
+}
+
+.animate-square-grid-6-step-5 {
+  animation-name: square-grid-6-step-5;
+}
+
 /* Pause animations when window is hidden or backgrounded */
 .cpa-paused-animations .animate-spin-smooth,
 .cpa-paused-animations .animate-spin-steps,
@@ -617,7 +722,8 @@ select {
 .cpa-paused-animations .animate-spin-steps-24,
 .cpa-paused-animations .animate-spin,
 .cpa-paused-animations .animate-pulse,
-.cpa-paused-animations .animate-text-shimmer {
+.cpa-paused-animations .animate-text-shimmer,
+.cpa-paused-animations .animate-square-grid-6-cell {
   animation-play-state: paused !important;
 }
 

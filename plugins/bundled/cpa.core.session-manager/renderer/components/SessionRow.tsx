@@ -38,7 +38,6 @@ import {
     Folder,
     GitBranch,
     GitFork,
-    Loader2,
     Mail,
     MessageSquarePlus,
     Pin,
@@ -53,6 +52,39 @@ import { ContinueInWorktreeModal } from './ContinueInWorktreeModal.js'
 
 interface SessionRowProps {
     session: SessionItem
+}
+
+const RUNNING_GRID_SQUARES = [
+    { step: 0, x: 2.5, y: 0.5, className: 'animate-square-grid-6-cell animate-square-grid-6-step-0' },
+    { step: 1, x: 6.5, y: 0.5, className: 'animate-square-grid-6-cell animate-square-grid-6-step-1' },
+    { step: 2, x: 6.5, y: 4.5, className: 'animate-square-grid-6-cell animate-square-grid-6-step-2' },
+    { step: 3, x: 6.5, y: 8.5, className: 'animate-square-grid-6-cell animate-square-grid-6-step-3' },
+    { step: 4, x: 2.5, y: 8.5, className: 'animate-square-grid-6-cell animate-square-grid-6-step-4' },
+    { step: 5, x: 2.5, y: 4.5, className: 'animate-square-grid-6-cell animate-square-grid-6-step-5' },
+] as const
+
+/** Vertical 2x3 rectangle of 6 squares that omits one square clockwise at 2 fps. */
+function SessionRunningGridIcon({ className }: { className?: string }) {
+    return (
+        <svg
+            viewBox="0 0 12 12"
+            fill="currentColor"
+            aria-hidden="true"
+            className={cn('pointer-events-none shrink-0', className)}
+        >
+            {RUNNING_GRID_SQUARES.map(({ step, x, y, className: cellClassName }) => (
+                <rect
+                    key={step}
+                    data-running-grid-step={step}
+                    x={x}
+                    y={y}
+                    width={3}
+                    height={3}
+                    className={cellClassName}
+                />
+            ))}
+        </svg>
+    )
 }
 
 const MENU_WIDTH = 208
@@ -751,7 +783,7 @@ export function SessionRow({ session }: SessionRowProps) {
                             aria-label={t('session.running', 'Running')}
                             className="flex size-3.5 shrink-0 items-center justify-center text-[var(--accent-blue)]"
                         >
-                            <Loader2 className="size-3 animate-spin-steps-24" aria-hidden />
+                            <SessionRunningGridIcon className="size-3" />
                         </span>
                     ) : null}
                     {session.unread && (!isCurrent || isManuallyMarkedUnread) ? (
@@ -842,7 +874,7 @@ export function SessionRow({ session }: SessionRowProps) {
                                       data-testid="session-running-badge"
                                       className="inline-flex items-center gap-1 rounded-full bg-[var(--accent-blue)]/10 px-2 py-0.5 text-[11px] font-medium text-[var(--accent-blue)]"
                                   >
-                                      <Loader2 className="size-3 animate-spin-steps-24" aria-hidden />
+                                      <SessionRunningGridIcon className="size-3" />
                                       {t('session.running', 'Running')}
                                   </span>
                               ) : null}

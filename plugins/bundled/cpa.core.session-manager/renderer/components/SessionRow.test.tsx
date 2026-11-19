@@ -222,7 +222,32 @@ describe('SessionRow', () => {
       expect(indicator).toBeInTheDocument()
       expect(indicator).toHaveAttribute('role', 'status')
       expect(indicator).toHaveAttribute('aria-label', 'Running')
+      expect(indicator).toHaveClass('text-[var(--accent-blue)]')
       expect(screen.getByTitle('Running')).toBeInTheDocument()
+
+      const svg = indicator.querySelector('svg')
+      expect(svg).toBeInTheDocument()
+      expect(svg).toHaveAttribute('fill', 'currentColor')
+
+      const squares = Array.from(indicator.querySelectorAll('rect'))
+      expect(squares).toHaveLength(6)
+      expect(
+        squares.map((rect) => ({
+          step: rect.getAttribute('data-running-grid-step'),
+          x: rect.getAttribute('x'),
+          y: rect.getAttribute('y'),
+          width: rect.getAttribute('width'),
+          height: rect.getAttribute('height'),
+          className: rect.getAttribute('class'),
+        })),
+      ).toEqual([
+        { step: '0', x: '2.5', y: '0.5', width: '3', height: '3', className: 'animate-square-grid-6-cell animate-square-grid-6-step-0' },
+        { step: '1', x: '6.5', y: '0.5', width: '3', height: '3', className: 'animate-square-grid-6-cell animate-square-grid-6-step-1' },
+        { step: '2', x: '6.5', y: '4.5', width: '3', height: '3', className: 'animate-square-grid-6-cell animate-square-grid-6-step-2' },
+        { step: '3', x: '6.5', y: '8.5', width: '3', height: '3', className: 'animate-square-grid-6-cell animate-square-grid-6-step-3' },
+        { step: '4', x: '2.5', y: '8.5', width: '3', height: '3', className: 'animate-square-grid-6-cell animate-square-grid-6-step-4' },
+        { step: '5', x: '2.5', y: '4.5', width: '3', height: '3', className: 'animate-square-grid-6-cell animate-square-grid-6-step-5' },
+      ])
 
       const titleSpan = screen.getByText('CPA Directory Query')
       expect(titleSpan).toHaveClass('min-w-0', 'truncate')
@@ -245,8 +270,10 @@ describe('SessionRow', () => {
       const link = screen.getByTitle('CPA Directory Query')
       await user.hover(link)
 
-      expect(screen.getByTestId('session-running-badge')).toBeInTheDocument()
-      expect(screen.getByTestId('session-running-badge')).toHaveTextContent('Running')
+      const badge = screen.getByTestId('session-running-badge')
+      expect(badge).toBeInTheDocument()
+      expect(badge).toHaveTextContent('Running')
+      expect(badge.querySelectorAll('rect')).toHaveLength(6)
     })
 
     it('renders blue unread indicator for normal unread and red unread indicator for error unread when not actively viewing', () => {
