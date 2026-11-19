@@ -20,6 +20,7 @@ export * from './skillDraft.js'
 export * from './SkillMenu.js'
 export * from './SkillDraftEditor.js'
 export { FileTypeIcon, type FileTypeIconProps } from './FileTypeIcon.js'
+export { SquareGridLoader, type SquareGridLoaderProps } from './SquareGridLoader.js'
 export * from './pathUtils.js'
 export {
     DirectoryBrowserModal,

@@ -89,7 +89,22 @@ describe('cpa.core.manage-todo-list renderer entry and TodoProgressBar', () => {
         const pill = screen.getByTestId('todo-progress-pill')
         expect(pill).toBeInTheDocument()
         expect(pill).toHaveTextContent('Step 2 / 3')
-        expect(screen.getByTestId('todo-pill-icon-running')).toBeInTheDocument()
+        const runningIcon = screen.getByTestId('todo-pill-icon-running')
+        expect(runningIcon).toBeInTheDocument()
+        expect(runningIcon).toHaveClass('size-3.5', 'text-[var(--accent-blue)]')
+        expect(runningIcon.querySelectorAll('rect')).toHaveLength(6)
+        expect(
+            Array.from(runningIcon.querySelectorAll('rect')).map((rect) =>
+                rect.getAttribute('class')
+            )
+        ).toEqual([
+            'animate-square-grid-6-cell animate-square-grid-6-step-0',
+            'animate-square-grid-6-cell animate-square-grid-6-step-1',
+            'animate-square-grid-6-cell animate-square-grid-6-step-2',
+            'animate-square-grid-6-cell animate-square-grid-6-step-3',
+            'animate-square-grid-6-cell animate-square-grid-6-step-4',
+            'animate-square-grid-6-cell animate-square-grid-6-step-5',
+        ])
         expect(screen.getByTestId('todo-pill-text-step')).toHaveTextContent('Step 2 / 3')
 
         // When interrupted or not running, the running spin icon should be hidden

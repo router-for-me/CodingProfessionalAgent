@@ -3,7 +3,7 @@ import {
     CheckCircle2,
     FileCode2,
     FileEdit,
-    Loader2,
+    SquareGridLoader,
     cn,
     useActiveRun,
     useAgentRunState,
@@ -430,9 +430,9 @@ export function TodoProgressBar({
                             className="size-3.5 shrink-0 text-emerald-400"
                         />
                     ) : isRunning ? (
-                        <Loader2
+                        <SquareGridLoader
                             data-testid="todo-pill-icon-running"
-                            className="size-3.5 shrink-0 animate-spin-steps-24 text-sky-400"
+                            className="size-3.5 text-[var(--accent-blue)]"
                         />
                     ) : null
                 ) : (

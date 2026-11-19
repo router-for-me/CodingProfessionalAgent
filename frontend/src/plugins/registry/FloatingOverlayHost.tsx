@@ -58,7 +58,11 @@ const NON_LAYOUT_TRANSITION_PROPERTIES = new Set([
 /**
  * Common standalone CSS animations (e.g. spinning loaders) that do not alter layout dimensions.
  */
-const NON_LAYOUT_ANIMATION_CLASSES = ['animate-spin', 'animate-pulse']
+const NON_LAYOUT_ANIMATION_CLASSES = [
+    'animate-spin',
+    'animate-pulse',
+    'animate-square-grid-6-cell',
+]
 
 /**
  * Calculates top/left coordinates and CSS transform for a floating overlay given an anchor DOMRect.
