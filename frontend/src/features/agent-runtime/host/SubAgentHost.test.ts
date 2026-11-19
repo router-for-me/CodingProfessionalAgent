@@ -3,6 +3,7 @@ import type {
     AgentTool,
     AssistantEntry,
     ModelCatalogEntry,
+    SubAgentRecord,
     UserEntry,
 } from '@cpa/plugin-api'
 import type { PreparedAgentRun } from '@/features/agent/types'
@@ -1191,6 +1192,122 @@ describe('SubAgentHost', () => {
         // Paused duration was 25000 - 5000 = 20000ms
         expect(completed?.pausedMs).toBe(20000)
         expect(completed?.completedAt).toBe(25000)
+    })
+
+    it('accumulates pausedMs across idle sendMessage follow-up turns so elapsed time excludes idle gaps', async () => {
+        const HOUR = 60 * 60 * 1000
+        const MIN = 60 * 1000
+        let clock = HOUR // 1:00:00
+        let observedRunningRecord: SubAgentRecord | undefined
+        let turnCount = 0
+
+        const host = new SubAgentHost({
+            generateId: (() => {
+                let seq = 0
+                return () => 'sub-send-timing-' + (++seq)
+            })(),
+            now: () => clock,
+            run: (request) =>
+                (async function* () {
+                    turnCount += 1
+                    if (turnCount === 1) {
+                        // Turn 1 runs for 2 minutes: 1:00 -> 1:02
+                        clock += 2 * MIN
+                    } else if (turnCount === 2) {
+                        // Snapshot state while turn 2 is running
+                        observedRunningRecord = host.get(request.agentId)
+                        // Turn 2 runs for 1 minute: 2:00 -> 2:01
+                        clock += 1 * MIN
+                    } else {
+                        // Turn 3 runs for 30 seconds: 3:00 -> 3:00:30
+                        clock += 30_000
+                    }
+                    yield* scriptedRun(request, ['Turn ' + turnCount + ' done'])
+                })(),
+        })
+        const prepared = preparedRun()
+        host.configure({
+            prepared,
+            codingTools: [readTool],
+            models: [model],
+        })
+        host.setParentContext({ sessionId: 'parent', runId: 'run-1' })
+
+        // Turn 1: 1:00 -> 1:02 (2 minutes)
+        await host.spawn('First task', { name: 'Worker' })
+        const afterTurn1 = host.list('parent')[0]!
+        expect(afterTurn1.status).toBe('completed')
+        expect(afterTurn1.createdAt).toBe(HOUR)
+        expect(afterTurn1.completedAt).toBe(HOUR + 2 * MIN)
+        expect(afterTurn1.pausedMs).toBeUndefined()
+
+        // Idle for 58 minutes, then send_message at 2:00 -> 2:01 (1 minute)
+        clock = 2 * HOUR
+        await host.sendMessage(afterTurn1.id, 'Second task')
+
+        // While running turn 2, completedAt must be cleared and pausedMs must exclude the 58m idle gap
+        expect(observedRunningRecord?.status).toBe('running')
+        expect(observedRunningRecord?.completedAt).toBeUndefined()
+        expect(observedRunningRecord?.pausedMs).toBe(58 * MIN)
+
+        const afterTurn2 = host.get(afterTurn1.id)!
+        expect(afterTurn2.status).toBe('completed')
+        expect(afterTurn2.completedAt).toBe(2 * HOUR + 1 * MIN)
+        expect(afterTurn2.pausedMs).toBe(58 * MIN)
+        // Net elapsed = (2:01 - 1:00) - 58m = 3 minutes
+        expect(afterTurn2.completedAt! - afterTurn2.createdAt - (afterTurn2.pausedMs ?? 0)).toBe(3 * MIN)
+
+        // Idle for 59 minutes, then send_message again at 3:00 -> 3:00:30 (30 seconds)
+        clock = 3 * HOUR
+        await host.sendMessage(afterTurn1.id, 'Third task')
+        const afterTurn3 = host.get(afterTurn1.id)!
+        expect(afterTurn3.status).toBe('completed')
+        expect(afterTurn3.completedAt).toBe(3 * HOUR + 30_000)
+        expect(afterTurn3.pausedMs).toBe((58 + 59) * MIN)
+        // Net elapsed = 2m + 1m + 30s = 3m 30s
+        expect(afterTurn3.completedAt! - afterTurn3.createdAt - (afterTurn3.pausedMs ?? 0)).toBe(3 * MIN + 30_000)
+    })
+
+    it('falls back to updatedAt when sendMessage restarts a legacy hydrated subagent without completedAt', async () => {
+        const MIN = 60 * 1000
+        let clock = 60 * MIN
+        const host = new SubAgentHost({
+            generateId: () => 'sub-legacy-1',
+            now: () => clock,
+            run: (request) =>
+                (async function* () {
+                    clock += 1 * MIN
+                    yield* scriptedRun(request, ['Follow-up done'])
+                })(),
+        })
+        host.configure({
+            prepared: preparedRun(),
+            codingTools: [readTool],
+            models: [model],
+        })
+        host.setParentContext({ sessionId: 'parent', runId: 'run-1' })
+
+        // Legacy hydrated record: ran 0:00 -> 0:02 (2 minutes), no completedAt stored
+        host.hydrate([
+            {
+                id: 'sub-legacy-1',
+                name: 'LegacyWorker',
+                color: '#3dd68c',
+                icon: 'atom',
+                parentSessionId: 'parent',
+                sessionId: 'sub-legacy-1',
+                modelId: 'parent-model',
+                status: 'completed',
+                createdAt: 0,
+                updatedAt: 2 * MIN,
+            },
+        ])
+
+        await host.sendMessage('sub-legacy-1', 'Continue work')
+        const final = host.get('sub-legacy-1')!
+        expect(final.pausedMs).toBe(58 * MIN)
+        expect(final.completedAt).toBe(61 * MIN)
+        expect(final.completedAt! - final.createdAt - (final.pausedMs ?? 0)).toBe(3 * MIN)
     })
 
     it('finalizes runtime entries with streaming status upon subagent completion', async () => {

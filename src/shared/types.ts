@@ -469,6 +469,8 @@ export interface SubAgentItem {
   rolePrompt?: string | null
   depth?: number
   parentAgentId?: string | null
+  completedAt?: number | null
+  pausedMs?: number | null
   createdAt?: number
   updatedAt?: number
 }

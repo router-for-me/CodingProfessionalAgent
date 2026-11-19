@@ -166,6 +166,8 @@ CREATE TABLE IF NOT EXISTS subagents (
     error_message TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
+    completed_at INTEGER,
+    paused_ms INTEGER,
     role_id TEXT,
     role_name TEXT,
     role_prompt TEXT,
@@ -459,6 +461,8 @@ export function applySessionSchemaAndMigrations(db: DatabaseType): void {
     'role_prompt TEXT',
     'depth INTEGER NOT NULL DEFAULT 1',
     'parent_agent_id TEXT',
+    'completed_at INTEGER',
+    'paused_ms INTEGER',
   ]
   for (const col of subagentColumns) {
     try {

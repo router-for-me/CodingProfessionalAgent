@@ -51,6 +51,7 @@ function healSubAgent(
   const healed: SubAgentRecord = {
     ...subAgent,
     status,
+    completedAt: subAgent.completedAt ?? updatedAt,
     updatedAt,
   }
   useSubAgentStore.getState().mergeHostAgents([healed])

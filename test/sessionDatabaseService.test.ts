@@ -4227,6 +4227,84 @@ describe('SessionDatabaseService', () => {
       })
     })
 
+    it('persists and restores subagent completedAt and pausedMs across snapshots, updates, and unfinished scans', async () => {
+      const parentId = 'session-parent-timing-test'
+      const subAgentId = 'subagent-timing-test-1'
+
+      // 1. Save completed subagent with pausedMs (e.g. 1:00->1:02, idle 58m, 2:00->2:01)
+      await service.set(parentId, {
+        id: parentId,
+        version: 2,
+        entries: [],
+        subAgents: [
+          {
+            id: subAgentId,
+            sessionId: subAgentId,
+            parentSessionId: parentId,
+            name: 'TimedWorker',
+            modelId: 'gpt-5.5',
+            status: 'completed',
+            createdAt: 3_600_000,
+            updatedAt: 7_260_000,
+            completedAt: 7_260_000,
+            pausedMs: 3_480_000,
+          },
+        ],
+      })
+
+      let loaded = await service.get(parentId)
+      expect(loaded?.subAgents).toHaveLength(1)
+      expect(loaded?.subAgents?.[0]).toMatchObject({
+        id: subAgentId,
+        completedAt: 7_260_000,
+        pausedMs: 3_480_000,
+      })
+
+      // 2. Restart subagent as running (clears completedAt, keeps accumulated pausedMs)
+      await service.set(parentId, {
+        id: parentId,
+        version: 2,
+        entries: [],
+        subAgents: [
+          {
+            id: subAgentId,
+            sessionId: subAgentId,
+            parentSessionId: parentId,
+            name: 'TimedWorker',
+            modelId: 'gpt-5.5',
+            status: 'running',
+            createdAt: 3_600_000,
+            updatedAt: 10_800_000,
+            pausedMs: 7_020_000,
+          },
+        ],
+      })
+
+      loaded = await service.get(parentId)
+      expect(loaded?.subAgents?.[0]?.completedAt).toBeUndefined()
+      expect(loaded?.subAgents?.[0]?.pausedMs).toBe(7_020_000)
+
+      // 3. findUnfinished preserves pausedMs on active subagents
+      const scan = await service.findUnfinished()
+      const active = scan.activeSubAgents.find((sa) => sa.id === subAgentId)
+      expect(active?.pausedMs).toBe(7_020_000)
+
+      // 4. updateSubAgent persists completedAt while keeping pausedMs when omitted
+      await service.updateSubAgent({
+        id: subAgentId,
+        status: 'completed',
+        completedAt: 10_830_000,
+        updatedAt: 10_830_000,
+      })
+      loaded = await service.get(parentId)
+      expect(loaded?.subAgents?.[0]).toMatchObject({
+        id: subAgentId,
+        status: 'completed',
+        completedAt: 10_830_000,
+        pausedMs: 7_020_000,
+      })
+    })
+
     it('searches sessions by title (prioritized) and content snippet', async () => {
       const now = Date.now()
       // Session 1: title matches "shell"

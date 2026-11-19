@@ -990,6 +990,7 @@ export class SubAgentHost {
                 status: 'error',
                 errorMessage:
                     startOutcome.stopReason ?? 'Subagent blocked by hook',
+                completedAt: this.now(),
             })
             return textResult(
                 startOutcome.stopReason ?? 'Subagent blocked by hook',
@@ -1000,9 +1001,11 @@ export class SubAgentHost {
         try {
             await this.runUntilIdle(id, userEntry, options.signal)
         } catch (error) {
+            const current = this.agents.get(id)
             this.patch(id, {
                 status: 'error',
                 errorMessage: errorMessageOf(error),
+                completedAt: current?.completedAt ?? this.now(),
             })
             await HookProvider.execute(
                 'SubagentStop',
@@ -1179,9 +1182,11 @@ export class SubAgentHost {
         try {
             await this.runUntilIdle(resolvedId, userEntry, signal)
         } catch (error) {
+            const current = this.agents.get(resolvedId)
             this.patch(resolvedId, {
                 status: 'error',
                 errorMessage: errorMessageOf(error),
+                completedAt: current?.completedAt ?? this.now(),
             })
             return textResult(errorMessageOf(error), true)
         }
@@ -1355,26 +1360,7 @@ export class SubAgentHost {
         }
         this.runtimes.set(agentId, runtime)
 
-        const now = this.now()
-        let pauseDelta = 0
-        if (record.status !== 'running') {
-            const stopTimestamp =
-                typeof record.completedAt === 'number' && Number.isFinite(record.completedAt)
-                    ? record.completedAt
-                    : record.updatedAt
-            pauseDelta = Math.max(0, now - stopTimestamp)
-        }
-        const currentPaused =
-            typeof record.pausedMs === 'number' && Number.isFinite(record.pausedMs) && record.pausedMs > 0
-                ? record.pausedMs
-                : 0
-        const nextPausedMs = currentPaused + pauseDelta
-
-        this.patch(agentId, {
-            status: 'running',
-            completedAt: undefined,
-            ...(nextPausedMs > 0 ? { pausedMs: nextPausedMs } : {}),
-        })
+        this.transitionToRunning(agentId, { includeQueuedAsPaused: true })
 
         const work = (async () => {
             let nextUser: UserEntry | undefined = userEntry
@@ -1514,7 +1500,7 @@ export class SubAgentHost {
             runChain: Promise.resolve(),
         }
         this.runtimes.set(agentId, runtime)
-        this.patch(agentId, { status: 'running' })
+        this.transitionToRunning(agentId)
 
         const work = (async () => {
             let nextUser: UserEntry | undefined = firstUser
@@ -1796,6 +1782,37 @@ export class SubAgentHost {
             kind: 'user',
             content: [{ type: 'text', text }],
         }
+    }
+
+    private transitionToRunning(
+        agentId: string,
+        options?: { includeQueuedAsPaused?: boolean },
+    ): void {
+        const record = this.agents.get(agentId)
+        if (!record) return
+        const now = this.now()
+        const wasIdle = options?.includeQueuedAsPaused
+            ? record.status !== 'running'
+            : record.status !== 'running' && record.status !== 'queued'
+        let pauseDelta = 0
+        if (wasIdle) {
+            const stopTimestamp =
+                typeof record.completedAt === 'number' && Number.isFinite(record.completedAt)
+                    ? record.completedAt
+                    : record.updatedAt
+            pauseDelta = Math.max(0, now - stopTimestamp)
+        }
+        const currentPaused =
+            typeof record.pausedMs === 'number' && Number.isFinite(record.pausedMs) && record.pausedMs > 0
+                ? record.pausedMs
+                : 0
+        const nextPausedMs = currentPaused + pauseDelta
+
+        this.patch(agentId, {
+            status: 'running',
+            completedAt: undefined,
+            ...(nextPausedMs > 0 ? { pausedMs: nextPausedMs } : {}),
+        })
     }
 
     private patch(

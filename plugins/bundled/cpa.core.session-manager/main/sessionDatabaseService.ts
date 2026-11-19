@@ -275,7 +275,7 @@ export class SessionDatabaseService {
     }
 
     const subAgentRows = this.getStatement(
-        'SELECT id, session_id, parent_session_id, parent_tool_call_id, name, model_id, reasoning_effort, speed, status, color, icon, last_message, error_message, role_id, role_name, role_prompt, depth, parent_agent_id, created_at, updated_at FROM subagents WHERE parent_session_id = ? ORDER BY created_at ASC',
+        'SELECT id, session_id, parent_session_id, parent_tool_call_id, name, model_id, reasoning_effort, speed, status, color, icon, last_message, error_message, role_id, role_name, role_prompt, depth, parent_agent_id, completed_at, paused_ms, created_at, updated_at FROM subagents WHERE parent_session_id = ? ORDER BY created_at ASC',
       ).all(sessionId) as Array<{
         id: string
         session_id: string
@@ -295,6 +295,8 @@ export class SessionDatabaseService {
         role_prompt: string | null
         depth: number | null
         parent_agent_id: string | null
+        completed_at: number | null
+        paused_ms: number | null
         created_at: number
         updated_at: number
       }>
@@ -312,6 +314,8 @@ export class SessionDatabaseService {
       status: row.status,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
+      ...(typeof row.completed_at === 'number' ? { completedAt: row.completed_at } : {}),
+      ...(typeof row.paused_ms === 'number' && row.paused_ms > 0 ? { pausedMs: row.paused_ms } : {}),
       ...(row.parent_tool_call_id ? { parentToolCallId: row.parent_tool_call_id } : {}),
       ...(row.last_message ? { lastMessage: row.last_message } : {}),
       ...(row.error_message ? { errorMessage: row.error_message } : {}),
@@ -583,9 +587,9 @@ export class SessionDatabaseService {
 
     const upsertSubAgentStmt = this.getStatement(`
       INSERT INTO subagents (
-        id, session_id, parent_session_id, parent_tool_call_id, name, model_id, reasoning_effort, speed, status, color, icon, last_message, error_message, role_id, role_name, role_prompt, depth, parent_agent_id, created_at, updated_at
+        id, session_id, parent_session_id, parent_tool_call_id, name, model_id, reasoning_effort, speed, status, color, icon, last_message, error_message, role_id, role_name, role_prompt, depth, parent_agent_id, completed_at, paused_ms, created_at, updated_at
       ) VALUES (
-        @id, @session_id, @parent_session_id, @parent_tool_call_id, @name, @model_id, @reasoning_effort, @speed, @status, @color, @icon, @last_message, @error_message, @role_id, @role_name, @role_prompt, @depth, @parent_agent_id, @created_at, @updated_at
+        @id, @session_id, @parent_session_id, @parent_tool_call_id, @name, @model_id, @reasoning_effort, @speed, @status, @color, @icon, @last_message, @error_message, @role_id, @role_name, @role_prompt, @depth, @parent_agent_id, @completed_at, @paused_ms, @created_at, @updated_at
       ) ON CONFLICT(id) DO UPDATE SET
         session_id = excluded.session_id,
         parent_session_id = excluded.parent_session_id,
@@ -604,6 +608,8 @@ export class SessionDatabaseService {
         role_prompt = excluded.role_prompt,
         depth = excluded.depth,
         parent_agent_id = excluded.parent_agent_id,
+        completed_at = excluded.completed_at,
+        paused_ms = excluded.paused_ms,
         updated_at = excluded.updated_at
     `)
 
@@ -840,6 +846,18 @@ export class SessionDatabaseService {
             rolePrompt: sa?.rolePrompt || sa?.role_prompt || null,
             depth: typeof sa?.depth === 'number' ? sa.depth : 1,
             parentAgentId: sa?.parentAgentId || sa?.parent_agent_id || null,
+            completedAt:
+              typeof sa?.completedAt === 'number' && Number.isFinite(sa.completedAt)
+                ? sa.completedAt
+                : typeof sa?.completed_at === 'number' && Number.isFinite(sa.completed_at)
+                  ? sa.completed_at
+                  : null,
+            pausedMs:
+              typeof sa?.pausedMs === 'number' && Number.isFinite(sa.pausedMs) && sa.pausedMs > 0
+                ? sa.pausedMs
+                : typeof sa?.paused_ms === 'number' && Number.isFinite(sa.paused_ms) && sa.paused_ms > 0
+                  ? sa.paused_ms
+                  : null,
             createdAt:
               typeof sa?.createdAt === 'number'
                 ? sa.createdAt
@@ -893,6 +911,8 @@ export class SessionDatabaseService {
             role_prompt: sa.rolePrompt,
             depth: sa.depth,
             parent_agent_id: sa.parentAgentId,
+            completed_at: sa.completedAt,
+            paused_ms: sa.pausedMs,
             created_at: sa.createdAt,
             updated_at: sa.updatedAt,
           })
@@ -1494,7 +1514,7 @@ export class SessionDatabaseService {
 
     const stmt = this.getStatement(`
       INSERT INTO subagents (
-        id, session_id, parent_session_id, parent_tool_call_id, name, model_id, reasoning_effort, speed, status, color, icon, last_message, error_message, created_at, updated_at
+        id, session_id, parent_session_id, parent_tool_call_id, name, model_id, reasoning_effort, speed, status, color, icon, last_message, error_message, completed_at, paused_ms, created_at, updated_at
       ) VALUES (
         @id,
         COALESCE(@session_id, @id),
@@ -1509,6 +1529,8 @@ export class SessionDatabaseService {
         @icon,
         @last_message,
         @error_message,
+        @completed_at,
+        @paused_ms,
         COALESCE(@created_at, @now),
         COALESCE(@updated_at, @now)
       ) ON CONFLICT(id) DO UPDATE SET
@@ -1524,6 +1546,8 @@ export class SessionDatabaseService {
         icon = CASE WHEN excluded.icon IS NOT NULL THEN excluded.icon ELSE subagents.icon END,
         last_message = CASE WHEN excluded.last_message IS NOT NULL THEN excluded.last_message ELSE subagents.last_message END,
         error_message = CASE WHEN excluded.error_message IS NOT NULL THEN excluded.error_message ELSE subagents.error_message END,
+        completed_at = CASE WHEN excluded.completed_at IS NOT NULL THEN excluded.completed_at ELSE subagents.completed_at END,
+        paused_ms = CASE WHEN excluded.paused_ms IS NOT NULL THEN excluded.paused_ms ELSE subagents.paused_ms END,
         updated_at = excluded.updated_at
     `)
 
@@ -1541,6 +1565,14 @@ export class SessionDatabaseService {
       icon: subAgent.icon ?? null,
       last_message: subAgent.lastMessage ?? null,
       error_message: subAgent.errorMessage ?? null,
+      completed_at:
+        typeof subAgent.completedAt === 'number' && Number.isFinite(subAgent.completedAt)
+          ? subAgent.completedAt
+          : null,
+      paused_ms:
+        typeof subAgent.pausedMs === 'number' && Number.isFinite(subAgent.pausedMs) && subAgent.pausedMs > 0
+          ? subAgent.pausedMs
+          : null,
       created_at: typeof subAgent.createdAt === 'number' ? subAgent.createdAt : null,
       updated_at: typeof subAgent.updatedAt === 'number' ? subAgent.updatedAt : now,
       now,
@@ -2827,7 +2859,7 @@ export class SessionDatabaseService {
         sa.name, sa.model_id, sa.reasoning_effort, sa.speed, sa.status,
         sa.color, sa.icon, sa.last_message, sa.error_message,
         sa.role_id, sa.role_name, sa.role_prompt, sa.depth, sa.parent_agent_id,
-        sa.created_at, sa.updated_at
+        sa.completed_at, sa.paused_ms, sa.created_at, sa.updated_at
       FROM subagents sa
       LEFT JOIN sessions parent ON parent.id = sa.parent_session_id
       WHERE sa.status IN ('running', 'queued')
@@ -2856,6 +2888,8 @@ export class SessionDatabaseService {
       role_prompt: string | null
       depth: number | null
       parent_agent_id: string | null
+      completed_at: number | null
+      paused_ms: number | null
       created_at: number
       updated_at: number
     }>
@@ -2874,6 +2908,8 @@ export class SessionDatabaseService {
         status: row.status,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
+        ...(typeof row.completed_at === 'number' ? { completedAt: row.completed_at } : {}),
+        ...(typeof row.paused_ms === 'number' && row.paused_ms > 0 ? { pausedMs: row.paused_ms } : {}),
         ...(row.parent_tool_call_id ? { parentToolCallId: row.parent_tool_call_id } : {}),
         ...(row.last_message ? { lastMessage: row.last_message } : {}),
         ...(row.error_message ? { errorMessage: row.error_message } : {}),
