@@ -246,6 +246,14 @@ export function validateEnhancedCorePrompt(
         }
     }
 
+    const hasSourceNestedTodoGuidance =
+        !options.requiredToolNames.includes('todo') &&
+        typeof options.mutableCorePrompt === 'string' &&
+        options.mutableCorePrompt.includes('tools.todo')
+    if (hasSourceNestedTodoGuidance && !containsToolIdentifier(cleaned, 'todo')) {
+        reasons.push('Missing required nested todo planning identifier: "todo"')
+    }
+
     if (options.requiredCwd) {
         const normalizedCwd = options.requiredCwd.replace(/\\/g, '/')
         if (!cleaned.includes(normalizedCwd) && !cleaned.includes(options.requiredCwd)) {
@@ -295,7 +303,7 @@ function buildSynthesisUserPrompt(params: {
         '',
         'Mandatory rewriting rules:',
         `1. Write the entire rewritten system prompt itself in ${langLabel}.`,
-        '2. Preserve 100% of the operational semantics, tool conditions, sequential requirements (such as calling `title` only when present in declared tools, memory retrieval/recording rules, Code Mode direct vs batching rules, forbidden commands and required replacements, Git/worktree rules, and sub-agent constraints).',
+        '2. Preserve 100% of the operational semantics, tool conditions, sequential requirements (such as calling `title` only when present in declared tools, proactive `todo` task planning and live progress reporting rules, memory retrieval/recording rules, Code Mode direct vs batching rules, forbidden commands and required replacements, Git/worktree rules, and sub-agent constraints).',
         '3. Decouple prompt language from user reply language: if the source prompt instructs the assistant to respond to the user in a specific language (for example Simplified Chinese or English), preserve that user-facing reply language requirement faithfully in the rewritten prompt even when the prompt itself is authored in another language.',
         '4. Completely eliminate all built-in template headers and XML/pseudo tags such as "Coding Professional Agent", "Available tools:", "Guidelines:", "<skill_names>", "<available_roles>", "<role>", "<git>", "<worktree_mode>", "<project_context>", and "<project_instructions>". Express all such sections naturally in the target language.',
         '5. Verbatim identifier preservation: never translate, alter, or omit any tool name, skill name, sub-agent role id/model id, filesystem path, or git branch name.',
@@ -316,6 +324,15 @@ function buildSynthesisUserPrompt(params: {
     if (params.requiredToolNames.includes('exec')) {
         lines.push(
             `${nextRuleNumber++}. Code Mode orchestration priority and runtime contract preservation: When both direct tools and \`exec\` are available, make it an explicit priority to batch 2 or more independent or parallel eligible tool calls into ONE \`exec\` call with \`Promise.all([...])\` instead of calling multiple top-level tools in parallel (reserve direct top-level calls for a single standalone call, mandatory direct tools such as sub-agent orchestration, or sequential steps requiring manual inspection before deciding the next call). When Code-only mode is active, state unmistakably that ordinary tools are NOT top-level tools and MUST be invoked inside \`exec\` via \`await tools.<name>(input)\` using \`Promise.all([...])\` batching. Regardless of target authoring language, keep verbatim the exact QuickJS-ng execution identifiers and at least one concrete \`Promise.all\` + \`tools.<name>\` + \`text(...)\` example (\`await tools.<name>(input)\`, \`Promise.all\`, \`text(...)\`, \`image(...)\`, \`store\`, \`load\`, \`notify\`, \`yield_control\`, \`exit\`, \`ALL_TOOLS\`, \`// @exec:\`, and the \`description\` parameter requirement).`,
+        )
+    }
+    const hasTodoContract =
+        params.requiredToolNames.includes('todo') ||
+        params.requiredToolNames.includes('manage_todo_list') ||
+        containsToolIdentifier(params.mutableCorePrompt, 'todo')
+    if (hasTodoContract) {
+        lines.push(
+            `${nextRuleNumber++}. Proactive \`todo\` task planning and live progress reporting preservation: Clearly emphasize using \`todo\` proactively as much as possible to plan tasks upfront and present live progress to the user (creating a structured task list before executing coding, investigation, or multi-step work, marking the active step \`in-progress\` before starting, marking finished steps \`completed\` immediately, and revising the plan whenever new steps or changes arise) whenever \`todo\` is available in the declared tool set (directly or via \`tools.todo\` in Code Mode), while skipping it only for trivial single-turn questions or delegated sub-tasks without \`todo\`. Do not dilute this into a passive tool summary.`,
         )
     }
 

@@ -49,6 +49,18 @@ export interface BuildSystemPromptOptions {
 export const CONDITIONAL_TITLE_GUIDELINE =
     'When the title tool is present in the declared tool set for the current request, call it before starting other work to set a concise session title based on user input; if you are running in a delegated sub-task context without that tool, skip it and focus directly on completing your assigned task.'
 
+export const TODO_PLANNING_GUIDELINE =
+    'Proactively use the todo tool as much as possible to plan tasks and present your current progress: for any coding, investigation, or multi-step work, create a structured task list with todo before starting execution (skip only for trivial single-turn questions)'
+
+export const CONDITIONAL_TODO_PLANNING_GUIDELINE =
+    'When the todo tool is present in the declared tool set for the current request (directly or via tools.todo in Code Mode), proactively use it as much as possible to plan tasks and present your current progress: for any coding, investigation, or multi-step work, create a structured task list before starting execution (skip only for trivial single-turn questions, or when running in a delegated sub-task without the todo tool)'
+
+export const TODO_PROGRESS_GUIDELINE =
+    'Keep the todo list continuously updated throughout execution so the user always sees live progress: mark the active step "in-progress" before working on it, mark each step "completed" immediately upon finishing, and revise the plan whenever new steps or changes arise'
+
+export const CONDITIONAL_TODO_PROGRESS_GUIDELINE =
+    'Whenever using the todo tool, keep the todo list continuously updated throughout execution so the user always sees live progress: mark the active step "in-progress" before working on it, mark each step "completed" immediately upon finishing, and revise the plan whenever new steps or changes arise'
+
 /**
  * Build a deterministic CPA system prompt from tools, context files, and optional overrides.
  * Does not mutate options, tools, or context file arrays.
@@ -97,6 +109,16 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
                 options.conditionalToolGuidelines
                     ? CONDITIONAL_TITLE_GUIDELINE
                     : 'Before starting other work, call the title tool to set a concise session title based on user input',
+            )
+        }
+        if (capabilityToolNames.has('todo') || capabilityToolNames.has('manage_todo_list')) {
+            customGuidelines.push(
+                options.conditionalToolGuidelines
+                    ? CONDITIONAL_TODO_PLANNING_GUIDELINE
+                    : TODO_PLANNING_GUIDELINE,
+                options.conditionalToolGuidelines
+                    ? CONDITIONAL_TODO_PROGRESS_GUIDELINE
+                    : TODO_PROGRESS_GUIDELINE,
             )
         }
         if (customGuidelines.length > 0) {
@@ -207,6 +229,9 @@ function buildRoleSentence(
     }
     if (topLevelToolNames.has('spawn_agent')) {
         actions.push('dispatching sub-agents')
+    }
+    if (capabilityToolNames.has('todo') || capabilityToolNames.has('manage_todo_list')) {
+        actions.push('planning tasks and tracking live progress')
     }
     if (capabilityToolNames.has('ask')) {
         actions.push('asking clarification questions')
@@ -365,6 +390,19 @@ function buildGuidelines(
             conditionalToolGuidelines
                 ? CONDITIONAL_TITLE_GUIDELINE
                 : 'Before starting other work, call the title tool to set a concise session title based on user input',
+        )
+    }
+
+    if (capabilityToolNames.has('todo') || capabilityToolNames.has('manage_todo_list')) {
+        add(
+            conditionalToolGuidelines
+                ? CONDITIONAL_TODO_PLANNING_GUIDELINE
+                : TODO_PLANNING_GUIDELINE,
+        )
+        add(
+            conditionalToolGuidelines
+                ? CONDITIONAL_TODO_PROGRESS_GUIDELINE
+                : TODO_PROGRESS_GUIDELINE,
         )
     }
 

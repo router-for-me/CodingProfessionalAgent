@@ -69,6 +69,8 @@ describe('cpa.core.manage-todo-list agent entry', () => {
         expect(factory.riskLevel).toBe('session')
         expect(factory.requiresApproval).toBe(false)
         expect(factory.approvalCategory).toBe('task-management')
+        expect(MANAGE_TODO_LIST_DESCRIPTION).toContain('Plan tasks and present live work progress')
+        expect(MANAGE_TODO_LIST_DESCRIPTION).toContain('proactively')
     })
 
     it('handles write operation and updates store', async () => {

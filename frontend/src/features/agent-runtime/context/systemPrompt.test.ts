@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
+    CONDITIONAL_TODO_PLANNING_GUIDELINE,
+    CONDITIONAL_TODO_PROGRESS_GUIDELINE,
+    TODO_PLANNING_GUIDELINE,
+    TODO_PROGRESS_GUIDELINE,
     augmentSystemPromptForSessionTitle,
     buildSystemPrompt,
     resolveLanguageGuideline,
@@ -745,5 +749,52 @@ describe('buildSystemPrompt with promptDescription and nestedTools', () => {
             nestedTools: [{ name: 'title', description: 'Set title' }],
         })
         expect(prompt).toContain('call the title tool')
+    })
+
+    it('injects proactive todo planning and progress guidelines when todo is available directly or via nestedTools', () => {
+        const withoutTodo = buildSystemPrompt({
+            tools: [{ name: 'read', description: 'Read files' }],
+        })
+        expect(withoutTodo).not.toContain(TODO_PLANNING_GUIDELINE)
+        expect(withoutTodo).not.toContain(TODO_PROGRESS_GUIDELINE)
+        expect(withoutTodo).not.toContain('planning tasks and tracking live progress')
+
+        const withDirectTodo = buildSystemPrompt({
+            tools: [
+                { name: 'read', description: 'Read files' },
+                { name: 'todo', description: 'Plan tasks and track progress' },
+            ],
+        })
+        expect(withDirectTodo).toContain('planning tasks and tracking live progress')
+        expect(withDirectTodo).toContain(`- ${TODO_PLANNING_GUIDELINE}`)
+        expect(withDirectTodo).toContain(`- ${TODO_PROGRESS_GUIDELINE}`)
+
+        const withConditionalNestedTodo = buildSystemPrompt({
+            tools: [{ name: 'exec', description: 'Execute code' }],
+            nestedTools: [{ name: 'todo', description: 'Plan tasks and track progress' }],
+            conditionalToolGuidelines: true,
+        })
+        expect(withConditionalNestedTodo).toContain('planning tasks and tracking live progress')
+        expect(withConditionalNestedTodo).toContain(`- ${CONDITIONAL_TODO_PLANNING_GUIDELINE}`)
+        expect(withConditionalNestedTodo).toContain(`- ${CONDITIONAL_TODO_PROGRESS_GUIDELINE}`)
+        expect(withConditionalNestedTodo).not.toContain(`- ${TODO_PLANNING_GUIDELINE}`)
+    })
+
+    it('injects todo guidelines into custom SYSTEM when todo is available', () => {
+        const prompt = buildSystemPrompt({
+            customPrompt: 'CUSTOM SYSTEM BODY',
+            tools: [{ name: 'todo', description: 'Plan tasks and track progress' }],
+        })
+        expect(prompt).toContain(`- ${TODO_PLANNING_GUIDELINE}`)
+        expect(prompt).toContain(`- ${TODO_PROGRESS_GUIDELINE}`)
+
+        const conditionalPrompt = buildSystemPrompt({
+            customPrompt: 'CUSTOM SYSTEM BODY',
+            tools: [{ name: 'exec', description: 'Execute code' }],
+            nestedTools: [{ name: 'todo', description: 'Plan tasks and track progress' }],
+            conditionalToolGuidelines: true,
+        })
+        expect(conditionalPrompt).toContain(`- ${CONDITIONAL_TODO_PLANNING_GUIDELINE}`)
+        expect(conditionalPrompt).toContain(`- ${CONDITIONAL_TODO_PROGRESS_GUIDELINE}`)
     })
 })

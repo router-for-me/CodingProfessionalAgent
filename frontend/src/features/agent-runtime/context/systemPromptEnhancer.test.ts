@@ -607,4 +607,63 @@ describe('systemPromptEnhancer', () => {
         expect(result).toContain('Promise.all')
     })
 
+    it('instructs builder model to preserve proactive todo planning rules and validates nested tools.todo identifier in code-only mode', async () => {
+        const capturedUserPrompts: string[] = []
+        let callIndex = 0
+        const client: ProtocolClient = {
+            async *stream(input) {
+                const firstEntry = input.entries[0]
+                const userText =
+                    firstEntry && 'content' in firstEntry && Array.isArray(firstEntry.content)
+                        ? firstEntry.content.find((b) => b.type === 'text')
+                        : undefined
+                if (userText && userText.type === 'text') {
+                    capturedUserPrompts.push(userText.text)
+                }
+                const draft =
+                    callIndex++ === 0
+                        ? 'In /workspace/app, batch calls in exec via Promise.all([tools.read({ path: "a" })]) and emit text(res). Track your work carefully.'
+                        : 'In /workspace/app, batch calls in exec via Promise.all([tools.read({ path: "a" })]) and emit text(res). Proactively use todo via tools.todo to plan tasks upfront and update live progress.'
+                yield {
+                    type: 'done',
+                    reason: 'stop',
+                    message: {
+                        id: `m-todo-${callIndex}`,
+                        sessionId: 's',
+                        createdAt: 1000,
+                        kind: 'assistant',
+                        model: 'gpt-6-astra',
+                        content: [{ type: 'text', text: draft }],
+                        status: 'done',
+                        stopReason: 'stop',
+                    },
+                }
+            },
+        }
+
+        const result = await synthesizeEnhancedSystemPrompt({
+            client,
+            model: makeModel('gpt-6-astra'),
+            mutableCorePrompt:
+                'Use exec in /workspace/app with Promise.all([tools.read({})]) and text(out). When todo is present (directly or via tools.todo in Code Mode), proactively plan tasks and show live progress.',
+            verbatimContextPrompt: '',
+            enhancement: {
+                enabled: true,
+                multilingualEnabled: false,
+                allowedLanguages: ['en'],
+                modelId: 'gpt-6-astra',
+            },
+            requiredToolNames: ['exec'],
+            requiredCwd: '/workspace/app',
+            sleep: vi.fn(async () => undefined),
+            generateId: () => 'todo-code-only-synth',
+            now: () => 1000,
+        })
+
+        expect(capturedUserPrompts).toHaveLength(2)
+        expect(capturedUserPrompts[0]).toContain('Proactive `todo` task planning and live progress reporting preservation')
+        expect(capturedUserPrompts[1]).toContain('Missing required nested todo planning identifier: "todo"')
+        expect(result).toContain('tools.todo')
+    })
+
 })

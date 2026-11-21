@@ -7,7 +7,7 @@ export const MANAGE_TODO_LIST_TOOL_NAME = 'todo'
 export const TODO_TOOL_NAME = 'todo'
 
 export const MANAGE_TODO_LIST_DESCRIPTION =
-    'Track task progress. Operations: "write" (replace with full todoList) or "read" (view list). Set status to "in-progress" before starting a task, and "completed" when finished.'
+    'Plan tasks and present live work progress to the user. Use proactively as much as possible for any coding, investigation, or multi-step work: create a task plan upfront, mark the active step "in-progress" before starting, mark steps "completed" immediately when finished, and keep the list updated as work evolves. Operations: "write" (replace with full todoList) or "read" (view list).'
 
 export const MANAGE_TODO_LIST_PARAMETERS = {
     type: 'object',
