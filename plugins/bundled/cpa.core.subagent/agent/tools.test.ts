@@ -198,4 +198,20 @@ describe('sub-agent tools', () => {
         expect(stopRes.content[0]).toEqual({ type: 'text', text: 'stopped' })
         expect(coordinator.stop).toHaveBeenCalledWith('agent-1')
     })
+
+    it('documents exact context token metrics in spawn_agent and send_message descriptions', () => {
+        const coordinator = createMockCoordinator()
+        const [spawnTool, sendTool] = createSubAgentTools(coordinator)
+
+        expect(spawnTool?.description).toContain('context_tokens')
+        expect(spawnTool?.description).toContain('max_context_tokens')
+        expect(spawnTool?.description).toContain('context_usage')
+        expect(sendTool?.description).toContain('context_tokens')
+        expect(sendTool?.description).toContain('max_context_tokens')
+        expect(sendTool?.description).toContain('context_usage')
+        expect(spawnTool?.description).toContain('unknown')
+        expect(spawnTool?.description).toContain('estimated')
+        expect(sendTool?.description).toContain('unknown')
+        expect(sendTool?.description).toContain('estimated')
+    })
 })

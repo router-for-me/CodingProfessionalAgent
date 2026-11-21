@@ -131,7 +131,7 @@ describe('SubAgentHost', () => {
         expect(result.isError).toBeFalsy()
         expect(result.content[0]).toEqual({
             type: 'text',
-            text: '[sub-agent Atlas id=agent-1]\nfinal answer 146',
+            text: '[sub-agent Atlas id=agent-1 context_tokens=9 (estimated) max_context_tokens=128000 context_usage=0.01% (estimated)]\nfinal answer 146',
         })
         const record = host.get('agent-1')
         expect(record?.name).toBe('Atlas')
@@ -466,7 +466,7 @@ describe('SubAgentHost', () => {
         const sent = await host.sendMessage(agents[0]!.id, 'continue')
         expect(sent.content[0]).toMatchObject({
             type: 'text',
-            text: 'Message sent to Relay',
+            text: `[sub-agent Relay id=${agents[0]!.id} context_tokens=unknown max_context_tokens=128000 context_usage=unknown]\nMessage sent to Relay`,
         })
         releaseHold()
         const result = await spawnPromise
@@ -529,7 +529,7 @@ describe('SubAgentHost', () => {
         const sent = await host.sendMessage(agent.id, 'follow up while running')
         expect(sent.content[0]).toMatchObject({
             type: 'text',
-            text: 'Message sent to LiveWorker',
+            text: `[sub-agent LiveWorker id=${agent.id} context_tokens=unknown max_context_tokens=128000 context_usage=unknown]\nMessage sent to LiveWorker`,
         })
 
         // Verify: The second userEntry is emitted IMMEDIATELY before turn 1 completes
@@ -2296,5 +2296,1159 @@ describe('SubAgentHost', () => {
         expect(childReq.systemPrompt).toContain('SUBAGENT_BATCH_GUIDANCE:exec')
         // Request retains full tools so child AgentLoop can run prepareToolSet() at execution time.
         expect(childReq.tools.map((t) => t.name)).toEqual(['read', 'exec'])
+    })
+
+    it('includes exact context_tokens, max_context_tokens, and context_usage on spawn_agent and send_message results', async () => {
+        const bigModel: ModelCatalogEntry = {
+            ...model,
+            id: 'big-model',
+            label: 'Big Model',
+            contextWindow: 400_000,
+        }
+        let turn = 0
+        const host = new SubAgentHost({
+            generateId: (() => {
+                let n = 0
+                return () => `ctx-id-${++n}`
+            })(),
+            now: () => 100,
+            run: async function* (request) {
+                turn += 1
+                const entry: AssistantEntry =
+                    turn === 1
+                        ? {
+                              id: 'a-turn-1',
+                              sessionId: request.sessionId,
+                              createdAt: 101,
+                              kind: 'assistant',
+                              content: [{ type: 'text', text: 'first turn output' }],
+                              stopReason: 'stop',
+                              status: 'done',
+                              usage: {
+                                  input: 40_000,
+                                  output: 5_123,
+                                  cacheRead: 0,
+                                  cacheWrite: 0,
+                                  totalTokens: 45_123,
+                                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                              },
+                          }
+                        : {
+                              id: 'a-turn-2',
+                              sessionId: request.sessionId,
+                              createdAt: 102,
+                              kind: 'assistant',
+                              content: [{ type: 'text', text: 'second turn output' }],
+                              stopReason: 'stop',
+                              status: 'done',
+                              // Exercise fallback sum when totalTokens is 0 but component fields are populated.
+                              usage: {
+                                  input: 120_000,
+                                  output: 12_345,
+                                  cacheRead: 80_000,
+                                  cacheWrite: 1_000,
+                                  totalTokens: 0,
+                                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                              },
+                          }
+                yield { type: 'agent-start', runId: request.runId, sessionId: request.sessionId }
+                yield { type: 'assistant-end', runId: request.runId, sessionId: request.sessionId, entry }
+                yield {
+                    type: 'agent-end',
+                    runId: request.runId,
+                    sessionId: request.sessionId,
+                    entries: [...request.entries, request.userEntry, entry],
+                }
+            },
+        })
+        host.configure({
+            prepared: preparedRun(),
+            codingTools: [readTool],
+            models: [model, bigModel],
+        })
+        host.setParentContext({ sessionId: 'parent', runId: 'run-1' })
+
+        const spawnRes = await host.spawn('analyze module', { name: 'Analyst', modelId: 'big-model' })
+        expect(spawnRes.isError).toBeFalsy()
+        expect(spawnRes.content[0]).toEqual({
+            type: 'text',
+            text: '[sub-agent Analyst id=ctx-id-1 context_tokens=45123 max_context_tokens=400000 context_usage=11.28%]\nfirst turn output',
+        })
+
+        const sendRes = await host.sendMessage('ctx-id-1', 'continue analysis')
+        expect(sendRes.isError).toBeFalsy()
+        expect(sendRes.content[0]).toEqual({
+            type: 'text',
+            text: '[sub-agent Analyst id=ctx-id-1 context_tokens=213345 max_context_tokens=400000 context_usage=53.34%]\nsecond turn output',
+        })
+    })
+
+    it('reports post-compaction active context tokens rather than cumulative pre-compaction usage', async () => {
+        const bigModel: ModelCatalogEntry = {
+            ...model,
+            id: 'compact-model',
+            label: 'Compact Model',
+            contextWindow: 200_000,
+        }
+        const host = new SubAgentHost({
+            generateId: (() => {
+                let n = 0
+                return () => `cmp-id-${++n}`
+            })(),
+            now: () => 200,
+            run: async function* (request) {
+                const preCompactAssistant: AssistantEntry = {
+                    id: 'a-pre',
+                    sessionId: request.sessionId,
+                    createdAt: 201,
+                    kind: 'assistant',
+                    content: [{ type: 'text', text: 'heavy work' }],
+                    stopReason: 'stop',
+                    status: 'done',
+                    usage: {
+                        input: 170_000,
+                        output: 10_000,
+                        cacheRead: 0,
+                        cacheWrite: 0,
+                        totalTokens: 180_000,
+                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                    },
+                }
+                const compactionEntry = {
+                    id: 'cmp-1',
+                    sessionId: request.sessionId,
+                    createdAt: 202,
+                    kind: 'compaction' as const,
+                    summary: 'compact summary',
+                    firstKeptEntryId: 'a-post',
+                    tokensBefore: 180_000,
+                }
+                const postCompactAssistant: AssistantEntry = {
+                    id: 'a-post',
+                    sessionId: request.sessionId,
+                    createdAt: 203,
+                    kind: 'assistant',
+                    content: [{ type: 'text', text: 'post-compaction reply' }],
+                    stopReason: 'stop',
+                    status: 'done',
+                    usage: {
+                        input: 24_000,
+                        output: 1_000,
+                        cacheRead: 0,
+                        cacheWrite: 0,
+                        totalTokens: 25_000,
+                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                    },
+                }
+                yield { type: 'agent-start', runId: request.runId, sessionId: request.sessionId }
+                yield { type: 'assistant-end', runId: request.runId, sessionId: request.sessionId, entry: postCompactAssistant }
+                yield {
+                    type: 'agent-end',
+                    runId: request.runId,
+                    sessionId: request.sessionId,
+                    entries: [request.userEntry, preCompactAssistant, compactionEntry, postCompactAssistant],
+                }
+            },
+        })
+        host.configure({
+            prepared: preparedRun(),
+            codingTools: [readTool],
+            models: [model, bigModel],
+        })
+        host.setParentContext({ sessionId: 'parent', runId: 'run-1' })
+
+        const res = await host.spawn('long task', { name: 'Compactor', modelId: 'compact-model' })
+        expect(res.content[0]).toEqual({
+            type: 'text',
+            text: '[sub-agent Compactor id=cmp-id-1 context_tokens=25000 max_context_tokens=200000 context_usage=12.50%]\npost-compaction reply',
+        })
+    })
+
+    it('loads persisted entries to compute exact context metrics when spawn replays an already completed sub-agent', async () => {
+        const persistedModel: ModelCatalogEntry = {
+            ...model,
+            id: 'persisted-model',
+            label: 'Persisted Model',
+            contextWindow: 300_000,
+        }
+        const persistedAssistant: AssistantEntry = {
+            id: 'a-persisted',
+            sessionId: 'completed-sub-metrics',
+            createdAt: 2,
+            kind: 'assistant',
+            content: [{ type: 'text', text: 'already done' }],
+            stopReason: 'stop',
+            status: 'done',
+            usage: {
+                input: 50_000,
+                output: 10_000,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 60_000,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+        }
+        const host = new SubAgentHost({
+            generateId: () => 'unused',
+            now: () => 10,
+            run: (request) => scriptedRun(request, ['should not run']),
+        })
+        host.configure({
+            prepared: preparedRun(),
+            codingTools: [readTool],
+            models: [model, persistedModel],
+            getEntries: vi.fn(async () => [persistedAssistant]),
+        })
+        host.setParentContext({ sessionId: 'parent', runId: 'run-1' })
+        host.hydrate([
+            {
+                id: 'completed-sub-metrics',
+                name: 'RestoredWorker',
+                color: '#3dd68c',
+                icon: 'atom',
+                parentSessionId: 'parent',
+                sessionId: 'completed-sub-metrics',
+                modelId: 'persisted-model',
+                parentToolCallId: 'call-replay-metrics',
+                status: 'completed',
+                lastMessage: 'already done',
+                createdAt: 1,
+                updatedAt: 2,
+            },
+        ])
+
+        const res = await host.spawn('Do task', {
+            name: 'RestoredWorker',
+            toolCallId: 'call-replay-metrics',
+        })
+        expect(res.content[0]).toEqual({
+            type: 'text',
+            text: '[sub-agent RestoredWorker id=completed-sub-metrics context_tokens=60000 max_context_tokens=300000 context_usage=20.00%]\nalready done',
+        })
+    })
+
+    it('includes latest known context metrics when send_message queues a follow-up during an active second turn', async () => {
+        const bigModel: ModelCatalogEntry = {
+            ...model,
+            id: 'queue-model',
+            label: 'Queue Model',
+            contextWindow: 200_000,
+        }
+        let turn = 0
+        let releaseSecondStarted!: () => void
+        const secondTurnStarted = new Promise<void>((resolve) => {
+            releaseSecondStarted = resolve
+        })
+        let releaseSecondHold!: () => void
+        const holdSecond = new Promise<void>((resolve) => {
+            releaseSecondHold = resolve
+        })
+
+        const host = new SubAgentHost({
+            generateId: (() => {
+                let n = 0
+                return () => `q-id-${++n}`
+            })(),
+            now: () => 10,
+            run: async function* (request) {
+                turn += 1
+                if (turn === 2) {
+                    releaseSecondStarted()
+                    await holdSecond
+                }
+                const entry: AssistantEntry = {
+                    id: `a-q-${turn}`,
+                    sessionId: request.sessionId,
+                    createdAt: 10 + turn,
+                    kind: 'assistant',
+                    content: [{ type: 'text', text: `turn ${turn} done` }],
+                    stopReason: 'stop',
+                    status: 'done',
+                    usage: {
+                        input: 20_000 * turn,
+                        output: 5_000,
+                        cacheRead: 0,
+                        cacheWrite: 0,
+                        totalTokens: 20_000 * turn + 5_000,
+                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                    },
+                }
+                yield { type: 'agent-start', runId: request.runId, sessionId: request.sessionId }
+                yield { type: 'assistant-end', runId: request.runId, sessionId: request.sessionId, entry }
+                yield {
+                    type: 'agent-end',
+                    runId: request.runId,
+                    sessionId: request.sessionId,
+                    entries: [...request.entries, request.userEntry, entry],
+                }
+            },
+        })
+        host.configure({
+            prepared: preparedRun(),
+            codingTools: [readTool],
+            models: [model, bigModel],
+        })
+        host.setParentContext({ sessionId: 'parent', runId: 'run-1' })
+
+        await host.spawn('turn 1', { name: 'Runner', modelId: 'queue-model' })
+        const secondPromise = host.sendMessage('q-id-1', 'turn 2')
+        await secondTurnStarted
+
+        const queuedRes = await host.sendMessage('q-id-1', 'turn 3 queued')
+        expect(queuedRes.content[0]).toEqual({
+            type: 'text',
+            text: '[sub-agent Runner id=q-id-1 context_tokens=25000 (last_completed_turn) max_context_tokens=200000 context_usage=12.50% (last_completed_turn)]\nMessage sent to Runner',
+        })
+
+        releaseSecondHold()
+        const finalRes = await secondPromise
+        expect(finalRes.content[0]).toEqual({
+            type: 'text',
+            text: '[sub-agent Runner id=q-id-1 context_tokens=65000 max_context_tokens=200000 context_usage=32.50%]\nturn 3 done',
+        })
+    })
+
+    it('reports unknown context metrics instead of fake zeros when replay history fails or model window is unknown', async () => {
+        const host = new SubAgentHost({
+            generateId: () => 'unused',
+            now: () => 10,
+            run: (request) => scriptedRun(request, ['unused']),
+        })
+        host.configure({
+            prepared: preparedRun(),
+            codingTools: [readTool],
+            models: [model],
+            getEntries: vi.fn(async () => {
+                throw new Error('disk read failure')
+            }),
+        })
+        host.setParentContext({ sessionId: 'parent', runId: 'run-1' })
+        host.hydrate([
+            {
+                id: 'replayed-unknown-model',
+                name: 'LegacyWorker',
+                color: '#3dd68c',
+                icon: 'atom',
+                parentSessionId: 'parent',
+                sessionId: 'replayed-unknown-model',
+                modelId: 'removed-model-id',
+                parentToolCallId: 'call-removed-model',
+                status: 'completed',
+                lastMessage: 'previous answer',
+                createdAt: 1,
+                updatedAt: 2,
+            },
+        ])
+
+        const res = await host.spawn('Do task', {
+            name: 'LegacyWorker',
+            toolCallId: 'call-removed-model',
+        })
+        expect(res.content[0]).toEqual({
+            type: 'text',
+            text: '[sub-agent LegacyWorker id=replayed-unknown-model context_tokens=unknown max_context_tokens=unknown context_usage=unknown]\nprevious answer',
+        })
+    })
+
+    it('prevents context_usage display rounding from crossing strict 30% and 75% policy boundaries', async () => {
+        const boundaryModel: ModelCatalogEntry = {
+            ...model,
+            id: 'boundary-200k',
+            label: 'Boundary 200K',
+            contextWindow: 200_000,
+        }
+        const tokenSequence = [59_999, 60_000, 60_001, 149_999, 150_000, 150_001]
+        let idx = 0
+        const host = new SubAgentHost({
+            generateId: () => 'boundary-agent',
+            now: () => 10,
+            run: async function* (request) {
+                const used = tokenSequence[idx++]!
+                const entry: AssistantEntry = {
+                    id: `a-b-${idx}`,
+                    sessionId: request.sessionId,
+                    createdAt: 10 + idx,
+                    kind: 'assistant',
+                    content: [{ type: 'text', text: `reply ${used}` }],
+                    stopReason: 'stop',
+                    status: 'done',
+                    usage: {
+                        input: used,
+                        output: 0,
+                        cacheRead: 0,
+                        cacheWrite: 0,
+                        totalTokens: used,
+                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                    },
+                }
+                yield { type: 'agent-start', runId: request.runId, sessionId: request.sessionId }
+                yield { type: 'assistant-end', runId: request.runId, sessionId: request.sessionId, entry }
+                yield {
+                    type: 'agent-end',
+                    runId: request.runId,
+                    sessionId: request.sessionId,
+                    entries: [request.userEntry, entry],
+                }
+            },
+        })
+        host.configure({
+            prepared: preparedRun(),
+            codingTools: [readTool],
+            models: [model, boundaryModel],
+        })
+        host.setParentContext({ sessionId: 'parent', runId: 'run-1' })
+
+        const expectedPercents = ['29.99%', '30.00%', '30.01%', '74.99%', '75.00%', '75.01%']
+        const first = await host.spawn('step 0', { name: 'Edge', modelId: 'boundary-200k' })
+        expect(first.content[0]?.text).toContain(`context_tokens=59999 max_context_tokens=200000 context_usage=${expectedPercents[0]}`)
+
+        for (let i = 1; i < tokenSequence.length; i += 1) {
+            const next = await host.sendMessage('boundary-agent', `step ${i}`)
+            expect(next.content[0]?.text).toContain(
+                `context_tokens=${tokenSequence[i]} max_context_tokens=200000 context_usage=${expectedPercents[i]}`,
+            )
+        }
+    })
+
+    it('marks sub-agent as error and returns isError when stream yields an error event without throwing', async () => {
+        const bigModel: ModelCatalogEntry = {
+            ...model,
+            id: 'err-model',
+            label: 'Err Model',
+            contextWindow: 200_000,
+        }
+        let turn = 0
+        const host = new SubAgentHost({
+            generateId: () => 'err-agent',
+            now: () => 10,
+            run: async function* (request) {
+                turn += 1
+                if (turn === 1) {
+                    const okEntry: AssistantEntry = {
+                        id: 'a-ok',
+                        sessionId: request.sessionId,
+                        createdAt: 11,
+                        kind: 'assistant',
+                        content: [{ type: 'text', text: 'turn 1 ok' }],
+                        stopReason: 'stop',
+                        status: 'done',
+                        usage: {
+                            input: 30_000,
+                            output: 0,
+                            cacheRead: 0,
+                            cacheWrite: 0,
+                            totalTokens: 30_000,
+                            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                        },
+                    }
+                    yield { type: 'agent-start', runId: request.runId, sessionId: request.sessionId }
+                    yield { type: 'assistant-end', runId: request.runId, sessionId: request.sessionId, entry: okEntry }
+                    yield {
+                        type: 'agent-end',
+                        runId: request.runId,
+                        sessionId: request.sessionId,
+                        entries: [request.userEntry, okEntry],
+                    }
+                    return
+                }
+                const errEntry: AssistantEntry = {
+                    id: 'a-err',
+                    sessionId: request.sessionId,
+                    createdAt: 12,
+                    kind: 'assistant',
+                    content: [],
+                    stopReason: 'error',
+                    status: 'error',
+                    errorMessage: 'upstream rate limit',
+                }
+                yield { type: 'agent-start', runId: request.runId, sessionId: request.sessionId }
+                yield { type: 'assistant-end', runId: request.runId, sessionId: request.sessionId, entry: errEntry }
+                yield { type: 'error', runId: request.runId, sessionId: request.sessionId, message: 'upstream rate limit' }
+                yield {
+                    type: 'agent-end',
+                    runId: request.runId,
+                    sessionId: request.sessionId,
+                    entries: [...request.entries, request.userEntry, errEntry],
+                }
+            },
+        })
+        host.configure({
+            prepared: preparedRun(),
+            codingTools: [readTool],
+            models: [model, bigModel],
+        })
+        host.setParentContext({ sessionId: 'parent', runId: 'run-1' })
+
+        const spawnRes = await host.spawn('start', { name: 'Fragile', modelId: 'err-model' })
+        expect(spawnRes.isError).toBeFalsy()
+
+        const followUp = await host.sendMessage('err-agent', 'follow up')
+        expect(followUp.isError).toBe(true)
+        expect(host.get('err-agent')?.status).toBe('error')
+        expect(followUp.content[0]?.text).toContain('[sub-agent Fragile id=err-agent ')
+        expect(followUp.content[0]?.text).toContain('upstream rate limit')
+        expect(followUp.content[0]?.text).toContain('(estimated)')
+    })
+
+    it('reports unknown (never last_completed_turn) when send_message queues during turn 1 even if initial userEntry was preloaded', async () => {
+        let releaseTurn1Started!: () => void
+        const turn1Started = new Promise<void>((resolve) => {
+            releaseTurn1Started = resolve
+        })
+        let releaseTurn1Hold!: () => void
+        const holdTurn1 = new Promise<void>((resolve) => {
+            releaseTurn1Hold = resolve
+        })
+        const storedEntries: UserEntry[] = []
+        let turn = 0
+        const host = new SubAgentHost({
+            generateId: (() => {
+                let n = 0
+                return () => `preload-id-${++n}`
+            })(),
+            now: () => 10,
+            run: async function* (request) {
+                turn += 1
+                if (turn === 1) {
+                    releaseTurn1Started()
+                    await holdTurn1
+                }
+                yield* scriptedRun(request, [`reply ${turn}`])
+            },
+        })
+        host.configure({
+            prepared: preparedRun(),
+            codingTools: [readTool],
+            models: [model],
+            getEntries: async () => [...storedEntries],
+        })
+        host.setParentContext({ sessionId: 'parent', runId: 'run-1' })
+        host.subscribe({
+            onStateChange: () => {},
+            onUserEntry: (entry) => {
+                storedEntries.push(entry)
+            },
+        })
+
+        const spawnPromise = host.spawn('initial prompt text', { name: 'Preloaded' })
+        await turn1Started
+
+        const queued = await host.sendMessage('preload-id-1', 'queued follow-up')
+        expect(queued.content[0]).toEqual({
+            type: 'text',
+            text: '[sub-agent Preloaded id=preload-id-1 context_tokens=unknown max_context_tokens=128000 context_usage=unknown]\nMessage sent to Preloaded',
+        })
+
+        releaseTurn1Hold()
+        await spawnPromise
+    })
+
+    it('clears cached contextWindow when a subsequent turn runs with a model no longer in catalog', async () => {
+        const tempModel: ModelCatalogEntry = {
+            ...model,
+            id: 'ephemeral-model',
+            label: 'Ephemeral Model',
+            contextWindow: 400_000,
+        }
+        let turn = 0
+        const host = new SubAgentHost({
+            generateId: () => 'cache-clear-agent',
+            now: () => 10,
+            run: async function* (request) {
+                turn += 1
+                const entry: AssistantEntry = {
+                    id: `a-cc-${turn}`,
+                    sessionId: request.sessionId,
+                    createdAt: 10 + turn,
+                    kind: 'assistant',
+                    content: [{ type: 'text', text: `turn ${turn}` }],
+                    stopReason: 'stop',
+                    status: 'done',
+                    usage: {
+                        input: 50_000,
+                        output: 0,
+                        cacheRead: 0,
+                        cacheWrite: 0,
+                        totalTokens: 50_000,
+                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                    },
+                }
+                yield { type: 'agent-start', runId: request.runId, sessionId: request.sessionId }
+                yield { type: 'assistant-end', runId: request.runId, sessionId: request.sessionId, entry }
+                yield {
+                    type: 'agent-end',
+                    runId: request.runId,
+                    sessionId: request.sessionId,
+                    entries: [...request.entries, request.userEntry, entry],
+                }
+            },
+        })
+        host.configure({
+            prepared: preparedRun(),
+            codingTools: [readTool],
+            models: [model, tempModel],
+        })
+        host.setParentContext({ sessionId: 'parent', runId: 'run-1' })
+
+        const res1 = await host.spawn('step 1', { name: 'Shifter', modelId: 'ephemeral-model' })
+        expect(res1.content[0]?.text).toContain('context_tokens=50000 max_context_tokens=400000 context_usage=12.50%')
+
+        // Model is removed from catalog before the next turn.
+        host.configure({
+            prepared: preparedRun(),
+            codingTools: [readTool],
+            models: [model],
+        }, 'parent')
+        const res2 = await host.sendMessage('cache-clear-agent', 'step 2')
+        expect(res2.content[0]?.text).toContain('context_tokens=50000 max_context_tokens=unknown context_usage=unknown')
+    })
+
+    it('marks sub-agent as aborted and returns isError when stream yields aborted event without host signal abort', async () => {
+        const host = new SubAgentHost({
+            generateId: () => 'upstream-abort-agent',
+            now: () => 10,
+            run: async function* (request) {
+                const abortedEntry: AssistantEntry = {
+                    id: 'a-aborted',
+                    sessionId: request.sessionId,
+                    createdAt: 11,
+                    kind: 'assistant',
+                    content: [],
+                    stopReason: 'aborted',
+                    status: 'aborted',
+                }
+                yield { type: 'agent-start', runId: request.runId, sessionId: request.sessionId }
+                yield { type: 'assistant-end', runId: request.runId, sessionId: request.sessionId, entry: abortedEntry }
+                yield { type: 'aborted', runId: request.runId, sessionId: request.sessionId }
+                yield {
+                    type: 'agent-end',
+                    runId: request.runId,
+                    sessionId: request.sessionId,
+                    entries: [request.userEntry, abortedEntry],
+                }
+            },
+        })
+        host.configure({
+            prepared: preparedRun(),
+            codingTools: [readTool],
+            models: [model],
+        })
+        host.setParentContext({ sessionId: 'parent', runId: 'run-1' })
+
+        const res = await host.spawn('work', { name: 'Aborter' })
+        expect(res.isError).toBe(true)
+        expect(host.get('upstream-abort-agent')?.status).toBe('aborted')
+        expect(res.content[0]?.text).toContain('[sub-agent Aborter id=upstream-abort-agent ')
+    })
+
+    it('reports unexecuted queued follow-up messages when the active turn fails with an error', async () => {
+        let releaseTurn1Started!: () => void
+        const turn1Started = new Promise<void>((resolve) => {
+            releaseTurn1Started = resolve
+        })
+        let releaseTurn1Hold!: () => void
+        const holdTurn1 = new Promise<void>((resolve) => {
+            releaseTurn1Hold = resolve
+        })
+        const host = new SubAgentHost({
+            generateId: (() => {
+                let n = 0
+                return () => `drop-q-${++n}`
+            })(),
+            now: () => 10,
+            run: async function* (request) {
+                releaseTurn1Started()
+                await holdTurn1
+                yield { type: 'agent-start', runId: request.runId, sessionId: request.sessionId }
+                yield { type: 'error', runId: request.runId, sessionId: request.sessionId, message: 'upstream crashed' }
+                yield { type: 'agent-end', runId: request.runId, sessionId: request.sessionId, entries: [request.userEntry] }
+            },
+        })
+        host.configure({
+            prepared: preparedRun(),
+            codingTools: [readTool],
+            models: [model],
+        })
+        host.setParentContext({ sessionId: 'parent', runId: 'run-1' })
+
+        const spawnPromise = host.spawn('turn 1', { name: 'DropGuard' })
+        await turn1Started
+        await host.sendMessage('drop-q-1', 'follow-up that cannot run')
+        releaseTurn1Hold()
+
+        const spawnRes = await spawnPromise
+        expect(spawnRes.isError).toBe(true)
+        expect(spawnRes.content[0]?.text).toContain('upstream crashed')
+        expect(spawnRes.content[0]?.text).toContain('1 queued follow-up message was not executed')
+    })
+
+    it('does not mark trailing empty toolResult or partial NaN usage components as exact', async () => {
+        const host = new SubAgentHost({
+            generateId: (() => {
+                let n = 0
+                return () => `strict-exact-${++n}`
+            })(),
+            now: () => 10,
+            run: async function* (request) {
+                const doneWithTrailing: AssistantEntry = {
+                    id: 'a-exact-base',
+                    sessionId: request.sessionId,
+                    createdAt: 11,
+                    kind: 'assistant',
+                    content: [{ type: 'text', text: 'base reply' }],
+                    stopReason: 'stop',
+                    status: 'done',
+                    usage: {
+                        input: 10_000,
+                        output: 500,
+                        cacheRead: 0,
+                        cacheWrite: 0,
+                        totalTokens: 10_500,
+                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                    },
+                }
+                const emptyToolResult = {
+                    id: 'tr-empty',
+                    sessionId: request.sessionId,
+                    createdAt: 12,
+                    kind: 'toolResult' as const,
+                    toolCallId: 'tc-1',
+                    toolName: 'bash',
+                    content: [{ type: 'text' as const, text: '' }],
+                    isError: false,
+                }
+                yield { type: 'agent-start', runId: request.runId, sessionId: request.sessionId }
+                yield { type: 'assistant-end', runId: request.runId, sessionId: request.sessionId, entry: doneWithTrailing }
+                yield {
+                    type: 'agent-end',
+                    runId: request.runId,
+                    sessionId: request.sessionId,
+                    entries: [request.userEntry, doneWithTrailing, emptyToolResult],
+                }
+            },
+        })
+        host.configure({
+            prepared: preparedRun(),
+            codingTools: [readTool],
+            models: [model],
+        })
+        host.setParentContext({ sessionId: 'parent', runId: 'run-1' })
+
+        const trailingRes = await host.spawn('check trailing', { name: 'TrailingCheck' })
+        expect(trailingRes.content[0]?.text).toContain('context_tokens=10500 (estimated)')
+
+        const nanHost = new SubAgentHost({
+            generateId: () => 'nan-usage-agent',
+            now: () => 10,
+            run: async function* (request) {
+                const nanUsageEntry: AssistantEntry = {
+                    id: 'a-nan',
+                    sessionId: request.sessionId,
+                    createdAt: 11,
+                    kind: 'assistant',
+                    content: [{ type: 'text', text: 'nan usage reply' }],
+                    stopReason: 'stop',
+                    status: 'done',
+                    usage: {
+                        input: Number.NaN,
+                        output: 55,
+                        cacheRead: 0,
+                        cacheWrite: 0,
+                        totalTokens: 0,
+                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                    },
+                }
+                yield { type: 'agent-start', runId: request.runId, sessionId: request.sessionId }
+                yield { type: 'assistant-end', runId: request.runId, sessionId: request.sessionId, entry: nanUsageEntry }
+                yield {
+                    type: 'agent-end',
+                    runId: request.runId,
+                    sessionId: request.sessionId,
+                    entries: [request.userEntry, nanUsageEntry],
+                }
+            },
+        })
+        nanHost.configure({
+            prepared: preparedRun(),
+            codingTools: [readTool],
+            models: [model],
+        })
+        nanHost.setParentContext({ sessionId: 'parent', runId: 'run-1' })
+
+        const nanRes = await nanHost.spawn('check nan', { name: 'NanCheck' })
+        expect(nanRes.content[0]?.text).not.toContain('context_tokens=55 ')
+        expect(nanRes.content[0]?.text).toContain('(estimated)')
+    })
+
+    it('does not treat output-only usage without input tokens as exact context total', async () => {
+        const host = new SubAgentHost({
+            generateId: () => 'output-only-usage-agent',
+            now: () => 10,
+            run: async function* (request) {
+                const outputOnlyEntry: AssistantEntry = {
+                    id: 'a-output-only',
+                    sessionId: request.sessionId,
+                    createdAt: 11,
+                    kind: 'assistant',
+                    content: [{ type: 'text', text: 'short reply' }],
+                    stopReason: 'stop',
+                    status: 'done',
+                    usage: {
+                        input: 0,
+                        output: 55,
+                        cacheRead: 0,
+                        cacheWrite: 0,
+                        totalTokens: 0,
+                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                    },
+                }
+                yield { type: 'agent-start', runId: request.runId, sessionId: request.sessionId }
+                yield { type: 'assistant-end', runId: request.runId, sessionId: request.sessionId, entry: outputOnlyEntry }
+                yield {
+                    type: 'agent-end',
+                    runId: request.runId,
+                    sessionId: request.sessionId,
+                    entries: [request.userEntry, outputOnlyEntry],
+                }
+            },
+        })
+        host.configure({
+            prepared: preparedRun(),
+            codingTools: [readTool],
+            models: [model],
+        })
+        host.setParentContext({ sessionId: 'parent', runId: 'run-1' })
+
+        const res = await host.spawn('prompt without upstream input usage', { name: 'OutputOnly' })
+        expect(res.content[0]?.text).not.toContain('context_tokens=55 ')
+        expect(res.content[0]?.text).toContain('(estimated)')
+    })
+
+    it('reports unexecuted queued follow-up messages when the active turn is aborted upstream', async () => {
+        let releaseTurn1Started!: () => void
+        const turn1Started = new Promise<void>((resolve) => {
+            releaseTurn1Started = resolve
+        })
+        let releaseTurn1Hold!: () => void
+        const holdTurn1 = new Promise<void>((resolve) => {
+            releaseTurn1Hold = resolve
+        })
+        const host = new SubAgentHost({
+            generateId: (() => {
+                let n = 0
+                return () => `abort-drop-q-${++n}`
+            })(),
+            now: () => 10,
+            run: async function* (request) {
+                releaseTurn1Started()
+                await holdTurn1
+                yield { type: 'agent-start', runId: request.runId, sessionId: request.sessionId }
+                yield { type: 'aborted', runId: request.runId, sessionId: request.sessionId }
+                yield { type: 'agent-end', runId: request.runId, sessionId: request.sessionId, entries: [request.userEntry] }
+            },
+        })
+        host.configure({
+            prepared: preparedRun(),
+            codingTools: [readTool],
+            models: [model],
+        })
+        host.setParentContext({ sessionId: 'parent', runId: 'run-1' })
+
+        const spawnPromise = host.spawn('turn 1', { name: 'AbortDropGuard' })
+        await turn1Started
+        await host.sendMessage('abort-drop-q-1', 'queued follow-up dropped on abort')
+        releaseTurn1Hold()
+
+        const spawnRes = await spawnPromise
+        expect(spawnRes.isError).toBe(true)
+        expect(host.get('abort-drop-q-1')?.status).toBe('aborted')
+        expect(spawnRes.content[0]?.text).toContain('AbortDropGuard was stopped')
+        expect(spawnRes.content[0]?.text).toContain('1 queued follow-up message was not executed')
+    })
+
+    it('consistently reports all 2 unexecuted queued messages on external AbortSignal, stop(), and concurrent resumeSubAgent waiters', async () => {
+        // Case 1: External AbortSignal with 2 queued messages and a concurrent resumeSubAgent waiter
+        {
+            let releaseTurn1Started!: () => void
+            const turn1Started = new Promise<void>((resolve) => {
+                releaseTurn1Started = resolve
+            })
+            let releaseTurn1Hold!: () => void
+            const holdTurn1 = new Promise<void>((resolve) => {
+                releaseTurn1Hold = resolve
+            })
+            const host = new SubAgentHost({
+                generateId: (() => {
+                    let n = 0
+                    return () => `ext-abort-${++n}`
+                })(),
+                now: () => 10,
+                run: async function* (request) {
+                    releaseTurn1Started()
+                    await holdTurn1
+                    yield { type: 'agent-start', runId: request.runId, sessionId: request.sessionId }
+                    yield { type: 'agent-end', runId: request.runId, sessionId: request.sessionId, entries: [request.userEntry] }
+                },
+            })
+            host.configure({
+                prepared: preparedRun(),
+                codingTools: [readTool],
+                models: [model],
+            })
+            host.setParentContext({ sessionId: 'parent', runId: 'run-1' })
+
+            const controller = new AbortController()
+            const spawnPromise = host.spawn('turn 1', { name: 'ExtAbort', signal: controller.signal })
+            await turn1Started
+            await host.sendMessage('ext-abort-1', 'queued 1')
+            await host.sendMessage('ext-abort-1', 'queued 2')
+            const resumeWaiter = host.resumeSubAgent('ext-abort-1')
+            controller.abort()
+            releaseTurn1Hold()
+
+            const [spawnRes, resumeRes] = await Promise.all([spawnPromise, resumeWaiter])
+            expect(spawnRes.isError).toBe(true)
+            expect(resumeRes.isError).toBe(true)
+            expect(spawnRes.content[0]?.text).toContain('ExtAbort was stopped')
+            expect(spawnRes.content[0]?.text).toContain('2 queued follow-up messages were not executed')
+            expect(resumeRes.content[0]?.text).toContain('ExtAbort was stopped')
+            expect(resumeRes.content[0]?.text).toContain('2 queued follow-up messages were not executed')
+        }
+
+        // Case 2: stop() with 2 queued messages and a concurrent resumeSubAgent waiter
+        {
+            let releaseTurn1Started!: () => void
+            const turn1Started = new Promise<void>((resolve) => {
+                releaseTurn1Started = resolve
+            })
+            let releaseTurn1Hold!: () => void
+            const holdTurn1 = new Promise<void>((resolve) => {
+                releaseTurn1Hold = resolve
+            })
+            const host = new SubAgentHost({
+                generateId: (() => {
+                    let n = 0
+                    return () => `stop-abort-${++n}`
+                })(),
+                now: () => 10,
+                run: async function* (request) {
+                    releaseTurn1Started()
+                    await holdTurn1
+                    yield { type: 'agent-start', runId: request.runId, sessionId: request.sessionId }
+                    yield { type: 'agent-end', runId: request.runId, sessionId: request.sessionId, entries: [request.userEntry] }
+                },
+            })
+            host.configure({
+                prepared: preparedRun(),
+                codingTools: [readTool],
+                models: [model],
+            })
+            host.setParentContext({ sessionId: 'parent', runId: 'run-1' })
+
+            const spawnPromise = host.spawn('turn 1', { name: 'StopAbort' })
+            await turn1Started
+            await host.sendMessage('stop-abort-1', 'queued 1')
+            await host.sendMessage('stop-abort-1', 'queued 2')
+            const resumeWaiter = host.resumeSubAgent('stop-abort-1')
+            host.stop('stop-abort-1')
+            releaseTurn1Hold()
+
+            const [spawnRes, resumeRes] = await Promise.all([spawnPromise, resumeWaiter])
+            expect(spawnRes.isError).toBe(true)
+            expect(resumeRes.isError).toBe(true)
+            expect(spawnRes.content[0]?.text).toContain('StopAbort was stopped')
+            expect(spawnRes.content[0]?.text).toContain('2 queued follow-up messages were not executed')
+            expect(resumeRes.content[0]?.text).toContain('StopAbort was stopped')
+            expect(resumeRes.content[0]?.text).toContain('2 queued follow-up messages were not executed')
+        }
+    })
+
+    it('snapshots spawn terminal result before awaiting async SubagentStop hook so a retry cannot overwrite it', async () => {
+        let releaseTurn1Started!: () => void
+        const turn1Started = new Promise<void>((resolve) => {
+            releaseTurn1Started = resolve
+        })
+        let releaseTurn1Hold!: () => void
+        const holdTurn1 = new Promise<void>((resolve) => {
+            releaseTurn1Hold = resolve
+        })
+        let releaseStopHookStarted!: () => void
+        const stopHookStarted = new Promise<void>((resolve) => {
+            releaseStopHookStarted = resolve
+        })
+        let releaseStopHookHold!: () => void
+        const holdStopHook = new Promise<void>((resolve) => {
+            releaseStopHookHold = resolve
+        })
+        let turn = 0
+        const host = new SubAgentHost({
+            generateId: (() => {
+                let n = 0
+                return () => `hook-race-${++n}`
+            })(),
+            now: () => 10,
+            run: async function* (request) {
+                turn += 1
+                if (turn === 1) {
+                    releaseTurn1Started()
+                    await holdTurn1
+                    yield { type: 'agent-start', runId: request.runId, sessionId: request.sessionId }
+                    yield { type: 'aborted', runId: request.runId, sessionId: request.sessionId }
+                    yield { type: 'agent-end', runId: request.runId, sessionId: request.sessionId, entries: [request.userEntry] }
+                    return
+                }
+                yield* scriptedRun(request, ['retry succeeded'])
+            },
+        })
+        const basePrepared = preparedRun()
+        host.configure({
+            prepared: {
+                ...basePrepared,
+                generationSnapshot: {
+                    hooks: [
+                        {
+                            event: 'SubagentStop',
+                            async execute() {
+                                releaseStopHookStarted()
+                                await holdStopHook
+                                return {}
+                            },
+                        },
+                    ],
+                } as any,
+            },
+            codingTools: [readTool],
+            models: [model],
+        })
+        host.setParentContext({ sessionId: 'parent', runId: 'run-1' })
+
+        const spawnPromise = host.spawn('turn 1', { name: 'HookRace' })
+        await turn1Started
+        await host.sendMessage('hook-race-1', 'queued 1')
+        const resumeWaiter = host.resumeSubAgent('hook-race-1')
+        releaseTurn1Hold()
+
+        const resumeRes = await resumeWaiter
+        expect(resumeRes.isError).toBe(true)
+        expect(resumeRes.content[0]?.text).toContain('HookRace was stopped')
+        expect(resumeRes.content[0]?.text).toContain('1 queued follow-up message was not executed')
+
+        await stopHookStarted
+        const retryRes = await host.sendMessage('hook-race-1', 'retry while SubagentStop hook pending')
+        expect(retryRes.isError).toBe(false)
+        expect(retryRes.content[0]?.text).toContain('retry succeeded')
+
+        releaseStopHookHold()
+        const spawnRes = await spawnPromise
+        expect(spawnRes.isError).toBe(true)
+        expect(spawnRes.content[0]?.text).toContain('HookRace was stopped')
+        expect(spawnRes.content[0]?.text).toContain('1 queued follow-up message was not executed')
+        expect(spawnRes.content[0]?.text).not.toContain('retry succeeded')
+        expect(spawnRes).toEqual(resumeRes)
+    })
+
+    it('snapshots spawn error result and context metrics before awaiting async SubagentStop hook', async () => {
+        let releaseTurn1Started!: () => void
+        const turn1Started = new Promise<void>((resolve) => {
+            releaseTurn1Started = resolve
+        })
+        let releaseTurn1Hold!: () => void
+        const holdTurn1 = new Promise<void>((resolve) => {
+            releaseTurn1Hold = resolve
+        })
+        let releaseStopHookStarted!: () => void
+        const stopHookStarted = new Promise<void>((resolve) => {
+            releaseStopHookStarted = resolve
+        })
+        let releaseStopHookHold!: () => void
+        const holdStopHook = new Promise<void>((resolve) => {
+            releaseStopHookHold = resolve
+        })
+        let turn = 0
+        const host = new SubAgentHost({
+            generateId: (() => {
+                let n = 0
+                return () => `err-hook-race-${++n}`
+            })(),
+            now: () => 10,
+            run: async function* (request) {
+                turn += 1
+                if (turn === 1) {
+                    releaseTurn1Started()
+                    await holdTurn1
+                    yield { type: 'agent-start', runId: request.runId, sessionId: request.sessionId }
+                    yield { type: 'error', runId: request.runId, sessionId: request.sessionId, message: 'turn 1 failed' }
+                    yield { type: 'agent-end', runId: request.runId, sessionId: request.sessionId, entries: [request.userEntry] }
+                    return
+                }
+                const retryEntry: AssistantEntry = {
+                    id: 'a-retry-heavy',
+                    sessionId: request.sessionId,
+                    createdAt: 20,
+                    kind: 'assistant',
+                    content: [{ type: 'text', text: 'heavy retry succeeded' }],
+                    stopReason: 'stop',
+                    status: 'done',
+                    usage: {
+                        input: 160_000,
+                        output: 0,
+                        cacheRead: 0,
+                        cacheWrite: 0,
+                        totalTokens: 160_000,
+                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                    },
+                }
+                yield { type: 'agent-start', runId: request.runId, sessionId: request.sessionId }
+                yield { type: 'assistant-end', runId: request.runId, sessionId: request.sessionId, entry: retryEntry }
+                yield {
+                    type: 'agent-end',
+                    runId: request.runId,
+                    sessionId: request.sessionId,
+                    entries: [...request.entries, request.userEntry, retryEntry],
+                }
+            },
+        })
+        const bigModel: ModelCatalogEntry = { ...model, contextWindow: 200_000 }
+        const basePrepared = preparedRun()
+        host.configure({
+            prepared: {
+                ...basePrepared,
+                model: bigModel,
+                generationSnapshot: {
+                    hooks: [
+                        {
+                            event: 'SubagentStop',
+                            async execute() {
+                                releaseStopHookStarted()
+                                await holdStopHook
+                                return {}
+                            },
+                        },
+                    ],
+                } as any,
+            },
+            codingTools: [readTool],
+            models: [bigModel],
+        })
+        host.setParentContext({ sessionId: 'parent', runId: 'run-1' })
+
+        const spawnPromise = host.spawn('turn 1', { name: 'ErrHookRace' })
+        await turn1Started
+        const resumeWaiter = host.resumeSubAgent('err-hook-race-1')
+        releaseTurn1Hold()
+
+        const resumeRes = await resumeWaiter
+        expect(resumeRes.isError).toBe(true)
+        expect(resumeRes.content[0]?.text).toContain('turn 1 failed')
+        expect(resumeRes.content[0]?.text).not.toContain('160000')
+
+        await stopHookStarted
+        const retryRes = await host.sendMessage('err-hook-race-1', 'heavy retry while stop hook pending')
+        expect(retryRes.isError).toBe(false)
+        expect(retryRes.content[0]?.text).toContain('context_tokens=160000 max_context_tokens=200000 context_usage=80.00%')
+
+        releaseStopHookHold()
+        const spawnRes = await spawnPromise
+        expect(spawnRes).toEqual(resumeRes)
     })
 })

@@ -6,6 +6,7 @@
 import {
     normalizeToolCallId,
     type AgentTool,
+    type AssistantEntry,
     type ConversationEntry,
     type ModelCatalogEntry,
     type SubAgentAppearance,
@@ -19,6 +20,10 @@ import {
 import { formatSubagentRolesForPrompt } from '@cpa/plugin-sdk'
 import { buildSystemPrompt } from '../context/systemPrompt'
 import { isEnhancementAppliedToModel } from '../context/systemPromptEnhancer'
+import {
+    estimateContextTokens,
+    estimateTokens,
+} from '../context/tokenEstimate'
 import { formatWorktreeModePrompt } from '../context/worktreeMode'
 import { HookProvider } from '../providers/HookProvider'
 import { resolveDynamicReasoningEffort } from '../agent/agentLoop'
@@ -352,8 +357,262 @@ interface ChildRuntime {
     runChain: Promise<void>
 }
 
-function formatAgentResult(name: string, agentId: string, body: string): string {
-    return `[sub-agent ${name} id=${agentId}]\n${body}`
+export interface SubAgentContextMetrics {
+    contextTokens: number | null
+    contextTokensSource: 'exact' | 'estimated' | 'unknown'
+    maxContextTokens: number | null
+    usagePercent: number | null
+    inProgress?: boolean
+}
+
+function normalizePositiveContextWindow(value: unknown): number | null {
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+        return Math.floor(value)
+    }
+    return null
+}
+
+function resolveKnownModelContextWindow(
+    models: readonly ModelCatalogEntry[],
+    modelId: string | undefined,
+    fallback?: ModelCatalogEntry,
+): number | null {
+    const raw = typeof modelId === 'string' ? modelId.trim() : ''
+    if (!raw) {
+        return normalizePositiveContextWindow(fallback?.contextWindow)
+    }
+    const { modelId: parsedId } = parseModelSpec(raw)
+    const requested = parsedId || raw
+    const lowered = requested.toLowerCase()
+    const match = models.find(
+        (entry) =>
+            entry.id === requested ||
+            entry.id.toLowerCase() === lowered ||
+            entry.label.toLowerCase() === lowered,
+    )
+    if (match) {
+        return normalizePositiveContextWindow(match.contextWindow)
+    }
+    if (
+        fallback &&
+        (fallback.id === requested ||
+            fallback.id.toLowerCase() === lowered ||
+            fallback.label.toLowerCase() === lowered)
+    ) {
+        return normalizePositiveContextWindow(fallback.contextWindow)
+    }
+    return null
+}
+
+function isCompletedAssistantEntry(entry: ConversationEntry): entry is AssistantEntry {
+    if (entry.kind !== 'assistant') return false
+    if (entry.status !== 'done') return false
+    if (
+        entry.stopReason === 'error' ||
+        entry.stopReason === 'aborted' ||
+        entry.stopReason === 'pending'
+    ) {
+        return false
+    }
+    return !entry.errorMessage
+}
+
+function extractExactUsageTokens(usage: AssistantEntry['usage']): number | null {
+    if (!usage) return null
+    if (usage.totalTokens !== undefined) {
+        if (typeof usage.totalTokens !== 'number' || !Number.isFinite(usage.totalTokens) || usage.totalTokens < 0) {
+            return null
+        }
+        if (usage.totalTokens > 0) {
+            return Math.round(usage.totalTokens)
+        }
+    }
+    const components = [usage.input, usage.output, usage.cacheRead, usage.cacheWrite]
+    for (const value of components) {
+        if (value === undefined) continue
+        if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+            return null
+        }
+    }
+    const inputSide = (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0)
+    // Output-only counts without input context tokens cannot represent the full context total.
+    if (inputSide <= 0) {
+        return null
+    }
+    const sum = inputSide + (usage.output ?? 0)
+    return sum > 0 ? Math.round(sum) : null
+}
+
+function formatDroppedInboxNotice(droppedCount: number): string {
+    if (droppedCount === 1) {
+        return '(1 queued follow-up message was not executed)'
+    }
+    if (droppedCount > 1) {
+        return `(${droppedCount} queued follow-up messages were not executed)`
+    }
+    return ''
+}
+
+function formatAbortedBody(name: string, last: string, notice?: string): string {
+    const base = last.length > 0 ? last : `${name} was stopped`
+    const trimmedNotice = notice?.trim()
+    return trimmedNotice ? `${base} ${trimmedNotice}` : base
+}
+
+/**
+ * Compute the sub-agent's active context token count and model context window.
+ * Distinguishes exact upstream usage from char/4 estimates and unknown states,
+ * and never fabricates a fallback window when the model window cannot be confirmed.
+ */
+export function resolveSubAgentContextMetrics(
+    entries: readonly ConversationEntry[],
+    contextWindow?: number | null,
+    options?: { inProgress?: boolean },
+): SubAgentContextMetrics {
+    const maxContextTokens = normalizePositiveContextWindow(contextWindow)
+    const inProgress = Boolean(options?.inProgress)
+
+    if (entries.length === 0) {
+        return {
+            contextTokens: null,
+            contextTokensSource: 'unknown',
+            maxContextTokens,
+            usagePercent: null,
+            ...(inProgress ? { inProgress: true } : {}),
+        }
+    }
+
+    let effectiveEntries = entries
+    if (inProgress) {
+        let lastCompletedAssistantIndex = -1
+        for (let i = entries.length - 1; i >= 0; i -= 1) {
+            const entry = entries[i]
+            if (entry && isCompletedAssistantEntry(entry)) {
+                lastCompletedAssistantIndex = i
+                break
+            }
+        }
+        if (lastCompletedAssistantIndex < 0) {
+            return {
+                contextTokens: null,
+                contextTokensSource: 'unknown',
+                maxContextTokens,
+                usagePercent: null,
+                inProgress: true,
+            }
+        }
+        effectiveEntries = entries.slice(0, lastCompletedAssistantIndex + 1)
+    }
+
+    let latestCompactionIndex = -1
+    for (let i = effectiveEntries.length - 1; i >= 0; i -= 1) {
+        if (effectiveEntries[i]?.kind === 'compaction') {
+            latestCompactionIndex = i
+            break
+        }
+    }
+
+    const searchStart = latestCompactionIndex >= 0 ? latestCompactionIndex + 1 : 0
+    let lastUsageIndex: number | null = null
+    let baseUsageTokens = 0
+
+    for (let i = effectiveEntries.length - 1; i >= searchStart; i -= 1) {
+        const entry = effectiveEntries[i]
+        if (entry && isCompletedAssistantEntry(entry)) {
+            const exactTokens = extractExactUsageTokens(entry.usage)
+            if (exactTokens !== null) {
+                lastUsageIndex = i
+                baseUsageTokens = exactTokens
+                break
+            }
+        }
+    }
+
+    let contextTokens: number | null = null
+    let contextTokensSource: 'exact' | 'estimated' | 'unknown' = 'unknown'
+
+    if (lastUsageIndex !== null) {
+        const hasTrailingEntries = lastUsageIndex < effectiveEntries.length - 1
+        let trailingTokens = 0
+        for (let i = lastUsageIndex + 1; i < effectiveEntries.length; i += 1) {
+            const entry = effectiveEntries[i]
+            if (entry) {
+                trailingTokens += estimateTokens(entry)
+            }
+        }
+        contextTokens = Math.max(0, baseUsageTokens + trailingTokens)
+        contextTokensSource = !hasTrailingEntries ? 'exact' : 'estimated'
+    } else {
+        const estimated = Math.max(0, Math.round(estimateContextTokens(effectiveEntries).tokens))
+        if (estimated > 0) {
+            contextTokens = estimated
+            contextTokensSource = 'estimated'
+        }
+    }
+
+    const usagePercent =
+        contextTokens !== null && maxContextTokens !== null
+            ? Math.max(0, (contextTokens / maxContextTokens) * 100)
+            : null
+
+    return {
+        contextTokens,
+        contextTokensSource,
+        maxContextTokens,
+        usagePercent,
+        ...(inProgress ? { inProgress: true } : {}),
+    }
+}
+
+function formatContextUsagePercent(
+    contextTokens: number,
+    maxContextTokens: number,
+): string {
+    const percent = Math.max(0, (contextTokens / maxContextTokens) * 100)
+    let formatted = percent.toFixed(2)
+    // Prevent .toFixed(2) rounding from crossing the strict 30% or 75% policy boundaries.
+    const scaled = contextTokens * 100
+    const threshold30 = maxContextTokens * 30
+    const threshold75 = maxContextTokens * 75
+    if (formatted === '30.00') {
+        if (scaled < threshold30) formatted = '29.99'
+        else if (scaled > threshold30) formatted = '30.01'
+    } else if (formatted === '75.00') {
+        if (scaled < threshold75) formatted = '74.99'
+        else if (scaled > threshold75) formatted = '75.01'
+    }
+    return `${formatted}%`
+}
+
+function formatAgentResult(
+    name: string,
+    agentId: string,
+    body: string,
+    contextMetrics: SubAgentContextMetrics,
+): string {
+    const qualifier =
+        contextMetrics.contextTokens === null
+            ? ''
+            : contextMetrics.inProgress
+              ? contextMetrics.contextTokensSource === 'exact'
+                  ? ' (last_completed_turn)'
+                  : ' (last_completed_turn, estimated)'
+              : contextMetrics.contextTokensSource === 'estimated'
+                ? ' (estimated)'
+                : ''
+    const contextTokensText =
+        contextMetrics.contextTokens === null
+            ? 'unknown'
+            : `${contextMetrics.contextTokens}${qualifier}`
+    const maxContextText =
+        contextMetrics.maxContextTokens === null
+            ? 'unknown'
+            : String(contextMetrics.maxContextTokens)
+    const usageText =
+        contextMetrics.contextTokens !== null && contextMetrics.maxContextTokens !== null
+            ? `${formatContextUsagePercent(contextMetrics.contextTokens, contextMetrics.maxContextTokens)}${qualifier}`
+            : 'unknown'
+    return `[sub-agent ${name} id=${agentId} context_tokens=${contextTokensText} max_context_tokens=${maxContextText} context_usage=${usageText}]\n${body}`
 }
 
 function textResult(text: string, isError = false) {
@@ -478,6 +737,7 @@ export class SubAgentHost {
 
     private readonly agents = new Map<string, SubAgentRecord>()
     private readonly runtimes = new Map<string, ChildRuntime>()
+    private readonly resolvedContextWindows = new Map<string, number>()
     private readonly listeners = new Set<SubAgentHostListener>()
     private readonly slotWaiters: Array<{
         agentId: string
@@ -812,24 +1072,29 @@ export class SubAgentHost {
             const existingName = existingAgent.name
             const runtime = this.runtimes.get(existingId)
             if (runtime?.running) {
-                await runtime.runChain
-                const final = this.agents.get(existingId)
-                const last = final?.lastMessage?.trim() ?? ''
-                return textResult(
-                    formatAgentResult(
-                        existingName,
-                        existingId,
-                        last.length > 0 ? last : `${existingName} completed`,
-                    ),
-                    final?.status === 'error' || final?.status === 'aborted',
-                )
+                try {
+                    await runtime.runChain
+                } catch (runError) {
+                    return textResult(
+                        formatAgentResult(
+                            existingName,
+                            existingId,
+                            errorMessageOf(runError),
+                            this.resolveContextMetrics(existingId),
+                        ),
+                        true,
+                    )
+                }
+                return this.formatTerminalAgentResult(existingName, existingId)
             }
             if (existingAgent.status === 'completed' && existingAgent.lastMessage) {
+                const metrics = await this.resolveContextMetricsWithFallback(existingId, config)
                 return textResult(
                     formatAgentResult(
                         existingName,
                         existingId,
                         existingAgent.lastMessage,
+                        metrics,
                     ),
                 )
             }
@@ -926,6 +1191,14 @@ export class SubAgentHost {
             roleName,
             rolePrompt,
         }
+        const knownWindow = resolveKnownModelContextWindow(
+            config.models,
+            parsedModelId || effectiveModelId,
+            config.prepared.model,
+        )
+        if (knownWindow !== null) {
+            this.resolvedContextWindows.set(id, knownWindow)
+        }
         this.agents.set(id, record)
         this.emitState()
 
@@ -944,7 +1217,15 @@ export class SubAgentHost {
                 await this.waitForSlot(id, parentSessionId, options.signal)
             } catch (waitError) {
                 this.drainQueue()
-                return textResult(errorMessageOf(waitError), true)
+                return textResult(
+                    formatAgentResult(
+                        name,
+                        id,
+                        errorMessageOf(waitError),
+                        this.resolveContextMetrics(id),
+                    ),
+                    true,
+                )
             }
         }
 
@@ -986,14 +1267,19 @@ export class SubAgentHost {
             },
         )
         if (!startOutcome.continue) {
+            const stopMsg = startOutcome.stopReason ?? 'Subagent blocked by hook'
             this.patch(id, {
                 status: 'error',
-                errorMessage:
-                    startOutcome.stopReason ?? 'Subagent blocked by hook',
+                errorMessage: stopMsg,
                 completedAt: this.now(),
             })
             return textResult(
-                startOutcome.stopReason ?? 'Subagent blocked by hook',
+                formatAgentResult(
+                    name,
+                    id,
+                    stopMsg,
+                    this.resolveContextMetrics(id),
+                ),
                 true,
             )
         }
@@ -1002,11 +1288,21 @@ export class SubAgentHost {
             await this.runUntilIdle(id, userEntry, options.signal)
         } catch (error) {
             const current = this.agents.get(id)
+            const errorMsg = errorMessageOf(error)
             this.patch(id, {
                 status: 'error',
-                errorMessage: errorMessageOf(error),
+                errorMessage: errorMsg,
                 completedAt: current?.completedAt ?? this.now(),
             })
+            const errorResult = textResult(
+                formatAgentResult(
+                    name,
+                    id,
+                    errorMsg,
+                    this.resolveContextMetrics(id),
+                ),
+                true,
+            )
             await HookProvider.execute(
                 'SubagentStop',
                 {
@@ -1031,12 +1327,17 @@ export class SubAgentHost {
                     extensionRegistry: config.extensionRegistry,
                 },
             )
-            return textResult(errorMessageOf(error), true)
+            return errorResult
         } finally {
             this.drainQueue()
         }
 
         const final = this.agents.get(id)
+        const terminalResult = this.formatTerminalAgentResult(
+            name,
+            id,
+            `${name} finished without a text reply`,
+        )
         await HookProvider.execute(
             'SubagentStop',
             {
@@ -1061,36 +1362,7 @@ export class SubAgentHost {
                 extensionRegistry: config.extensionRegistry,
             },
         )
-        const last = final?.lastMessage?.trim() ?? ''
-        if (final?.status === 'aborted') {
-            return textResult(
-                formatAgentResult(
-                    name,
-                    id,
-                    last.length > 0 ? last : `${name} was stopped`,
-                ),
-                true,
-            )
-        }
-        if (final?.status === 'error') {
-            return textResult(
-                formatAgentResult(
-                    name,
-                    id,
-                    last.length > 0
-                        ? last
-                        : (final.errorMessage ?? `${name} failed`),
-                ),
-                true,
-            )
-        }
-        return textResult(
-            formatAgentResult(
-                name,
-                id,
-                last.length > 0 ? last : `${name} finished without a text reply`,
-            ),
-        )
+        return terminalResult
     }
 
     resolveAgent(identifier: string): SubAgentRecord | undefined {
@@ -1176,7 +1448,16 @@ export class SubAgentHost {
 
         if (runtime?.running) {
             runtime.inbox.push(userEntry)
-            return textResult(`Message sent to ${record.name}`)
+            return textResult(
+                formatAgentResult(
+                    record.name,
+                    resolvedId,
+                    `Message sent to ${record.name}`,
+                    this.resolveContextMetrics(resolvedId, runtime.entries, {
+                        inProgress: true,
+                    }),
+                ),
+            )
         }
 
         try {
@@ -1188,28 +1469,20 @@ export class SubAgentHost {
                 errorMessage: errorMessageOf(error),
                 completedAt: current?.completedAt ?? this.now(),
             })
-            return textResult(errorMessageOf(error), true)
-        }
-        const final = this.agents.get(resolvedId)
-        const last = final?.lastMessage?.trim() ?? ''
-        if (final?.status === 'aborted') {
             return textResult(
                 formatAgentResult(
                     record.name,
                     resolvedId,
-                    last.length > 0 ? last : `${record.name} was stopped`,
+                    errorMessageOf(error),
+                    this.resolveContextMetrics(resolvedId),
                 ),
                 true,
             )
         }
-        return textResult(
-            formatAgentResult(
-                record.name,
-                resolvedId,
-                last.length > 0
-                    ? last
-                    : `${record.name} finished without a text reply`,
-            ),
+        return this.formatTerminalAgentResult(
+            record.name,
+            resolvedId,
+            `${record.name} finished without a text reply`,
         )
     }
 
@@ -1228,19 +1501,29 @@ export class SubAgentHost {
             return textResult(`Stopped ${record.name}`)
         }
         const runtime = this.runtimes.get(resolvedId)
+        const droppedNotice = runtime?.running
+            ? formatDroppedInboxNotice(runtime.inbox.length)
+            : ''
         if (runtime?.running) {
-            runtime.inbox.length = 0
             runtime.controller.abort()
         }
         if (record.status === 'running' || record.status === 'queued') {
-            this.patch(resolvedId, { status: 'aborted', completedAt: this.now() })
+            this.patch(resolvedId, {
+                status: 'aborted',
+                errorMessage: droppedNotice || undefined,
+                completedAt: this.now(),
+            })
             this.drainQueue()
             return textResult(`Stopped ${record.name}`)
         }
         if (!runtime?.running) {
             return textResult(`${record.name} is not running`)
         }
-        this.patch(resolvedId, { status: 'aborted', completedAt: this.now() })
+        this.patch(resolvedId, {
+            status: 'aborted',
+            errorMessage: droppedNotice || undefined,
+            completedAt: this.now(),
+        })
         this.drainQueue()
         return textResult(`Stopped ${record.name}`)
     }
@@ -1261,12 +1544,18 @@ export class SubAgentHost {
         for (const record of this.agents.values()) {
             if (record.parentSessionId !== parentSessionId) continue
             const runtime = this.runtimes.get(record.id)
+            const droppedNotice = runtime?.running
+                ? formatDroppedInboxNotice(runtime.inbox.length)
+                : ''
             if (runtime?.running) {
-                runtime.inbox.length = 0
                 runtime.controller.abort()
             }
             if (record.status === 'running' || record.status === 'queued') {
-                this.patch(record.id, { status: 'aborted', completedAt: this.now() })
+                this.patch(record.id, {
+                    status: 'aborted',
+                    errorMessage: droppedNotice || undefined,
+                    completedAt: this.now(),
+                })
             }
         }
         this.drainQueue()
@@ -1281,12 +1570,18 @@ export class SubAgentHost {
         }
         for (const record of this.agents.values()) {
             const runtime = this.runtimes.get(record.id)
+            const droppedNotice = runtime?.running
+                ? formatDroppedInboxNotice(runtime.inbox.length)
+                : ''
             if (runtime?.running) {
-                runtime.inbox.length = 0
                 runtime.controller.abort()
             }
             if (record.status === 'running' || record.status === 'queued') {
-                this.patch(record.id, { status: 'aborted', completedAt: this.now() })
+                this.patch(record.id, {
+                    status: 'aborted',
+                    errorMessage: droppedNotice || undefined,
+                    completedAt: this.now(),
+                })
             }
         }
         this.drainQueue()
@@ -1311,17 +1606,20 @@ export class SubAgentHost {
         }
         const existing = this.runtimes.get(agentId)
         if (existing?.running) {
-            await existing.runChain
-            const final = this.agents.get(agentId)
-            const last = final?.lastMessage?.trim() ?? ''
-            return textResult(
-                formatAgentResult(
-                    record.name,
-                    agentId,
-                    last.length > 0 ? last : `${record.name} completed`,
-                ),
-                final?.status === 'error' || final?.status === 'aborted',
-            )
+            try {
+                await existing.runChain
+            } catch (runError) {
+                return textResult(
+                    formatAgentResult(
+                        record.name,
+                        agentId,
+                        errorMessageOf(runError),
+                        this.resolveContextMetrics(agentId),
+                    ),
+                    true,
+                )
+            }
+            return this.formatTerminalAgentResult(record.name, agentId)
         }
 
         const config = this.getConfig(record.parentSessionId)
@@ -1367,6 +1665,7 @@ export class SubAgentHost {
             try {
                 while (nextUser && !controller.signal.aborted) {
                     await this.runOneTurn(agentId, runtime, nextUser)
+                    if (controller.signal.aborted) break
                     const queued = runtime.inbox.shift()
                     nextUser = queued
                         ? (typeof queued === 'string'
@@ -1379,26 +1678,44 @@ export class SubAgentHost {
                 }
                 const completedAt = this.now()
                 const isAborted = Boolean(controller.signal.aborted)
+                const droppedNotice = isAborted ? formatDroppedInboxNotice(runtime.inbox.length) : ''
+                if (isAborted) {
+                    runtime.inbox.length = 0
+                }
                 this.finalizeRuntimeEntries(runtime, isAborted ? 'aborted' : 'completed', completedAt)
                 if (isAborted) {
-                    this.patch(agentId, { status: 'aborted', completedAt })
+                    this.patch(agentId, {
+                        status: 'aborted',
+                        errorMessage: droppedNotice || undefined,
+                        completedAt,
+                    })
                 } else {
-                    this.patch(agentId, { status: 'completed', completedAt })
+                    this.patch(agentId, { status: 'completed', errorMessage: undefined, completedAt })
                 }
             } catch (error) {
                 const completedAt = this.now()
                 const isAbort = controller.signal.aborted || isAbortError(error)
+                const droppedCount = runtime.inbox.length
+                runtime.inbox.length = 0
+                const droppedNotice = formatDroppedInboxNotice(droppedCount)
                 this.finalizeRuntimeEntries(runtime, isAbort ? 'aborted' : 'error', completedAt)
                 if (isAbort) {
-                    this.patch(agentId, { status: 'aborted', completedAt })
+                    this.patch(agentId, {
+                        status: 'aborted',
+                        errorMessage: droppedNotice || undefined,
+                        completedAt,
+                    })
                     return
                 }
+                const finalErrorMessage = droppedNotice
+                    ? `${errorMessageOf(error)} ${droppedNotice}`
+                    : errorMessageOf(error)
                 this.patch(agentId, {
                     status: 'error',
-                    errorMessage: errorMessageOf(error),
+                    errorMessage: finalErrorMessage,
                     completedAt,
                 })
-                throw error
+                throw droppedCount > 0 ? new Error(finalErrorMessage) : error
             } finally {
                 unlink()
                 runtime.running = false
@@ -1409,19 +1726,37 @@ export class SubAgentHost {
         try {
             await work
         } catch (error) {
-            return textResult(errorMessageOf(error), true)
-        } finally {
-            this.drainQueue()
-        }
-
-        const final = this.agents.get(agentId)
-        const last = final?.lastMessage?.trim() ?? ''
-        if (final?.status === 'aborted') {
             return textResult(
                 formatAgentResult(
                     record.name,
                     agentId,
-                    last.length > 0 ? last : `${record.name} was stopped`,
+                    errorMessageOf(error),
+                    this.resolveContextMetrics(agentId),
+                ),
+                true,
+            )
+        } finally {
+            this.drainQueue()
+        }
+
+        return this.formatTerminalAgentResult(record.name, agentId)
+    }
+
+    private formatTerminalAgentResult(
+        name: string,
+        agentId: string,
+        emptyCompletedFallback = `${name} completed`,
+    ): ReturnType<typeof textResult> {
+        const final = this.agents.get(agentId)
+        const last = final?.lastMessage?.trim() ?? ''
+        const contextMetrics = this.resolveContextMetrics(agentId)
+        if (final?.status === 'aborted') {
+            return textResult(
+                formatAgentResult(
+                    name,
+                    agentId,
+                    formatAbortedBody(name, last, final.errorMessage),
+                    contextMetrics,
                 ),
                 true,
             )
@@ -1429,20 +1764,22 @@ export class SubAgentHost {
         if (final?.status === 'error') {
             return textResult(
                 formatAgentResult(
-                    record.name,
+                    name,
                     agentId,
                     last.length > 0
                         ? last
-                        : (final.errorMessage ?? `${record.name} failed`),
+                        : (final.errorMessage ?? `${name} failed`),
+                    contextMetrics,
                 ),
                 true,
             )
         }
         return textResult(
             formatAgentResult(
-                record.name,
+                name,
                 agentId,
-                last.length > 0 ? last : `${record.name} completed`,
+                last.length > 0 ? last : emptyCompletedFallback,
+                contextMetrics,
             ),
         )
     }
@@ -1454,6 +1791,7 @@ export class SubAgentHost {
             runtime.controller.abort()
         }
         this.runtimes.delete(agentId)
+        this.resolvedContextWindows.delete(agentId)
     }
 
     private isTrackedSession(sessionId: string): boolean {
@@ -1507,6 +1845,7 @@ export class SubAgentHost {
             try {
                 while (nextUser && !controller.signal.aborted) {
                     await this.runOneTurn(agentId, runtime, nextUser)
+                    if (controller.signal.aborted) break
                     const queued = runtime.inbox.shift()
                     nextUser = queued
                         ? (typeof queued === 'string'
@@ -1519,26 +1858,44 @@ export class SubAgentHost {
                 }
                 const completedAt = this.now()
                 const isAborted = Boolean(controller.signal.aborted)
+                const droppedNotice = isAborted ? formatDroppedInboxNotice(runtime.inbox.length) : ''
+                if (isAborted) {
+                    runtime.inbox.length = 0
+                }
                 this.finalizeRuntimeEntries(runtime, isAborted ? 'aborted' : 'completed', completedAt)
                 if (isAborted) {
-                    this.patch(agentId, { status: 'aborted', completedAt })
+                    this.patch(agentId, {
+                        status: 'aborted',
+                        errorMessage: droppedNotice || undefined,
+                        completedAt,
+                    })
                 } else {
-                    this.patch(agentId, { status: 'completed', completedAt })
+                    this.patch(agentId, { status: 'completed', errorMessage: undefined, completedAt })
                 }
             } catch (error) {
                 const completedAt = this.now()
                 const isAbort = controller.signal.aborted || isAbortError(error)
+                const droppedCount = runtime.inbox.length
+                runtime.inbox.length = 0
+                const droppedNotice = formatDroppedInboxNotice(droppedCount)
                 this.finalizeRuntimeEntries(runtime, isAbort ? 'aborted' : 'error', completedAt)
                 if (isAbort) {
-                    this.patch(agentId, { status: 'aborted', completedAt })
+                    this.patch(agentId, {
+                        status: 'aborted',
+                        errorMessage: droppedNotice || undefined,
+                        completedAt,
+                    })
                     return
                 }
+                const finalErrorMessage = droppedNotice
+                    ? `${errorMessageOf(error)} ${droppedNotice}`
+                    : errorMessageOf(error)
                 this.patch(agentId, {
                     status: 'error',
-                    errorMessage: errorMessageOf(error),
+                    errorMessage: finalErrorMessage,
                     completedAt,
                 })
-                throw error
+                throw droppedCount > 0 ? new Error(finalErrorMessage) : error
             } finally {
                 unlink()
                 runtime.running = false
@@ -1560,6 +1917,16 @@ export class SubAgentHost {
             throw new Error('Sub-agent runtime is not configured')
         }
         const model = this.resolveModel(record.modelId, config)
+        const knownWindow = resolveKnownModelContextWindow(
+            config.models,
+            record.modelId,
+            config.prepared.model,
+        )
+        if (knownWindow !== null) {
+            this.resolvedContextWindows.set(agentId, knownWindow)
+        } else {
+            this.resolvedContextWindows.delete(agentId)
+        }
         const { enabled, maxDepth } = this.getLimits(config)
         const currentDepth = record.depth ?? 1
         const canSpawnChildren = enabled && currentDepth < maxDepth
@@ -1715,10 +2082,43 @@ export class SubAgentHost {
 
         // Publish the same immutable speed passed to execution before streaming starts.
         this.patch(agentId, { speed: request.speed })
+        let streamErrorMessage: string | undefined
+        let streamAborted = false
         for await (const event of this.runChild(request)) {
             this.emitEvent(event)
+            if (event.type === 'error') {
+                streamErrorMessage =
+                    typeof event.message === 'string' && event.message.trim().length > 0
+                        ? event.message.trim()
+                        : 'Sub-agent turn failed'
+                streamAborted = false
+            }
+            if (event.type === 'aborted') {
+                streamAborted = true
+            }
             if (event.type === 'assistant-end') {
                 runtime.entries = upsertEntry(runtime.entries, event.entry)
+                if (
+                    event.entry?.kind === 'assistant' &&
+                    (event.entry.status === 'error' || event.entry.stopReason === 'error')
+                ) {
+                    streamErrorMessage =
+                        event.entry.errorMessage?.trim() ||
+                        streamErrorMessage ||
+                        'Sub-agent turn failed'
+                    streamAborted = false
+                } else if (
+                    event.entry?.kind === 'assistant' &&
+                    (event.entry.status === 'aborted' || event.entry.stopReason === 'aborted')
+                ) {
+                    streamAborted = true
+                } else if (
+                    event.entry?.kind === 'assistant' &&
+                    event.entry.status === 'done'
+                ) {
+                    streamErrorMessage = undefined
+                    streamAborted = false
+                }
             }
             if (event.type === 'agent-end' && event.entries) {
                 runtime.entries = event.entries.map((entry: any) => ({ ...entry }))
@@ -1729,6 +2129,57 @@ export class SubAgentHost {
         this.patch(agentId, {
             lastMessage: last.length > 0 ? last : undefined,
         })
+        if (!runtime.controller.signal.aborted && streamAborted) {
+            const abortErr = new Error('Sub-agent aborted')
+            abortErr.name = 'AbortError'
+            throw abortErr
+        }
+        if (!runtime.controller.signal.aborted && streamErrorMessage !== undefined) {
+            throw new Error(streamErrorMessage)
+        }
+    }
+
+    private resolveContextMetrics(
+        agentId: string,
+        entriesOverride?: readonly ConversationEntry[],
+        options?: { inProgress?: boolean },
+    ): SubAgentContextMetrics {
+        const record = this.agents.get(agentId)
+        const config = record ? this.getConfig(record.parentSessionId) : this.config
+        const cachedWindow = this.resolvedContextWindows.get(agentId)
+        const knownWindow =
+            cachedWindow ??
+            (record && config
+                ? resolveKnownModelContextWindow(
+                      config.models,
+                      record.modelId,
+                      config.prepared.model,
+                  )
+                : null)
+        const entries = entriesOverride ?? this.runtimes.get(agentId)?.entries ?? []
+        return resolveSubAgentContextMetrics(entries, knownWindow, options)
+    }
+
+    private async resolveContextMetricsWithFallback(
+        agentId: string,
+        config: SubAgentHostConfig | null,
+    ): Promise<SubAgentContextMetrics> {
+        const runtimeEntries = this.runtimes.get(agentId)?.entries
+        if (runtimeEntries && runtimeEntries.length > 0) {
+            return this.resolveContextMetrics(agentId, runtimeEntries)
+        }
+        const record = this.agents.get(agentId)
+        if (record && config?.getEntries) {
+            try {
+                const loaded = await config.getEntries(record.sessionId)
+                if (Array.isArray(loaded) && loaded.length > 0) {
+                    return this.resolveContextMetrics(agentId, loaded)
+                }
+            } catch {
+                // Fall back to empty entries when persisted history cannot be loaded.
+            }
+        }
+        return this.resolveContextMetrics(agentId, [])
     }
 
     private resolveModel(

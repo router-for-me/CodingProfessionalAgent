@@ -666,4 +666,114 @@ describe('systemPromptEnhancer', () => {
         expect(result).toContain('tools.todo')
     })
 
+    it('enforces sub-agent context threshold policy preservation in synthesis prompt and validation', async () => {
+        const sourceWithSubagentPolicy = [
+            'You help users with spawn_agent and send_message in /workspace/app.',
+            'When a sub-agent finishes and returns and a follow-up step needs a related sub-agent, check context_tokens and max_context_tokens: if context_tokens is less than 150,000 (150K) AND usage is less than 30%, MUST use send_message; if context_tokens exceeds 200,000 (200K) OR usage exceeds 75%, MUST use spawn_agent and MUST NOT use send_message.',
+        ].join('\n')
+
+        const missingThresholds = validateEnhancedCorePrompt(
+            'Work in /workspace/app. Delegate with spawn_agent and continue related tasks using send_message based on context size when appropriate.',
+            {
+                requiredToolNames: ['spawn_agent', 'send_message'],
+                requiredCwd: '/workspace/app',
+                mutableCorePrompt: sourceWithSubagentPolicy,
+            },
+        )
+        expect(missingThresholds.ok).toBe(false)
+        if (!missingThresholds.ok) {
+            expect(missingThresholds.reasons.some((r) => r.includes('150K'))).toBe(true)
+            expect(missingThresholds.reasons.some((r) => r.includes('30%'))).toBe(true)
+            expect(missingThresholds.reasons.some((r) => r.includes('200K'))).toBe(true)
+            expect(missingThresholds.reasons.some((r) => r.includes('75%'))).toBe(true)
+        }
+
+        const falseSubstringThresholds = validateEnhancedCorePrompt(
+            'Work in /workspace/app with spawn_agent and send_message. Unrelated metrics: 1150K, 150,000,000, 130%, 0.30%, 1200K, 200,000,000, 275%, 0.75%, 一百十五万, 百分之三十一, 一百二十万, 百分之七十五点五 must not satisfy threshold checks.',
+            {
+                requiredToolNames: ['spawn_agent', 'send_message'],
+                requiredCwd: '/workspace/app',
+                mutableCorePrompt: sourceWithSubagentPolicy,
+            },
+        )
+        expect(falseSubstringThresholds.ok).toBe(false)
+        if (!falseSubstringThresholds.ok) {
+            expect(falseSubstringThresholds.reasons.some((r) => r.includes('150K'))).toBe(true)
+            expect(falseSubstringThresholds.reasons.some((r) => r.includes('30%'))).toBe(true)
+            expect(falseSubstringThresholds.reasons.some((r) => r.includes('200K'))).toBe(true)
+            expect(falseSubstringThresholds.reasons.some((r) => r.includes('75%'))).toBe(true)
+        }
+
+        const localizedValid = validateEnhancedCorePrompt(
+            '在 /workspace/app 协作时，当子代理执行完成返回后若后续需要相关子代理：上下文小于十五万且占用小于百分之三十时必须用 send_message；若超过二十万或占用大于百分之七十五则必须用 spawn_agent 派发新子代理且不得复用。',
+            {
+                requiredToolNames: ['spawn_agent', 'send_message'],
+                requiredCwd: '/workspace/app',
+                mutableCorePrompt: sourceWithSubagentPolicy,
+            },
+        )
+        expect(localizedValid.ok).toBe(true)
+
+        const capturedUserPrompts: string[] = []
+        let callIndex = 0
+        const client: ProtocolClient = {
+            async *stream(input) {
+                const firstEntry = input.entries[0]
+                const userText =
+                    firstEntry && 'content' in firstEntry && Array.isArray(firstEntry.content)
+                        ? firstEntry.content.find((b) => b.type === 'text')
+                        : undefined
+                if (userText && userText.type === 'text') {
+                    capturedUserPrompts.push(userText.text)
+                }
+                const draft =
+                    callIndex++ === 0
+                        ? 'Work in /workspace/app with spawn_agent and send_message. Reuse sub-agents when context is small and spawn new ones when large.'
+                        : 'Work in /workspace/app with spawn_agent and send_message. After a sub-agent returns for related follow-up work: if context_tokens < 150,000 (150K) and < 30% of max_context_tokens, you MUST use send_message; if > 200,000 (200K) or > 75%, you MUST use spawn_agent and never send_message.'
+                yield {
+                    type: 'done',
+                    reason: 'stop',
+                    message: {
+                        id: `m-sub-${callIndex}`,
+                        sessionId: 's',
+                        createdAt: 1000,
+                        kind: 'assistant',
+                        model: 'gpt-6-astra',
+                        content: [{ type: 'text', text: draft }],
+                        status: 'done',
+                        stopReason: 'stop',
+                    },
+                }
+            },
+        }
+
+        const result = await synthesizeEnhancedSystemPrompt({
+            client,
+            model: makeModel('gpt-6-astra'),
+            mutableCorePrompt: sourceWithSubagentPolicy,
+            verbatimContextPrompt: '',
+            enhancement: {
+                enabled: true,
+                multilingualEnabled: false,
+                allowedLanguages: ['en'],
+                modelId: 'gpt-6-astra',
+            },
+            requiredToolNames: ['spawn_agent', 'send_message'],
+            requiredCwd: '/workspace/app',
+            sleep: vi.fn(async () => undefined),
+            generateId: () => 'subagent-policy-synth',
+            now: () => 1000,
+        })
+
+        expect(capturedUserPrompts).toHaveLength(2)
+        expect(capturedUserPrompts[0]).toContain('Sub-agent context threshold reuse/respawn policy preservation')
+        expect(capturedUserPrompts[0]).toContain('150K')
+        expect(capturedUserPrompts[0]).toContain('30%')
+        expect(capturedUserPrompts[0]).toContain('200K')
+        expect(capturedUserPrompts[0]).toContain('75%')
+        expect(capturedUserPrompts[1]).toContain('150K')
+        expect(result).toContain('150,000')
+        expect(result).toContain('75%')
+    })
+
 })

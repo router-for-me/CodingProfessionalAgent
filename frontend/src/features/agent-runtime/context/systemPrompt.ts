@@ -61,6 +61,12 @@ export const TODO_PROGRESS_GUIDELINE =
 export const CONDITIONAL_TODO_PROGRESS_GUIDELINE =
     'Whenever using the todo tool, keep the todo list continuously updated throughout execution so the user always sees live progress: mark the active step "in-progress" before working on it, mark each step "completed" immediately upon finishing, and revise the plan whenever new steps or changes arise'
 
+export const SUBAGENT_CONTEXT_REUSE_GUIDELINE =
+    'When a sub-agent finishes and returns, if a follow-up step needs a sub-agent for work related to that previous sub-agent task, check the reported exact integer context_tokens and max_context_tokens (never treat unknown as small, and evaluate strict inequalities from the exact integer token counts rather than rounded percentages): if context_tokens is less than 150,000 (150K) AND usage is strictly less than 30% of max_context_tokens, you MUST use send_message to continue with that existing sub-agent; if context_tokens exceeds 200,000 (200K) OR usage strictly exceeds 75% of max_context_tokens, you MUST use spawn_agent to dispatch a new sub-agent and MUST NOT use send_message to continue the previous sub-agent'
+
+export const CONDITIONAL_SUBAGENT_CONTEXT_REUSE_GUIDELINE =
+    'Only when both spawn_agent and send_message are present in the declared tool set: when a sub-agent finishes and returns and a follow-up step needs a sub-agent for work related to that previous sub-agent task, check the reported exact integer context_tokens and max_context_tokens (never treat unknown as small, and evaluate strict inequalities from the exact integer token counts rather than rounded percentages): if context_tokens is less than 150,000 (150K) AND usage is strictly less than 30% of max_context_tokens, you MUST use send_message to continue with that existing sub-agent; if context_tokens exceeds 200,000 (200K) OR usage strictly exceeds 75% of max_context_tokens, you MUST use spawn_agent to dispatch a new sub-agent and MUST NOT use send_message to continue the previous sub-agent'
+
 /**
  * Build a deterministic CPA system prompt from tools, context files, and optional overrides.
  * Does not mutate options, tools, or context file arrays.
@@ -119,6 +125,13 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
                 options.conditionalToolGuidelines
                     ? CONDITIONAL_TODO_PROGRESS_GUIDELINE
                     : TODO_PROGRESS_GUIDELINE,
+            )
+        }
+        if (toolNames.has('spawn_agent') && toolNames.has('send_message')) {
+            customGuidelines.push(
+                options.conditionalToolGuidelines
+                    ? CONDITIONAL_SUBAGENT_CONTEXT_REUSE_GUIDELINE
+                    : SUBAGENT_CONTEXT_REUSE_GUIDELINE,
             )
         }
         if (customGuidelines.length > 0) {
@@ -421,6 +434,13 @@ function buildGuidelines(
             conditionalToolGuidelines
                 ? 'Only when send_message is present in the declared tool set, use it to send follow-up instructions to an existing sub-agent'
                 : 'Use send_message to send follow-up instructions to an existing sub-agent',
+        )
+    }
+    if (topLevelToolNames.has('spawn_agent') && topLevelToolNames.has('send_message')) {
+        add(
+            conditionalToolGuidelines
+                ? CONDITIONAL_SUBAGENT_CONTEXT_REUSE_GUIDELINE
+                : SUBAGENT_CONTEXT_REUSE_GUIDELINE,
         )
     }
     if (topLevelToolNames.has('stop_agent')) {

@@ -126,7 +126,7 @@ export function createSpawnAgentTool(
         exposure: 'direct',
         label: 'spawn_agent',
         description:
-            'Dispatch a sub-agent to work on an independent task. Choose a short, human-readable name randomly and pass it in name. If a pre-configured role is specified via role, model is optional and defaults to the role\'s configured model. If no role is specified, always pass model as a catalog model id. Waits until the sub-agent finishes and returns its last message, prefixed with the agent id. Use that id with send_message or stop_agent. Do not spawn a sub-agent for work you can finish with a single tool call.',
+            'Dispatch a sub-agent to work on an independent task. Choose a short, human-readable name randomly and pass it in name. If a pre-configured role is specified via role, model is optional and defaults to the role\'s configured model. If no role is specified, always pass model as a catalog model id. Waits until the sub-agent finishes and returns its last message, prefixed with the agent id and the sub-agent model\'s context metrics (context_tokens, max_context_tokens, context_usage): exact token counts when upstream usage and catalog context window are known, or qualified as (estimated) / unknown when unavailable (do not treat estimated or unknown counts as exact for mandatory reuse). Use that id with send_message or stop_agent. Do not spawn a sub-agent for work you can finish with a single tool call.',
         targetAgent: 'main',
         parameters: {
             type: 'object',
@@ -222,7 +222,7 @@ export function createSendMessageTool(
         exposure: 'direct',
         label: 'send_message',
         description:
-            'Send a follow-up message to an existing sub-agent. If the sub-agent is still running, the message is queued. If it is idle, this starts a new turn and waits for the last message.',
+            'Send a follow-up message to an existing sub-agent. If the sub-agent is still running, the message is queued and returns immediately with the agent id and latest known context metrics (context_tokens, max_context_tokens, context_usage; marked last_completed_turn or unknown while in progress). If it is idle, this starts a new turn and waits for the last message, prefixed with the agent id and the sub-agent model\'s context metrics (context_tokens, max_context_tokens, context_usage): exact token counts when upstream usage and catalog context window are known, or qualified as (estimated) / unknown when unavailable (do not treat estimated or unknown counts as exact for mandatory reuse).',
         targetAgent: 'main',
         parameters: {
             type: 'object',

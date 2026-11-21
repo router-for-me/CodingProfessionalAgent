@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
+    CONDITIONAL_SUBAGENT_CONTEXT_REUSE_GUIDELINE,
     CONDITIONAL_TODO_PLANNING_GUIDELINE,
     CONDITIONAL_TODO_PROGRESS_GUIDELINE,
+    SUBAGENT_CONTEXT_REUSE_GUIDELINE,
     TODO_PLANNING_GUIDELINE,
     TODO_PROGRESS_GUIDELINE,
     augmentSystemPromptForSessionTitle,
@@ -796,5 +798,52 @@ describe('buildSystemPrompt with promptDescription and nestedTools', () => {
         })
         expect(conditionalPrompt).toContain(`- ${CONDITIONAL_TODO_PLANNING_GUIDELINE}`)
         expect(conditionalPrompt).toContain(`- ${CONDITIONAL_TODO_PROGRESS_GUIDELINE}`)
+    })
+
+    it('injects sub-agent context reuse/respawn policy only when both spawn_agent and send_message are present', () => {
+        const spawnOnly = buildSystemPrompt({
+            tools: [{ name: 'spawn_agent', description: 'Dispatch sub-agent' }],
+        })
+        expect(spawnOnly).not.toContain(SUBAGENT_CONTEXT_REUSE_GUIDELINE)
+        expect(spawnOnly).not.toContain('150,000')
+        expect(spawnOnly).not.toContain('200,000')
+
+        const sendOnly = buildSystemPrompt({
+            tools: [{ name: 'send_message', description: 'Send message to sub-agent' }],
+        })
+        expect(sendOnly).not.toContain(SUBAGENT_CONTEXT_REUSE_GUIDELINE)
+
+        const both = buildSystemPrompt({
+            tools: [
+                { name: 'spawn_agent', description: 'Dispatch sub-agent' },
+                { name: 'send_message', description: 'Send message to sub-agent' },
+            ],
+        })
+        expect(both).toContain(`- ${SUBAGENT_CONTEXT_REUSE_GUIDELINE}`)
+        expect(both).toContain('150,000')
+        expect(both).toContain('30%')
+        expect(both).toContain('200,000')
+        expect(both).toContain('75%')
+        expect(both).toContain('send_message')
+        expect(both).toContain('spawn_agent')
+
+        const conditionalBoth = buildSystemPrompt({
+            tools: [
+                { name: 'spawn_agent', description: 'Dispatch sub-agent' },
+                { name: 'send_message', description: 'Send message to sub-agent' },
+            ],
+            conditionalToolGuidelines: true,
+        })
+        expect(conditionalBoth).toContain(`- ${CONDITIONAL_SUBAGENT_CONTEXT_REUSE_GUIDELINE}`)
+        expect(conditionalBoth).not.toContain(`- ${SUBAGENT_CONTEXT_REUSE_GUIDELINE}`)
+
+        const customBoth = buildSystemPrompt({
+            customPrompt: 'CUSTOM SYSTEM BODY',
+            tools: [
+                { name: 'spawn_agent', description: 'Dispatch sub-agent' },
+                { name: 'send_message', description: 'Send message to sub-agent' },
+            ],
+        })
+        expect(customBoth).toContain(`- ${SUBAGENT_CONTEXT_REUSE_GUIDELINE}`)
     })
 })

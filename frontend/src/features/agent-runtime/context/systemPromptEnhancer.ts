@@ -254,6 +254,33 @@ export function validateEnhancedCorePrompt(
         reasons.push('Missing required nested todo planning identifier: "todo"')
     }
 
+    const subagent150kPattern = /(?<![\d.一二三四五六七八九十百千万萬零〇两兩])(?:150(?:[.,\s]?000(?!\d|[.,]\d)|[kK](?![A-Za-z0-9]))|(?:15|十五)[万萬](?![一二三四五六七八九十零〇点點.\d]))/
+    const subagent30PctPattern = /(?:(?<![\d.])30\s*[%％]|百分之(?:30(?![\d.])|三十(?![一二三四五六七八九十零〇点點.\d])))/
+    const subagent200kPattern = /(?<![\d.一二三四五六七八九十百千万萬零〇两兩])(?:200(?:[.,\s]?000(?!\d|[.,]\d)|[kK](?![A-Za-z0-9]))|(?:20|二十)[万萬](?![一二三四五六七八九十零〇点點.\d]))/
+    const subagent75PctPattern = /(?:(?<![\d.])75\s*[%％]|百分之(?:75(?![\d.])|七十五(?![一二三四五六七八九十零〇点點.\d])))/
+    const hasSourceSubagentContextPolicy =
+        options.requiredToolNames.includes('spawn_agent') &&
+        options.requiredToolNames.includes('send_message') &&
+        typeof options.mutableCorePrompt === 'string' &&
+        subagent150kPattern.test(options.mutableCorePrompt) &&
+        subagent30PctPattern.test(options.mutableCorePrompt) &&
+        subagent200kPattern.test(options.mutableCorePrompt) &&
+        subagent75PctPattern.test(options.mutableCorePrompt)
+    if (hasSourceSubagentContextPolicy) {
+        if (!subagent150kPattern.test(cleaned)) {
+            reasons.push('Missing required sub-agent context reuse threshold: "150K" / "150,000"')
+        }
+        if (!subagent30PctPattern.test(cleaned)) {
+            reasons.push('Missing required sub-agent context reuse percentage threshold: "30%"')
+        }
+        if (!subagent200kPattern.test(cleaned)) {
+            reasons.push('Missing required sub-agent context respawn threshold: "200K" / "200,000"')
+        }
+        if (!subagent75PctPattern.test(cleaned)) {
+            reasons.push('Missing required sub-agent context respawn percentage threshold: "75%"')
+        }
+    }
+
     if (options.requiredCwd) {
         const normalizedCwd = options.requiredCwd.replace(/\\/g, '/')
         if (!cleaned.includes(normalizedCwd) && !cleaned.includes(options.requiredCwd)) {
@@ -333,6 +360,14 @@ function buildSynthesisUserPrompt(params: {
     if (hasTodoContract) {
         lines.push(
             `${nextRuleNumber++}. Proactive \`todo\` task planning and live progress reporting preservation: Clearly emphasize using \`todo\` proactively as much as possible to plan tasks upfront and present live progress to the user (creating a structured task list before executing coding, investigation, or multi-step work, marking the active step \`in-progress\` before starting, marking finished steps \`completed\` immediately, and revising the plan whenever new steps or changes arise) whenever \`todo\` is available in the declared tool set (directly or via \`tools.todo\` in Code Mode), while skipping it only for trivial single-turn questions or delegated sub-tasks without \`todo\`. Do not dilute this into a passive tool summary.`,
+        )
+    }
+    if (
+        params.requiredToolNames.includes('spawn_agent') &&
+        params.requiredToolNames.includes('send_message')
+    ) {
+        lines.push(
+            `${nextRuleNumber++}. Sub-agent context threshold reuse/respawn policy preservation: Explicitly preserve the mandatory follow-up policy when a sub-agent finishes and returns and subsequent work needs a related sub-agent based on the reported \`context_tokens\` and \`max_context_tokens\`: if context usage is below 150,000 (150K) tokens AND below 30% of available context, the assistant MUST continue via \`send_message\`; if context usage exceeds 200,000 (200K) tokens OR exceeds 75% of available context, the assistant MUST dispatch a new sub-agent via \`spawn_agent\` and MUST NOT continue via \`send_message\`. Do NOT invert the conditions, logical connectors (AND vs OR), or target tools (\`send_message\` vs \`spawn_agent\`), and keep all four exact threshold values (150K/150,000, 30%, 200K/200,000, 75%) unambiguous in the target language.`,
         )
     }
 

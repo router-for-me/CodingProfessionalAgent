@@ -1446,7 +1446,7 @@ describe('agent runtime end-to-end integration', () => {
         }
         const synthesizedCore = [
             'Enhanced workspace instructions for /workspace/project: inspect project files using read, run commands with bash, apply targeted modifications with edit, and create files with write.',
-            'For independent subtasks, delegate via spawn_agent, send follow-ups using send_message, and cancel with stop_agent when needed.',
+            'For independent subtasks, delegate via spawn_agent, send follow-ups using send_message, and cancel with stop_agent when needed. For related follow-up sub-agent work, if context_tokens is below 150,000 (150K) and below 30% of max_context_tokens you MUST continue via send_message; if context_tokens exceeds 200,000 (200K) or exceeds 75% you MUST dispatch a new sub-agent via spawn_agent and MUST NOT use send_message.',
             'Always set the session title on the first turn using title, verify exact paths inside /workspace/project before reporting completion, and reply concisely in English with rigorous verification.',
             'Ensure every modification is validated by unit tests and type checks before concluding, avoiding speculative claims or unverified file paths.'.repeat(8),
         ].join(' ')
