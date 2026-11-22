@@ -3789,6 +3789,83 @@ describe('generic nested tool orchestration', () => {
         expect(parentEnd.result.details.nestedTools[0].id).toBe('nested-call')
     })
 
+    it.each([false, true])('preserves bounded nested metadata after dropping large details (running args truncated: %s)', async (largeArgs) => {
+        const input = { query: largeArgs ? 'q'.repeat(8000) : 'small query' }
+        const details = ['value'.repeat(16_000)]
+        const displayMetadata = { replay: input }
+        const lookup = makeTool('lookup', async () => ({ content: [{ type: 'text', text: 'result' }], details, displayMetadata }))
+        const compose = makeTool('compose', async (_id, _args, context) => {
+            const result = await context.dispatchNestedTool!({ cellId: 'cell', invocationId: 'lookup-call', toolName: 'lookup', input }, context.signal!)
+            expect(result.details).toEqual(details)
+            return { content: [] }
+        })
+        compose.needsNestedDispatcher = true
+        compose.nestedToolNames = ['lookup']
+        compose.prepareToolSet = async () => ({ tools: [compose], nestedTools: [lookup] })
+        const client = new FakeCPAClient()
+        client.queue(
+            { kind: 'stream', final: (seed) => doneAssistant(seed, { stopReason: 'toolUse', content: [{ type: 'toolCall', id: 'parent', name: 'compose', arguments: {} }] }) },
+            { kind: 'stream', final: (seed) => doneAssistant(seed, { stopReason: 'stop' }) },
+        )
+        const events = await collect(new AgentLoop({ client }).run({ runId: 'r', sessionId: 's', model, entries: [], systemPrompt: '', tools: [lookup, compose] })) as any[]
+        const updates = events.filter((event) => event.type === 'tool-update' && event.toolCallId === 'parent')
+            .map((event) => event.result.displayMetadata.nestedTools[0])
+        const running = updates.find((record) => record.status === 'running')
+        expect(running.args).toEqual(largeArgs ? { preview: expect.any(String), truncated: true } : input)
+        const record = events.find((event) => event.type === 'tool-end' && event.toolCallId === 'parent').result.displayMetadata.nestedTools[0]
+        expect(record).toMatchObject({ status: 'done', displayMetadata, displayTruncated: true, args: running.args, result: 'result' })
+        expect(record).not.toHaveProperty('details')
+        expect(record).not.toHaveProperty('resultImages')
+        expect(new TextEncoder().encode(JSON.stringify(record)).byteLength).toBeLessThan(65_536)
+    })
+
+    it('trims nested text and arguments before evicting bounded display metadata', async () => {
+        const input = { query: 'x'.repeat(16 * 1024) }
+        const output = '界'.repeat(16 * 1024)
+        const displayMetadata = { replay: 'r'.repeat(33 * 1024) }
+        const lookup = makeTool('lookup', async () => ({ content: [{ type: 'text', text: output }], displayMetadata }))
+        const compose = makeTool('compose', async (_id, _args, context) => {
+            await context.dispatchNestedTool!({ cellId: 'cell', invocationId: 'large-call', toolName: 'lookup', input }, context.signal!)
+            return { content: [] }
+        })
+        compose.needsNestedDispatcher = true
+        compose.nestedToolNames = ['lookup']
+        compose.prepareToolSet = async () => ({ tools: [compose], nestedTools: [lookup] })
+        const client = new FakeCPAClient()
+        client.queue(
+            { kind: 'stream', final: (seed) => doneAssistant(seed, { stopReason: 'toolUse', content: [{ type: 'toolCall', id: 'parent', name: 'compose', arguments: {} }] }) },
+            { kind: 'stream', final: (seed) => doneAssistant(seed, { stopReason: 'stop' }) },
+        )
+        const events = await collect(new AgentLoop({ client }).run({ runId: 'r', sessionId: 's', model, entries: [], systemPrompt: '', tools: [lookup, compose] })) as any[]
+        const record = events.find((event) => event.type === 'tool-end' && event.toolCallId === 'parent').result.displayMetadata.nestedTools[0]
+        expect(record).toMatchObject({
+            displayMetadata, displayTruncated: true, args: { truncated: true }, result: output.slice(0, 4096),
+        })
+        expect(new TextEncoder().encode(JSON.stringify(record)).byteLength).toBeLessThanOrEqual(65_536)
+    })
+
+    it('drops escaped display text previews before evicting bounded display metadata', async () => {
+        const escaped = '\u0001'.repeat(7800)
+        const displayMetadata = { replay: 'r'.repeat(46 * 1024) }
+        const lookup = makeTool('lookup', async () => ({ content: [{ type: 'text', text: escaped }], displayMetadata }))
+        const compose = makeTool('compose', async (_id, _args, context) => {
+            await context.dispatchNestedTool!({ cellId: 'cell', invocationId: 'escaped-call', toolName: 'lookup', input: { title: escaped } }, context.signal!)
+            return { content: [] }
+        })
+        compose.needsNestedDispatcher = true
+        compose.nestedToolNames = ['lookup']
+        compose.prepareToolSet = async () => ({ tools: [compose], nestedTools: [lookup] })
+        const client = new FakeCPAClient()
+        client.queue(
+            { kind: 'stream', final: (seed) => doneAssistant(seed, { stopReason: 'toolUse', content: [{ type: 'toolCall', id: 'parent', name: 'compose', arguments: {} }] }) },
+            { kind: 'stream', final: (seed) => doneAssistant(seed, { stopReason: 'stop' }) },
+        )
+        const events = await collect(new AgentLoop({ client }).run({ runId: 'r', sessionId: 's', model, entries: [], systemPrompt: '', tools: [lookup, compose] })) as any[]
+        const record = events.find((event) => event.type === 'tool-end' && event.toolCallId === 'parent').result.displayMetadata.nestedTools[0]
+        expect(record).toMatchObject({ displayMetadata, displayTruncated: true, args: { truncated: true }, result: '' })
+        expect(new TextEncoder().encode(JSON.stringify(record)).byteLength).toBeLessThanOrEqual(65_536)
+    })
+
     it('rejects tools outside the prepared nested allowlist', async () => {
         const client = new FakeCPAClient()
         const write = makeTool('write', vi.fn(async () => ({ content: [] })))

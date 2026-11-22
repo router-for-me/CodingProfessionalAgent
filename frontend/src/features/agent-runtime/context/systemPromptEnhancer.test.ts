@@ -607,7 +607,7 @@ describe('systemPromptEnhancer', () => {
         expect(result).toContain('Promise.all')
     })
 
-    it('instructs builder model to preserve proactive todo planning rules and validates nested tools.todo identifier in code-only mode', async () => {
+    it('retries code-only synthesis when a draft says update progress without explicit todo API operations', async () => {
         const capturedUserPrompts: string[] = []
         let callIndex = 0
         const client: ProtocolClient = {
@@ -622,8 +622,8 @@ describe('systemPromptEnhancer', () => {
                 }
                 const draft =
                     callIndex++ === 0
-                        ? 'In /workspace/app, batch calls in exec via Promise.all([tools.read({ path: "a" })]) and emit text(res). Track your work carefully.'
-                        : 'In /workspace/app, batch calls in exec via Promise.all([tools.read({ path: "a" })]) and emit text(res). Proactively use todo via tools.todo to plan tasks upfront and update live progress.'
+                        ? 'In /workspace/app, batch calls in exec via Promise.all([tools.read({ path: "a" })]) and emit text(res). Proactively use tools.todo to plan tasks and update progress.'
+                        : 'In /workspace/app, batch calls in exec via Promise.all([tools.read({ path: "a" })]) and emit text(res). Proactively use todo via tools.todo to plan tasks upfront and show live progress. Prefer operation: "update" with updates, add, or removeIds; reserve operation: "write" for initial plans or full restructuring.'
                 yield {
                     type: 'done',
                     reason: 'stop',
@@ -645,7 +645,7 @@ describe('systemPromptEnhancer', () => {
             client,
             model: makeModel('gpt-6-astra'),
             mutableCorePrompt:
-                'Use exec in /workspace/app with Promise.all([tools.read({})]) and text(out). When todo is present (directly or via tools.todo in Code Mode), proactively plan tasks and show live progress.',
+                'Use exec in /workspace/app with Promise.all([tools.read({})]) and text(out). When todo is present (directly or via tools.todo in Code Mode), proactively plan tasks and show live progress. Prefer operation: "update" over operation: "write" for incremental changes.',
             verbatimContextPrompt: '',
             enhancement: {
                 enabled: true,
@@ -662,8 +662,28 @@ describe('systemPromptEnhancer', () => {
 
         expect(capturedUserPrompts).toHaveLength(2)
         expect(capturedUserPrompts[0]).toContain('Proactive `todo` task planning and live progress reporting preservation')
-        expect(capturedUserPrompts[1]).toContain('Missing required nested todo planning identifier: "todo"')
+        expect(capturedUserPrompts[0]).toContain('incremental `operation: "update"` with `updates`, `add`, or `removeIds` over repeated full replacements')
+        expect(capturedUserPrompts[0]).toContain('reserve `operation: "write"` for initial plan creation or full restructuring')
+        expect(capturedUserPrompts[0]).toContain('Keep the verbatim API identifiers `write`, `update`, and `updates`')
+        expect(capturedUserPrompts[1]).toContain('Missing required incremental todo update operation identifier: "update"')
+        expect(capturedUserPrompts[1]).toContain('Missing required todo full-list replacement operation identifier: "write"')
+        expect(capturedUserPrompts[1]).not.toContain('Missing required nested todo planning identifier: "todo"')
         expect(result).toContain('tools.todo')
+        expect(result).toContain('Prefer operation: "update" with updates, add, or removeIds')
+        expect(result).toContain('reserve operation: "write" for initial plans or full restructuring')
+    })
+
+    it.each([
+        ['活用 todo。作業の進行中は `updates` で差分を反映し、初回や構成の変更には `write` を利用してください。', true],
+        ['Usa todo para documentar el plan: operation: update en los cambios y operation: write al reemplazarlo por completo.', true],
+        ['使用 todo 规划任务。增量改动采用「update」对应的 `updates` 参数，首次创建或重排才使用 "write"。', true],
+        ['Use todo for planning and apply `update` for incremental changes; write the full list if planning changes.', false],
+        ['Use tools.todo to share progress updates. Use the "write" tool for editing files.', false],
+    ] as const)('validates multilingual API syntax without relying on English prose (%s)', (candidate, ok) => {
+        const validation = validateEnhancedCorePrompt(candidate, {
+            requiredToolNames: ['todo'], mutableCorePrompt: 'Use todo with operation: "update" for incremental changes.',
+        })
+        expect(validation.ok).toBe(ok)
     })
 
     it('enforces sub-agent context threshold policy preservation in synthesis prompt and validation', async () => {

@@ -175,6 +175,11 @@ function stripOuterCodeFence(raw: string): string {
     return trimmed
 }
 
+function containsTodoOperation(prompt: string, operation: 'update' | 'write'): boolean {
+    const tokenPattern = operation === 'update' ? 'updates?' : 'write'
+    return new RegExp(`([\`"'])${tokenPattern}\\1|\\boperation[\`"']?\\s*(?:[:=]\\s*)?[\`"']?${operation}\\b`).test(prompt)
+}
+
 /**
  * Validate rewritten core prompt against built-in fingerprints and required technical identifiers.
  */
@@ -252,6 +257,14 @@ export function validateEnhancedCorePrompt(
         options.mutableCorePrompt.includes('tools.todo')
     if (hasSourceNestedTodoGuidance && !containsToolIdentifier(cleaned, 'todo')) {
         reasons.push('Missing required nested todo planning identifier: "todo"')
+    }
+    if (options.mutableCorePrompt?.includes('operation: "update"')) {
+        if (!containsTodoOperation(cleaned, 'update')) {
+            reasons.push('Missing required incremental todo update operation identifier: "update"')
+        }
+        if (!containsTodoOperation(cleaned, 'write')) {
+            reasons.push('Missing required todo full-list replacement operation identifier: "write"')
+        }
     }
 
     const subagent150kPattern = /(?<![\d.一二三四五六七八九十百千万萬零〇两兩])(?:150(?:[.,\s]?000(?!\d|[.,]\d)|[kK](?![A-Za-z0-9]))|(?:15|十五)[万萬](?![一二三四五六七八九十零〇点點.\d]))/
@@ -359,7 +372,7 @@ function buildSynthesisUserPrompt(params: {
         containsToolIdentifier(params.mutableCorePrompt, 'todo')
     if (hasTodoContract) {
         lines.push(
-            `${nextRuleNumber++}. Proactive \`todo\` task planning and live progress reporting preservation: Clearly emphasize using \`todo\` proactively as much as possible to plan tasks upfront and present live progress to the user (creating a structured task list before executing coding, investigation, or multi-step work, marking the active step \`in-progress\` before starting, marking finished steps \`completed\` immediately, and revising the plan whenever new steps or changes arise) whenever \`todo\` is available in the declared tool set (directly or via \`tools.todo\` in Code Mode), while skipping it only for trivial single-turn questions or delegated sub-tasks without \`todo\`. Do not dilute this into a passive tool summary.`,
+            `${nextRuleNumber++}. Proactive \`todo\` task planning and live progress reporting preservation: Clearly emphasize using \`todo\` proactively as much as possible to plan tasks upfront and present live progress to the user (creating a structured task list before executing coding, investigation, or multi-step work, marking the active step \`in-progress\` before starting, marking finished steps \`completed\` immediately, and revising the plan whenever new steps or changes arise) whenever \`todo\` is available in the declared tool set (directly or via \`tools.todo\` in Code Mode), while skipping it only for trivial single-turn questions or delegated sub-tasks without \`todo\`. Preserve the preference for incremental \`operation: "update"\` with \`updates\`, \`add\`, or \`removeIds\` over repeated full replacements; reserve \`operation: "write"\` for initial plan creation or full restructuring. Keep the verbatim API identifiers \`write\`, \`update\`, and \`updates\` regardless of the target language. Do not dilute this into a passive tool summary.`,
         )
     }
     if (

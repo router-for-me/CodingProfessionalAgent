@@ -55,11 +55,12 @@ export const TODO_PLANNING_GUIDELINE =
 export const CONDITIONAL_TODO_PLANNING_GUIDELINE =
     'When the todo tool is present in the declared tool set for the current request (directly or via tools.todo in Code Mode), proactively use it as much as possible to plan tasks and present your current progress: for any coding, investigation, or multi-step work, create a structured task list before starting execution (skip only for trivial single-turn questions, or when running in a delegated sub-task without the todo tool)'
 
-export const TODO_PROGRESS_GUIDELINE =
-    'Keep the todo list continuously updated throughout execution so the user always sees live progress: mark the active step "in-progress" before working on it, mark each step "completed" immediately upon finishing, and revise the plan whenever new steps or changes arise'
+const TODO_PROGRESS_INSTRUCTIONS =
+    'the todo list continuously updated throughout execution so the user always sees live progress: mark the active step "in-progress" before working on it, mark each step "completed" immediately upon finishing, and revise the plan whenever new steps or changes arise. Prefer incremental operation: "update" with updates, add, or removeIds rather than resending unchanged items; reserve operation: "write" for initial plan creation or full restructuring'
 
-export const CONDITIONAL_TODO_PROGRESS_GUIDELINE =
-    'Whenever using the todo tool, keep the todo list continuously updated throughout execution so the user always sees live progress: mark the active step "in-progress" before working on it, mark each step "completed" immediately upon finishing, and revise the plan whenever new steps or changes arise'
+export const TODO_PROGRESS_GUIDELINE = `Keep ${TODO_PROGRESS_INSTRUCTIONS}`
+
+export const CONDITIONAL_TODO_PROGRESS_GUIDELINE = `Whenever using the todo tool, keep ${TODO_PROGRESS_INSTRUCTIONS}`
 
 export const SUBAGENT_CONTEXT_REUSE_GUIDELINE =
     'When a sub-agent finishes and returns, if a follow-up step needs a sub-agent for work related to that previous sub-agent task, check the reported exact integer context_tokens and max_context_tokens (never treat unknown as small, and evaluate strict inequalities from the exact integer token counts rather than rounded percentages): if context_tokens is less than 150,000 (150K) AND usage is strictly less than 30% of max_context_tokens, you MUST use send_message to continue with that existing sub-agent; if context_tokens exceeds 200,000 (200K) OR usage strictly exceeds 75% of max_context_tokens, you MUST use spawn_agent to dispatch a new sub-agent and MUST NOT use send_message to continue the previous sub-agent'

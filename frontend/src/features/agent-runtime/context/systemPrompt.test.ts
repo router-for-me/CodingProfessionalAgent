@@ -780,6 +780,11 @@ describe('buildSystemPrompt with promptDescription and nestedTools', () => {
         expect(withConditionalNestedTodo).toContain(`- ${CONDITIONAL_TODO_PLANNING_GUIDELINE}`)
         expect(withConditionalNestedTodo).toContain(`- ${CONDITIONAL_TODO_PROGRESS_GUIDELINE}`)
         expect(withConditionalNestedTodo).not.toContain(`- ${TODO_PLANNING_GUIDELINE}`)
+        for (const prompt of [withDirectTodo, withConditionalNestedTodo]) {
+            expect(prompt).toContain('Prefer incremental operation: "update" with updates, add, or removeIds')
+            expect(prompt).toContain('reserve operation: "write" for initial plan creation or full restructuring')
+        }
+        expect(withoutTodo).not.toContain('operation: "update"')
     })
 
     it('injects todo guidelines into custom SYSTEM when todo is available', () => {

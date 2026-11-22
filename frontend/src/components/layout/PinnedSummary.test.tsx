@@ -605,6 +605,238 @@ describe('PinnedSummary', () => {
     expect(screen.getByTestId('pinned-summary-todo-progress').textContent).toBe('2/2')
   })
 
+  it.each([['direct', false], ['direct', true], ['nested', false], ['nested', true], ['overlay', false], ['overlay', true]] as const)(
+    'replays a %s update (snapshot: %s)',
+    (source, withSnapshot) => {
+      setSessionTodoEntries('sess-1', [
+        { id: 1, title: 'Review plan', description: '', status: 'in-progress' },
+        { id: 4, title: 'Remove this', description: '', status: 'not-started' },
+      ])
+      const args = {
+        operation: 'update',
+        updates: [{ id: 1, title: 'Reviewed plan', status: 'completed', description: 'New acceptance criteria' }],
+        removeIds: [4],
+        add: [{ title: 'Document the fix', status: 'in-progress' }],
+      }
+      const snapshot = [
+        { id: 1, title: 'Reviewed plan', description: 'New acceptance criteria', status: 'completed' },
+        { id: 5, title: 'Document the fix', description: '', status: 'in-progress' },
+      ]
+      const entries = withSnapshot ? [] : [...useMessageStore.getState().getEntries('sess-1')]
+      const entryBase = { sessionId: 'sess-1', createdAt: 1 }
+      if (source === 'direct' && !withSnapshot) {
+        entries.push({
+          ...entryBase,
+          id: 'patch',
+          kind: 'assistant',
+          status: 'done',
+          stopReason: 'toolUse',
+          content: [{ type: 'toolCall', id: 'call-patch|fc', name: 'todo', arguments: args }],
+        }, {
+          ...entryBase,
+          id: 'patch-result',
+          kind: 'toolResult',
+          toolCallId: 'call-patch',
+          toolName: 'todo',
+          isError: false,
+          content: [],
+        })
+      } else if (source === 'direct') {
+        entries.push({
+          ...entryBase,
+          id: 'patch-result',
+          kind: 'toolResult',
+          toolCallId: 'call-patch',
+          toolName: 'todo',
+          isError: false,
+          content: [],
+          displayMetadata: { todoSnapshot: snapshot },
+        })
+      } else {
+        const nestedTools = [{ name: 'todo', status: 'done', ...(withSnapshot ? { details: snapshot } : { args }) }]
+        if (source === 'nested') {
+          entries.push({
+            ...entryBase,
+            id: 'exec-result',
+            kind: 'toolResult',
+            toolCallId: 'exec',
+            toolName: 'exec',
+            isError: false,
+            content: [],
+            displayMetadata: { nestedTools },
+          })
+        } else {
+          useToolOverlayStore.getState().upsert({
+            sessionId: 'sess-1', runId: 'run-1', toolCallId: 'exec', status: 'running', updatedAt: 5,
+            details: { nestedTools },
+          })
+        }
+      }
+      useMessageStore.setState({ entriesBySession: { 'sess-1': entries } })
+
+      render(<PinnedSummary sessionId="sess-1" />)
+
+      expect(screen.getByTestId('pinned-summary-todo-1')).toHaveTextContent('Reviewed plan')
+      expect(screen.getByTestId('pinned-summary-todo-5')).toHaveTextContent('Document the fix')
+      expect(screen.queryByTestId('pinned-summary-todo-4')).not.toBeInTheDocument()
+      expect(screen.getByTestId('pinned-summary-todo-progress')).toHaveTextContent('2/2')
+    },
+  )
+
+  it('does not replay an unsettled direct update', () => {
+    const sessionId = 'sess-1'
+    setSessionTodoEntries(sessionId, [{ id: 1, title: 'Original', description: '', status: 'in-progress' }])
+    useMessageStore.setState({ entriesBySession: { [sessionId]: [
+      ...useMessageStore.getState().getEntries(sessionId),
+      {
+        id: 'pending', sessionId, createdAt: 2, kind: 'assistant', status: 'done', stopReason: 'toolUse',
+        content: [{ type: 'toolCall', id: 'unfinished', name: 'todo', arguments: {
+          operation: 'update', updates: [{ id: 1, title: 'Do not show' }],
+        } }],
+      },
+    ] } })
+    render(<PinnedSummary sessionId={sessionId} />)
+    expect(screen.getByTestId('pinned-summary-todo-1')).toHaveTextContent('Original')
+    expect(screen.queryByText('Do not show')).not.toBeInTheDocument()
+  })
+
+  it.each([
+    [10, 9, 'Settled task'],
+    [10, 11, 'Live task'],
+    [undefined, undefined, 'Settled task'],
+    [10, undefined, 'Settled task'],
+  ] as const)('orders settled (%s) and live (%s) mutations consistently', (settledRevision, liveRevision, title) => {
+    const sessionId = 'sess-1'
+    const base = { sessionId, createdAt: 1 }
+    const settled = { id: 1, title: 'Settled task', description: '', status: 'in-progress' }
+    useMessageStore.setState({ entriesBySession: { [sessionId]: [
+      {
+        ...base, id: 'exec-call', kind: 'assistant', status: 'done', stopReason: 'toolUse',
+        content: [{ type: 'toolCall', id: 'exec|fc', name: 'exec', arguments: {} }],
+      },
+      {
+        ...base, id: 'new-result', kind: 'toolResult', toolCallId: 'direct', toolName: 'todo',
+        isError: false, content: [], displayMetadata: { todoSnapshot: [settled], todoRevision: settledRevision },
+      },
+    ] } })
+    useToolOverlayStore.getState().upsert({
+      sessionId, runId: 'run-1', toolCallId: 'exec', status: 'running', updatedAt: 500,
+      details: { nestedTools: [{
+        name: 'todo', status: 'done', details: { snapshotOmitted: true, todoRevision: liveRevision },
+        args: { operation: 'update', updates: [{ id: 1, title: 'Live task' }] },
+      }] },
+    })
+    render(<PinnedSummary sessionId={sessionId} />)
+    expect(screen.getByTestId('pinned-summary-todo-1')).toHaveTextContent(title)
+  })
+
+  it('merges live Code Mode patches over a large base even when nested arguments were truncated', () => {
+    const sessionId = 'sess-1'
+    setSessionTodoEntries(sessionId, [{ id: 1, title: 'Original', description: 'x'.repeat(50_000), status: 'in-progress' }])
+    for (const [title, revision, updatedAt] of [['Append B', 12, 20], ['Append A', 11, 500]] as const) {
+      useToolOverlayStore.getState().upsert({
+        sessionId, runId: 'run-1', toolCallId: `exec-${revision}`, status: 'running', updatedAt,
+        details: { nestedTools: [{
+          name: 'todo', status: 'done', args: { preview: '', truncated: true },
+          displayMetadata: { todoRevision: revision, todoPatch: { operation: 'update', add: [{ title }] } },
+        }] },
+      })
+    }
+    render(<PinnedSummary sessionId={sessionId} />)
+    for (const [id, title] of [[1, 'Original'], [2, 'Append A'], [3, 'Append B']] as const) {
+      expect(screen.getByTestId(`pinned-summary-todo-${id}`)).toHaveTextContent(title)
+    }
+  })
+
+  it.each([false, true])('archives the old completed base before a snapshot-omitted add (resetBase: %s)', (resetBase) => {
+    const sessionId = 'sess-1'
+    useMessageStore.setState({ entriesBySession: { [sessionId]: [
+      {
+        sessionId, id: 'finished', createdAt: 1000, kind: 'toolResult', toolCallId: 'finish', toolName: 'todo', isError: false, content: [],
+        displayMetadata: { todoRevision: 10, completedAt: 1000, todoSnapshot: [{ id: 4, title: 'Archived', description: '', status: 'completed' }] },
+      }, {
+        sessionId, id: 'exec', createdAt: 1001, kind: 'toolResult', toolCallId: 'exec', toolName: 'exec', isError: false, content: [],
+        displayMetadata: { nestedTools: [{
+          name: 'todo', status: 'done', args: { preview: '', truncated: true },
+          displayMetadata: {
+            todoRevision: 11, committedAt: resetBase ? 1001 : 5000, ...(resetBase && { resetBase: true }),
+            todoPatch: { operation: 'update', add: ['New plan', 'Step two', 'Step three'].map((title) => ({ title, description: 'x'.repeat(16_310) })) },
+          },
+        }] },
+      },
+    ] } })
+    render(<PinnedSummary sessionId={sessionId} />)
+    expect(screen.getByTestId('pinned-summary-todo-1')).toHaveTextContent('New plan')
+    expect(screen.queryByTestId('pinned-summary-todo-4')).not.toBeInTheDocument()
+  })
+
+  it.each([false, true])('keeps both commits when the later Code Mode parent settles first (large: %s)', (large) => {
+    const sessionId = 'sess-1'
+    const base = { sessionId, createdAt: 1000 }
+    const original = [{ id: 1, title: 'Original', description: large ? 'x'.repeat(50_000) : '', status: 'in-progress' }]
+    const task = (id: number, title: string) => ({ id, title, description: '', status: 'not-started' })
+    const afterA = [...original, task(2, 'Append A')]
+    const afterB = [...afterA, task(3, 'Append B')]
+    const call = (id: string): ConversationEntry => ({
+      ...base, id: `assistant-${id}`, kind: 'assistant', status: 'done', stopReason: 'toolUse',
+      content: [{ type: 'toolCall', name: 'exec', id: `${id}|fc`, arguments: {} }],
+    })
+    const record = (todoRevision: number, title: string, todoSnapshot: typeof original) => ({
+      name: 'todo', status: 'done', displayMetadata: large
+        ? { todoRevision, todoPatch: { operation: 'update', add: [{ title }] } }
+        : { todoRevision, todoSnapshot },
+    })
+    const a = record(10, 'Append A', afterA)
+    const b = record(11, 'Append B', afterB)
+    const result = (id: string, nested: typeof a): ConversationEntry => ({
+      ...base, id: `result-${id}`, kind: 'toolResult', toolCallId: id, toolName: 'exec', isError: false,
+      content: [], displayMetadata: { nestedTools: [nested] },
+    })
+    const entries: ConversationEntry[] = [{
+      ...base, id: 'base', kind: 'toolResult', toolName: 'todo', toolCallId: 'base', isError: false,
+      content: [], displayMetadata: { todoRevision: 9, todoSnapshot: original },
+    }, call('a'), call('b'), result('b', b)]
+    if (!large) entries.push(result('a', a))
+    else {
+      useToolOverlayStore.getState().upsert({
+        sessionId, runId: 'run-1', toolCallId: 'a', status: 'running', updatedAt: 5000,
+        details: { nestedTools: [a] },
+      })
+    }
+    useMessageStore.setState({ entriesBySession: { [sessionId]: entries } })
+    render(<PinnedSummary sessionId={sessionId} />)
+    for (const [id, title] of [[1, 'Original'], [2, 'Append A'], [3, 'Append B']] as const) {
+      expect(screen.getByTestId(`pinned-summary-todo-${id}`)).toHaveTextContent(title)
+    }
+  })
+
+  it('keeps a later cold write with a rolled-back revision over both older history and live overlays', () => {
+    const sessionId = 'sess-1'
+    const base = { sessionId, createdAt: 1000 }
+    const task = (title: string) => [{ id: 1, title, description: '', status: 'in-progress' }]
+    useMessageStore.setState({ entriesBySession: { [sessionId]: [
+      {
+        ...base, id: 'old', kind: 'toolResult', toolCallId: 'old', toolName: 'todo', isError: false, content: [],
+        displayMetadata: { todoRevision: 20, todoSnapshot: task('Old history') },
+      }, {
+        ...base, id: 'exec-call', kind: 'assistant', status: 'done', stopReason: 'toolUse',
+        content: [{ type: 'toolCall', id: 'exec|fc', name: 'exec', arguments: {} }],
+      }, {
+        ...base, id: 'write-call', kind: 'assistant', status: 'done', stopReason: 'toolUse',
+        content: [{ type: 'toolCall', id: 'cold-write|fc', name: 'todo', arguments: { operation: 'write', todoList: task('Cold write') } }],
+      }, {
+        ...base, id: 'write-result', kind: 'toolResult', toolCallId: 'cold-write', toolName: 'todo', isError: false, content: [],
+        displayMetadata: { todoRevision: 10, todoSnapshot: task('Cold write'), isWrite: true },
+      },
+    ] } })
+    useToolOverlayStore.getState().upsert({
+      sessionId, runId: 'run-1', toolCallId: 'exec', status: 'running', updatedAt: 5000,
+      details: { nestedTools: [{ name: 'todo', status: 'done', displayMetadata: { todoRevision: 21, todoSnapshot: task('Old live') } }] },
+    })
+    render(<PinnedSummary sessionId={sessionId} />)
+    expect(screen.getByTestId('pinned-summary-todo-1')).toHaveTextContent('Cold write')
+  })
+
   it('starts counting steps from 1 when all todos are not-started', () => {
     setSessionTodoEntries('sess-1', [
       {

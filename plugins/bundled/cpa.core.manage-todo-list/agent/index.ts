@@ -7,7 +7,7 @@ import {
     createManageTodoListTool,
     formatTodoListOutput,
 } from './todoTool.js'
-import { useTodoListStore } from '../shared/todoStore.js'
+import { resetTodoOrchestration } from '../shared/todoOrchestration.js'
 
 export {
     MANAGE_TODO_LIST_DESCRIPTION,
@@ -22,6 +22,7 @@ export const MANAGE_TODO_LIST_NAME = MANAGE_TODO_LIST_TOOL_NAME
 export const manageTodoListAgentEntry = definePluginEntry({
     runtime: 'agent',
     activate(context: PluginContext) {
+        const { capabilityClient } = context
         context.register<ToolFactoryContribution>({
             kind: 'tool-factory',
             id: MANAGE_TODO_LIST_TOOL_NAME,
@@ -36,12 +37,23 @@ export const manageTodoListAgentEntry = definePluginEntry({
                 riskLevel: 'session',
                 requiresApproval: false,
                 approvalCategory: 'task-management',
-                create: () => createManageTodoListTool(),
+                create: () => createManageTodoListTool({
+                    loadSessionEntries: async (sessionId) => {
+                        if (!capabilityClient) {
+                            throw new Error(`Session history capability is unavailable; cannot safely load existing todos for session "${sessionId}". Please retry.`)
+                        }
+                        const session = await capabilityClient.invoke('session:get', [sessionId])
+                        if (session === null || session === undefined) return []
+                        const entries = typeof session === 'object' && (session as Record<string, unknown>).entries
+                        if (!Array.isArray(entries)) throw new Error(`Invalid session payload returned for session "${sessionId}".`)
+                        return entries as readonly Record<string, unknown>[]
+                    },
+                }),
             },
         })
     },
     deactivate() {
-        useTodoListStore.getState().clearAll()
+        resetTodoOrchestration()
     },
 })
 

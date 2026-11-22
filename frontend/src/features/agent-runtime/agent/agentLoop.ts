@@ -2428,24 +2428,40 @@ export class AgentLoop {
                         if (rawSink.isClosed() && this.backgroundSink?.token === token) await this.backgroundSink.waitForCapacity(combinedSignal)
                         sink.push(event)
                         if ('toolCallId' in event) {
-                            const record = nestedRecords.get(event.toolCallId) ?? { id: event.toolCallId, type: 'tool_call', name: call.toolName, args: call.input }
+                            const record = { ...(nestedRecords.get(event.toolCallId) ?? { id: event.toolCallId, type: 'tool_call', name: call.toolName, args: call.input }) }
                             if (event.type === 'tool-approval-required') record.status = 'awaiting_approval'
                             if (event.type === 'tool-start') record.status = 'running'
                             if (event.type === 'tool-update' || event.type === 'tool-end') {
                                 record.result = event.result.content.filter((block) => block.type === 'text').map((block) => block.text).join('\n').slice(0, 16_384)
                                 record.details = event.result.details
+                                if (event.result.displayMetadata !== undefined) record.displayMetadata = event.result.displayMetadata
                                 record.resultImages = event.result.content.filter((block) => block.type === 'image').map((block) => ({ data: block.data, mimeType: block.mimeType }))
                                 if (event.type === 'tool-end') record.status = event.isError ? 'error' : 'done'
                             }
-                            let serialized = ''
-                            try { serialized = JSON.stringify(record) } catch { delete record.details; delete record.resultImages; serialized = JSON.stringify(record) }
-                            const limit = record.status === 'running' || record.status === 'awaiting_approval' ? 6144 : 65_536
-                            if (new TextEncoder().encode(serialized).byteLength > limit) {
+                            const terminal = record.status === 'done' || record.status === 'error'
+                            const limit = terminal ? 65_536 : 6144
+                            const exceedsLimit = () => {
+                                try {
+                                    return new TextEncoder().encode(JSON.stringify(record)).byteLength > limit
+                                } catch {
+                                    return true
+                                }
+                            }
+                            if (exceedsLimit()) {
                                 delete record.details
                                 delete record.resultImages
-                                record.args = { preview: (JSON.stringify(record.args) ?? 'undefined').slice(0, 1024), truncated: true }
-                                record.result = String(record.result ?? '').slice(0, record.status === 'done' || record.status === 'error' ? 4096 : 512)
                                 record.displayTruncated = true
+                                if (exceedsLimit()) {
+                                    let preview = '[Unserializable arguments]'
+                                    try { preview = (JSON.stringify(record.args) ?? 'undefined').slice(0, 1024) } catch { /* Keep the fallback preview. */ }
+                                    record.args = { preview, truncated: true }
+                                    record.result = String(record.result ?? '').slice(0, terminal ? 4096 : 512)
+                                    if (exceedsLimit()) {
+                                        record.args = { truncated: true }
+                                        record.result = ''
+                                        if (exceedsLimit()) delete record.displayMetadata
+                                    }
+                                }
                             }
                             nestedRecords.set(event.toolCallId, record)
                             if (nestedRecords.size > 64) {

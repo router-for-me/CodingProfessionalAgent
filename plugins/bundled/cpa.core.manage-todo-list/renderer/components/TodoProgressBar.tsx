@@ -197,6 +197,7 @@ export function TodoProgressBar({
                     effectiveSessionId,
                     (entries ?? []) as readonly Record<string, unknown>[],
                     overlays,
+                    isRunning || Boolean(chat.getAgentRunState?.(effectiveSessionId)?.isStreaming),
                 )
             }
 
@@ -224,7 +225,7 @@ export function TodoProgressBar({
             unsubscribe?.()
             unsubscribeOverlays?.()
         }
-    }, [effectiveSessionId, propTodos, propFileChanges, services?.chatMessages])
+    }, [effectiveSessionId, isRunning, propTodos, propFileChanges, services?.chatMessages])
 
     const fileChanges = propFileChanges ?? derivedFileChanges
 
