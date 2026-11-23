@@ -87,6 +87,27 @@ describe('isTurnCompleted', () => {
         expect(isTurnCompleted(messagesWithPendingTool, 'idle', false)).toBe(false)
     })
 
+    it('returns false when an assistant message has a queued tool call', () => {
+        const messagesWithQueuedTool = [
+            {
+                kind: 'message',
+                role: 'assistant',
+                status: 'done',
+                parts: [
+                    {
+                        type: 'tool_call',
+                        id: 'call-queued',
+                        name: 'spawn_agent',
+                        status: 'queued',
+                    },
+                ],
+            },
+        ]
+
+        expect(isTurnCompleted(messagesWithQueuedTool, 'idle', false)).toBe(false)
+        expect(isTurnCompleted(messagesWithQueuedTool, 'done', false)).toBe(false)
+    })
+
     it('returns true when latest assistant message is done with all tool calls completed', () => {
         const messages = [
             { kind: 'message', role: 'user', content: 'run test' },

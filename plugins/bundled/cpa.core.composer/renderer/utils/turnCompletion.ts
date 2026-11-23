@@ -3,7 +3,7 @@ import type { ComposerRunStatus } from '@cpa/plugin-api'
 /**
  * Checks whether the current/latest conversation turn has completed cleanly.
  * When the turn has finished (e.g. runStatus === 'done' or the latest assistant
- * message has status === 'done' with no pending/running tool calls), the composer
+ * message has status === 'done' with no incomplete tool calls), the composer
  * should display the default disabled send button (ArrowUp) rather than a resume button.
  */
 export function isTurnCompleted(
@@ -14,11 +14,8 @@ export function isTurnCompleted(
     if (isStreaming) {
         return false
     }
-    if (runStatus === 'done') {
-        return true
-    }
     if (!messages || messages.length === 0) {
-        return false
+        return runStatus === 'done'
     }
 
     // Traverse backwards to find the latest conversational message
@@ -39,24 +36,27 @@ export function isTurnCompleted(
                     return false
                 }
 
-                // Check for any pending or running tool calls in message parts
+                // Check for any incomplete tool calls in message parts
                 if (Array.isArray(m.parts) && m.parts.length > 0) {
                     const hasUnfinishedTool = m.parts.some(
                         (p: any) =>
                             p &&
                             p.type === 'tool_call' &&
-                            (p.status === 'pending' || p.status === 'running'),
+                            (p.status === 'pending' ||
+                                p.status === 'queued' ||
+                                p.status === 'running' ||
+                                p.status === 'awaiting_approval'),
                     )
                     if (hasUnfinishedTool) {
                         return false
                     }
                 }
 
-                return m.status === 'done'
+                return runStatus === 'done' || m.status === 'done'
             }
             break
         }
     }
 
-    return false
+    return runStatus === 'done'
 }
