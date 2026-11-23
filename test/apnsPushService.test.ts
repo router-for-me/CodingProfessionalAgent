@@ -319,6 +319,43 @@ describe('ApnsPushService', () => {
         }
     })
 
+    it.each(['queued', 'late rejection'] as const)('does not retry a superseded Ask (%s)', async timing => {
+        vi.useFakeTimers()
+        let rejectAsk!: (response: Response) => void
+        let started!: () => void
+        const sending = new Promise<void>(resolve => { started = resolve })
+        const fetchFn = vi.fn(async () => Response.json({ ok: true }))
+        fetchFn.mockImplementationOnce(() => {
+            started()
+            return new Promise<Response>(resolve => { rejectAsk = resolve })
+        })
+        const service = new ApnsPushService({ kvStoreGetter: () => kvStore, fetchFn, logger: {} })
+        try {
+            await service.registerClient(android)
+            const ask = service.notifyAskRequested({ sessionId: 's1' })
+            await sending
+            if (timing === 'queued') {
+                rejectAsk(new Response(null, { status: 503 }))
+                await ask
+            }
+            await service.notifyTaskCompleted({ sessionId: 's1' })
+            if (timing === 'late rejection') {
+                rejectAsk(new Response(null, { status: 503 }))
+                await ask
+            }
+            await vi.advanceTimersByTimeAsync(60_000)
+            expect(fetchFn).toHaveBeenCalledTimes(2)
+            // A later Ask in this session can still retry independently.
+            fetchFn.mockResolvedValueOnce(new Response(null, { status: 503 }))
+            await service.notifyAskRequested({ sessionId: 's1' })
+            await vi.advanceTimersByTimeAsync(60_000)
+            expect(fetchFn).toHaveBeenCalledTimes(4)
+        } finally {
+            service.dispose()
+            vi.useRealTimers()
+        }
+    })
+
     it.each(['rotate', 'unregister', 'disable'] as const)('suppresses pending retry after %s', async action => {
         vi.useFakeTimers()
         const fetchFn = vi.fn(async () => new Response(null, { status: 429 }))

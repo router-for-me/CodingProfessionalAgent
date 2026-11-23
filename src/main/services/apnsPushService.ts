@@ -184,6 +184,7 @@ function sanitizeStoredClients(raw: unknown): RegisteredNotificationClient[] {
 }
 
 interface TurnNotification {
+    superseded?: boolean
     notificationType: 'taskCompleted' | 'ask'
     sessionId: string
     bodyText: string
@@ -227,7 +228,8 @@ export class ApnsPushService {
     private readonly timeoutMs: number
     private readonly now: () => number
     private readonly logger: ApnsPushLogger
-    private readonly pendingRetries = new Map<string, { timer: NodeJS.Timeout; dueAt: number }>()
+    private readonly dispatching = new Map<string, TurnNotification>()
+    private readonly pendingRetries = new Map<string, { timer: NodeJS.Timeout; dueAt: number; event: TurnNotification }>()
     private disposed = false
     private writeQueue: Promise<void> = Promise.resolve()
 
@@ -377,8 +379,39 @@ export class ApnsPushService {
     }
 
     private async dispatchPushToEnabledClients(event: TurnNotification): Promise<void> {
+        // Invalidate retries synchronously, even if the previous gateway reply or
+        // the retry's subscription lookup is still in flight.
+        const previous = this.dispatching.get(event.sessionId)
+        if (previous) previous.superseded = true
+        for (const [key, pending] of this.pendingRetries) {
+            if (pending.event.sessionId !== event.sessionId) continue
+            pending.event.superseded = true
+            if (pending.event.notificationType !== event.notificationType) {
+                clearTimeout(pending.timer)
+                this.pendingRetries.delete(key)
+            }
+        }
+        this.dispatching.set(event.sessionId, event)
+        try {
+            await this.dispatchToClients(event)
+        } finally {
+            if (this.dispatching.get(event.sessionId) === event) {
+                this.dispatching.delete(event.sessionId)
+                // Same-kind retries may contribute their Retry-After deadline to
+                // the replacement. Drop any left over after its first attempt.
+                for (const [key, pending] of this.pendingRetries) {
+                    if (pending.event.sessionId === event.sessionId && pending.event !== event) {
+                        clearTimeout(pending.timer)
+                        this.pendingRetries.delete(key)
+                    }
+                }
+            }
+        }
+    }
+
+    private async dispatchToClients(event: TurnNotification): Promise<void> {
         const clients = await this.listClients()
-        const enabledClients = clients.filter((c) => c.enabled)
+        const enabledClients = clients.filter(client => client.enabled && (client.provider !== 'fcm' || !event.superseded))
         if (enabledClients.length === 0) {
             return
         }
@@ -436,7 +469,7 @@ export class ApnsPushService {
         expiresAt: number,
         retryAfter: string | null,
     ): void {
-        if (this.disposed) return
+        if (this.disposed || event.superseded) return
         // One pending reminder per installation, connection, token, session and kind.
         const key = JSON.stringify([client.clientId, client.connectionId, client.deviceToken, event.sessionId, event.notificationType])
         const existing = this.pendingRetries.get(key)
@@ -448,18 +481,19 @@ export class ApnsPushService {
         }
         if (dueAt >= expiresAt || this.pendingRetries.size >= MAX_FCM_RETRIES_PENDING) return
         const timer = setTimeout(() => {
-            this.pendingRetries.delete(key)
             void this.retryFcmPush(client, event, expiresAt).catch(err => {
                 this.logger.warn?.('[ApnsPushService] Failed to process push retry:', err)
+            }).finally(() => {
+                if (this.pendingRetries.get(key)?.timer === timer) this.pendingRetries.delete(key)
             })
         }, dueAt - now)
         timer.unref()
-        this.pendingRetries.set(key, { timer, dueAt })
+        this.pendingRetries.set(key, { timer, dueAt, event })
     }
 
     private async retryFcmPush(client: RegisteredNotificationClient, event: TurnNotification, expiresAt: number): Promise<void> {
         const current = (await this.listClients()).find(record => record.enabled && sameDestination(record, client))
-        if (!current || this.disposed || this.now() >= expiresAt) return
+        if (!current || event.superseded || this.disposed || this.now() >= expiresAt) return
         // Omitting the deadline makes this the final attempt.
         const stale = await this.sendPush(current, event)
         if (stale) await this.removeStaleClients([stale])
