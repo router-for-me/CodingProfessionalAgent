@@ -498,6 +498,40 @@ describe('Notification IPC & RPC Wiring', () => {
   })
 
   describe('createServices wiring', () => {
+    it('accepts Android registration over WebSocket RPC and dispatches Ask using the saved FCM destination', async () => {
+      const storage = new Map<string, unknown>()
+      const fetchFn = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => Response.json({ ok: true }))
+      const push = new ApnsPushService({
+        kvStoreGetter: () => ({
+          get: key => storage.get(key),
+          set: (key, value) => { storage.set(key, value) },
+          save: () => {},
+        }),
+        fetchFn,
+      })
+      const services = createServices(() => null, { apnsPushService: push })
+      try {
+        const registration: NotificationClientRegistration = {
+          clientId: 'install-1', connectionId: 'connection-1', platform: 'android',
+          provider: 'fcm', deviceToken: 'CaseSensitive:Fixture', enabled: true,
+        }
+        const registrationReply = await services.webServerService.getRpcTransport().handleWsMessage(
+          JSON.stringify({ type: 'rpc', id: 'register', method: 'notification:registerClient', args: [registration] }),
+          { clientId: 'transient-ws-client' },
+        )
+        expect(registrationReply.response).toEqual({ type: 'rpc_result', id: 'register', result: { ok: true } })
+        await services.handleMethod('notification:askRequested', [{ sessionId: 's1', sessionTitle: 'Secret', question: 'Hidden?' }])
+        await vi.waitFor(() => expect(fetchFn).toHaveBeenCalledOnce())
+        const [, init] = fetchFn.mock.calls[0]
+        expect(JSON.parse(String(init?.body))).toEqual({
+          provider: 'fcm', deviceToken: registration.deviceToken,
+          data: { notificationType: 'ask', connectionId: registration.connectionId, sessionId: 's1' },
+        })
+      } finally {
+        await services.disposeAll()
+      }
+    })
+
     it('creates notificationBadgeService and apnsPushService in AppServices and dispatches notification RPCs including WebSocket RPC transport', async () => {
       const focusedWindow = {
         isDestroyed: () => false,

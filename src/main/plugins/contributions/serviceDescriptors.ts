@@ -235,6 +235,7 @@ export function createPlatformServiceDescriptors(
                         }
                     },
                 }),
+            dispose: (service: ApnsPushService) => service.dispose(),
         },
         {
             id: 'trayService',

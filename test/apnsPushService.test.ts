@@ -223,6 +223,187 @@ describe('ApnsPushService', () => {
         ).rejects.toThrow()
     })
 
+    const android = {
+        clientId: 'android-install',
+        connectionId: 'android-connection',
+        platform: 'android',
+        provider: 'fcm',
+        deviceToken: 'Fcm:Mixed_Case-Id',
+    } as const
+
+    it('delivers both events to legacy APNs and FCM registrations after reopening the store', async () => {
+        // Legacy persisted form predates the provider field and can omit platform.
+        await kvStore.set(NOTIFICATION_CLIENTS_STORAGE_KEY, [{
+            clientId: 'ios-install', connectionId: 'ios-connection', deviceToken: TOKEN_A_UPPER,
+            environment: 'sandbox', enabled: true, registeredAt: 1, updatedAt: 1,
+        }])
+        const service = new ApnsPushService(() => kvStore)
+        await service.registerClient(android)
+        await service.registerClient({ ...android, connectionId: 'disabled', enabled: false })
+
+        const fetchFn = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => Response.json({ ok: true }))
+        const reopened = new ApnsPushService({ kvStoreGetter: () => kvStore, fetchFn })
+        const session = { sessionId: 's1', sessionTitle: 'Private session' }
+        await reopened.notifyTaskCompleted(session)
+        await reopened.notifyAskRequested({ ...session, question: 'Private question' })
+        const sent = fetchFn.mock.calls.map(([, init]) => JSON.parse(String(init?.body)))
+        expect(sent).toHaveLength(4)
+        expect(sent.filter(req => req.provider === 'fcm')).toEqual(
+            ['taskCompleted', 'ask'].map(notificationType => ({
+                provider: 'fcm', deviceToken: android.deviceToken,
+                data: { connectionId: android.connectionId, sessionId: 's1', notificationType },
+            })),
+        )
+        expect(sent.filter(req => !req.provider)).toHaveLength(2)
+        expect(sent[0]).toMatchObject({ deviceToken: TOKEN_A, environment: 'sandbox', data: { sessionTitle: session.sessionTitle } })
+
+        await reopened.unregisterClient(android)
+        expect((await reopened.listClients()).map(c => c.connectionId)).toEqual(['ios-connection', 'disabled'])
+    })
+
+    it('checks provider, platform and opaque FCM target before persisting registrations', async () => {
+        const service = new ApnsPushService(() => kvStore)
+        for (const invalid of [
+            { provider: undefined }, { platform: 'ios' }, { platform: undefined },
+            { environment: 'sandbox' }, { provider: 'invalid' }, { deviceToken: '' },
+            { deviceToken: 'bad ID' }, { deviceToken: 'token\u0001' }, { deviceToken: 'é'.repeat(2049) },
+        ]) {
+            await expect(service.registerClient({ ...android, ...invalid } as any)).rejects.toThrow()
+        }
+        expect(await service.listClients()).toEqual([])
+    })
+
+    it('keeps rotated FCM identifiers and only deletes confirmed unregistrations', async () => {
+        let complete!: (response: Response) => void
+        const fetchFn = vi.fn(async () => new Promise<Response>(resolve => { complete = resolve }))
+        const service = new ApnsPushService({ kvStoreGetter: () => kvStore, fetchFn, logger: {} })
+        await service.registerClient(android)
+        const pending = service.notifyTaskCompleted({ sessionId: 's1' })
+        await vi.waitFor(() => expect(fetchFn).toHaveBeenCalledOnce())
+        const rotated = { ...android, deviceToken: android.deviceToken.toLowerCase() }
+        await service.registerClient(rotated)
+        const gone = () => Response.json({ ok: false, unregistered: true }, { status: 410 })
+        complete(gone())
+        await pending
+        expect(await service.listClients()).toMatchObject([{ deviceToken: rotated.deviceToken }])
+        for (const status of [400, 403, 429, 502, 504, 410]) {
+            fetchFn.mockResolvedValueOnce(Response.json({ ok: false, unregistered: false }, { status }))
+            await service.notifyTaskCompleted({ sessionId: 's1' })
+            expect(await service.listClients()).toHaveLength(1)
+        }
+        fetchFn.mockResolvedValueOnce(gone())
+        await service.notifyTaskCompleted({ sessionId: 's1' })
+        expect(await service.listClients()).toEqual([])
+        service.dispose()
+    })
+
+    it.each([429, 503])('retries a rejected FCM send once after Retry-After (%s)', async status => {
+        vi.useFakeTimers()
+        const rejected = () => Response.json({ unregistered: false }, {
+            status, headers: { 'Retry-After': '90' },
+        })
+        const fetchFn = vi.fn(async () => rejected())
+        const service = new ApnsPushService({ kvStoreGetter: () => kvStore, fetchFn, logger: {} })
+        try {
+            await service.registerClient(android)
+            await service.notifyAskRequested({ sessionId: 's1' })
+            await vi.advanceTimersByTimeAsync(89_999)
+            expect(fetchFn).toHaveBeenCalledTimes(1)
+            await vi.advanceTimersByTimeAsync(1)
+            expect(fetchFn).toHaveBeenCalledTimes(2)
+            await vi.advanceTimersByTimeAsync(600_000)
+            expect(fetchFn).toHaveBeenCalledTimes(2)
+        } finally {
+            service.dispose()
+            vi.useRealTimers()
+        }
+    })
+
+    it.each(['queued', 'late rejection'] as const)('does not retry a superseded Ask (%s)', async timing => {
+        vi.useFakeTimers()
+        let rejectAsk!: (response: Response) => void
+        let started!: () => void
+        const sending = new Promise<void>(resolve => { started = resolve })
+        const fetchFn = vi.fn(async () => Response.json({ ok: true }))
+        fetchFn.mockImplementationOnce(() => {
+            started()
+            return new Promise<Response>(resolve => { rejectAsk = resolve })
+        })
+        const service = new ApnsPushService({ kvStoreGetter: () => kvStore, fetchFn, logger: {} })
+        try {
+            await service.registerClient(android)
+            const ask = service.notifyAskRequested({ sessionId: 's1' })
+            await sending
+            if (timing === 'queued') {
+                rejectAsk(new Response(null, { status: 503 }))
+                await ask
+            }
+            await service.notifyTaskCompleted({ sessionId: 's1' })
+            if (timing === 'late rejection') {
+                rejectAsk(new Response(null, { status: 503 }))
+                await ask
+            }
+            await vi.advanceTimersByTimeAsync(60_000)
+            expect(fetchFn).toHaveBeenCalledTimes(2)
+            // A later Ask in this session can still retry independently.
+            fetchFn.mockResolvedValueOnce(new Response(null, { status: 503 }))
+            await service.notifyAskRequested({ sessionId: 's1' })
+            await vi.advanceTimersByTimeAsync(60_000)
+            expect(fetchFn).toHaveBeenCalledTimes(4)
+        } finally {
+            service.dispose()
+            vi.useRealTimers()
+        }
+    })
+
+    it.each(['rotate', 'unregister', 'disable'] as const)('suppresses pending retry after %s', async action => {
+        vi.useFakeTimers()
+        const fetchFn = vi.fn(async () => new Response(null, { status: 429 }))
+        const service = new ApnsPushService({ kvStoreGetter: () => kvStore, fetchFn, logger: {} })
+        try {
+            await service.registerClient(android)
+            await service.notifyTaskCompleted({ sessionId: 's1' })
+            if (action === 'unregister') await service.unregisterClient(android)
+            if (action === 'disable') await service.registerClient({ ...android, enabled: false })
+            if (action === 'rotate') await service.registerClient({ ...android, deviceToken: android.deviceToken.toUpperCase() })
+            await vi.advanceTimersByTimeAsync(60_000)
+            expect(fetchFn).toHaveBeenCalledOnce()
+        } finally {
+            service.dispose()
+            vi.useRealTimers()
+        }
+    })
+
+    it('coalesces pending FCM retries and skips expired delays, unconfigured providers and unknown outcomes', async () => {
+        vi.useFakeTimers({ now: new Date('2026-01-01T00:00:00Z') })
+        const fetchFn = vi.fn(async () => Response.json({ ok: true }))
+        const service = new ApnsPushService({ kvStoreGetter: () => kvStore, fetchFn, logger: {} })
+        try {
+            await service.registerClient(android)
+            fetchFn.mockResolvedValueOnce(new Response(null, { status: 429 }))
+            fetchFn.mockResolvedValueOnce(new Response(null, { status: 429, headers: { 'Retry-After': new Date(Date.now() + 70_000).toUTCString() } }))
+            await service.notifyTaskCompleted({ sessionId: 'duplicate' })
+            await service.notifyTaskCompleted({ sessionId: 'duplicate' })
+            fetchFn.mockResolvedValueOnce(new Response(null, { status: 503, headers: { 'Retry-After': '3600' } }))
+            await service.notifyTaskCompleted({ sessionId: 'next-hour' })
+            fetchFn.mockResolvedValueOnce(Response.json({ reason: 'fcm not configured' }, { status: 503 }))
+            await service.notifyTaskCompleted({ sessionId: 'not-configured' })
+            fetchFn.mockRejectedValueOnce(new Error('connection lost'))
+            await service.notifyTaskCompleted({ sessionId: 'unknown' })
+            fetchFn.mockResolvedValueOnce(new Response(null, { status: 504 }))
+            await service.notifyTaskCompleted({ sessionId: 'timed-out' })
+            await vi.advanceTimersByTimeAsync(69_999)
+            expect(fetchFn).toHaveBeenCalledTimes(6)
+            await vi.advanceTimersByTimeAsync(1)
+            expect(fetchFn).toHaveBeenCalledTimes(7)
+            await vi.advanceTimersByTimeAsync(3_600_000)
+            expect(fetchFn).toHaveBeenCalledTimes(7)
+        } finally {
+            service.dispose()
+            vi.useRealTimers()
+        }
+    })
+
     it('unregisters matching client by (clientId, connectionId)', async () => {
         const service = new ApnsPushService({
             kvStoreGetter: () => kvStore,

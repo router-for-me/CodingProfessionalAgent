@@ -503,12 +503,13 @@ export interface SessionDelegateRunRequest {
 
 export type NotificationEnvironment = 'production' | 'sandbox'
 
-export interface NotificationClientRegistration {
+export type NotificationDestination =
+  | { provider?: 'apns'; platform?: 'ios'; deviceToken: string; environment: NotificationEnvironment }
+  | { provider: 'fcm'; platform: 'android'; deviceToken: string; environment?: never }
+
+export type NotificationClientRegistration = NotificationDestination & {
   clientId: string
   connectionId: string
-  deviceToken: string
-  environment: NotificationEnvironment
-  platform?: 'ios'
   deviceName?: string
   appVersion?: string
   enabled?: boolean
@@ -527,14 +528,8 @@ export interface AskRequestedNotificationPayload {
   toolCallId?: string
 }
 
-export interface RegisteredNotificationClient {
-  clientId: string
-  connectionId: string
-  deviceToken: string
-  environment: NotificationEnvironment
-  platform: 'ios'
-  deviceName?: string
-  appVersion?: string
+export type RegisteredNotificationClient = NotificationClientRegistration & {
+  platform: 'ios' | 'android'
   enabled: boolean
   registeredAt: number
   updatedAt: number

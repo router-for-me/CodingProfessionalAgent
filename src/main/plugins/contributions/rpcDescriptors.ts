@@ -460,7 +460,7 @@ export function createPlatformRpcDescriptors(
                 const apnsPushService = getServiceOptional<ApnsPushService>('apnsPushService', context)
                 if (apnsPushService) {
                     void Promise.resolve(apnsPushService.notifyTaskCompleted(payload)).catch((err) => {
-                        console.warn('[rpcDescriptors] Failed to dispatch APNs push notification:', err)
+                        console.warn('[rpcDescriptors] Failed to dispatch mobile push notification:', err)
                     })
                 }
             },
@@ -510,7 +510,7 @@ export function createPlatformRpcDescriptors(
                 const apnsPushService = getServiceOptional<ApnsPushService>('apnsPushService', context)
                 if (apnsPushService) {
                     void Promise.resolve(apnsPushService.notifyAskRequested(payload)).catch((err) => {
-                        console.warn('[rpcDescriptors] Failed to dispatch APNs ask push notification:', err)
+                        console.warn('[rpcDescriptors] Failed to dispatch mobile ask push notification:', err)
                     })
                 }
             },
