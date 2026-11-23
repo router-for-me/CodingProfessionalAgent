@@ -1,5 +1,5 @@
-import React, { useMemo, useState, useEffect, useCallback } from 'react'
-import { GripVertical, Search } from 'lucide-react'
+import React, { useMemo, useState, useEffect, useCallback, useRef } from 'react'
+import { GripVertical, RefreshCw, Search } from 'lucide-react'
 import {
     cn,
     CustomSelect,
@@ -99,6 +99,18 @@ export function ModelsSection() {
     const [catalogModels, setCatalogModels] = useState<readonly ModelCatalogEntry[]>(() =>
         services?.models?.getModels?.() ?? [],
     )
+    const [catalogStatus, setCatalogStatus] = useState(() =>
+        services?.models?.getStatus?.() ?? 'idle',
+    )
+    const [isManualRefreshing, setIsManualRefreshing] = useState(false)
+    const isMountedRef = useRef(true)
+
+    useEffect(() => {
+        isMountedRef.current = true
+        return () => {
+            isMountedRef.current = false
+        }
+    }, [])
 
     useEffect(() => {
         if (!services?.settings?.subscribe) return
@@ -110,9 +122,12 @@ export function ModelsSection() {
 
     useEffect(() => {
         const modelService = services?.models
+        setCatalogModels(modelService?.getModels?.() ?? [])
+        setCatalogStatus(modelService?.getStatus?.() ?? 'idle')
         if (!modelService?.subscribe) return
         const unsubscribe = modelService.subscribe(() => {
             setCatalogModels(modelService.getModels?.() ?? [])
+            setCatalogStatus(modelService.getStatus?.() ?? 'idle')
         })
         return unsubscribe
     }, [services?.models])
@@ -139,6 +154,61 @@ export function ModelsSection() {
     const [searchQuery, setSearchQuery] = useState('')
     const [draggedId, setDraggedId] = useState<string | null>(null)
     const [dragOverId, setDragOverId] = useState<string | null>(null)
+
+    const canRefreshModels = typeof services?.models?.refresh === 'function'
+    const isRefreshing = isManualRefreshing || catalogStatus === 'loading'
+
+    const handleRefreshModels = useCallback(async () => {
+        const modelService = services?.models
+        if (!modelService?.refresh || isRefreshing) return
+
+        setIsManualRefreshing(true)
+        try {
+            await modelService.refresh()
+            if (!isMountedRef.current) return
+
+            const nextStatus = modelService.getStatus?.()
+            const nextError = modelService.getError?.()
+            if (nextStatus === 'error') {
+                services?.ui?.pushToast?.(
+                    nextError
+                        ? t('settings.models.refresh.failedWithReason', {
+                              defaultValue: `Failed to refresh model list: ${nextError}`,
+                              error: nextError,
+                          })
+                        : t('settings.models.refresh.failed', {
+                              defaultValue: 'Failed to refresh model list',
+                          }),
+                    'error',
+                )
+            } else {
+                services?.ui?.pushToast?.(
+                    t('settings.models.refresh.success', {
+                        defaultValue: 'Model list refreshed',
+                    }),
+                    'success',
+                )
+            }
+        } catch (error: unknown) {
+            if (!isMountedRef.current) return
+            const message = error instanceof Error ? error.message : String(error)
+            services?.ui?.pushToast?.(
+                message
+                    ? t('settings.models.refresh.failedWithReason', {
+                          defaultValue: `Failed to refresh model list: ${message}`,
+                          error: message,
+                      })
+                    : t('settings.models.refresh.failed', {
+                          defaultValue: 'Failed to refresh model list',
+                      }),
+                'error',
+            )
+        } finally {
+            if (isMountedRef.current) {
+                setIsManualRefreshing(false)
+            }
+        }
+    }, [isRefreshing, services?.models, services?.ui, t])
 
     const enableAll = modelSettings.enableAll !== false
     const gemini4PeriodicTableEnabled = modelSettings.gemini4PeriodicTable !== false
@@ -448,33 +518,57 @@ export function ModelsSection() {
 
             {!enableAll ? (
                 <SettingsSection title={t('settings.models.list.title', { defaultValue: 'Model List' })}>
-                    {orderedModels.length > 3 ? (
-                        <div className="mb-2">
-                            <label className="relative block">
-                                <Search
-                                    className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-[var(--text-muted)]"
-                                    aria-hidden
-                                />
-                                <input
-                                    type="search"
-                                    value={searchQuery}
-                                    placeholder={t('settings.models.search.placeholder', {
-                                        defaultValue: 'Search models...',
-                                    })}
-                                    aria-label={t('settings.models.search.placeholder', {
-                                        defaultValue: 'Search models...',
-                                    })}
-                                    className={cn(
-                                        'w-full rounded-lg border border-[var(--border-subtle)]',
-                                        'bg-[var(--bg-card)] py-1.5 pl-8 pr-3 text-[12px]',
-                                        'text-[var(--text-primary)] placeholder:text-[var(--text-muted)]',
-                                        'outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-blue)]/30',
-                                    )}
-                                    onChange={(e) => setSearchQuery(e.target.value)}
-                                />
-                            </label>
-                        </div>
-                    ) : null}
+                    <div className="mb-2 flex items-center gap-2">
+                        <label className="relative block flex-1">
+                            <Search
+                                className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-[var(--text-muted)]"
+                                aria-hidden
+                            />
+                            <input
+                                type="search"
+                                value={searchQuery}
+                                placeholder={t('settings.models.search.placeholder', {
+                                    defaultValue: 'Search models...',
+                                })}
+                                aria-label={t('settings.models.search.placeholder', {
+                                    defaultValue: 'Search models...',
+                                })}
+                                className={cn(
+                                    'w-full rounded-lg border border-[var(--border-subtle)]',
+                                    'bg-[var(--bg-card)] py-1.5 pl-8 pr-3 text-[12px]',
+                                    'text-[var(--text-primary)] placeholder:text-[var(--text-muted)]',
+                                    'outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-blue)]/30',
+                                )}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                            />
+                        </label>
+                        <button
+                            type="button"
+                            onClick={() => void handleRefreshModels()}
+                            disabled={isRefreshing || !canRefreshModels}
+                            title={t('settings.models.refresh', { defaultValue: 'Refresh models' })}
+                            aria-label={t('settings.models.refresh', { defaultValue: 'Refresh models' })}
+                            aria-busy={isRefreshing}
+                            className={cn(
+                                'inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-[var(--border-subtle)]',
+                                'bg-[var(--bg-card)] px-3 py-1.5 text-[12px] font-medium text-[var(--text-secondary)]',
+                                'transition-colors outline-none',
+                                'hover:bg-[var(--bg-sidebar-hover)] hover:text-[var(--text-primary)]',
+                                'focus-visible:ring-2 focus-visible:ring-[var(--accent-blue)]/30',
+                                'cursor-pointer disabled:cursor-not-allowed disabled:opacity-50',
+                            )}
+                        >
+                            <RefreshCw
+                                className={cn('size-3.5', isRefreshing && 'animate-spin')}
+                                aria-hidden
+                            />
+                            <span>
+                                {isRefreshing
+                                    ? t('settings.models.refreshing', { defaultValue: 'Refreshing...' })
+                                    : t('settings.models.refresh', { defaultValue: 'Refresh models' })}
+                            </span>
+                        </button>
+                    </div>
 
                     <SettingsCard>
                         {filteredModels.length > 0 ? (

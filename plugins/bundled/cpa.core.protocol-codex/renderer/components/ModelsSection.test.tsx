@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { HostServicesProvider } from '@cpa/plugin-ui'
 import type { HostServices, ModelCatalogEntry, ModelCatalogService, SettingsService } from '@cpa/plugin-api'
@@ -48,10 +48,20 @@ describe('ModelsSection', () => {
     let mockSettings: any
     let mockSettingsService: SettingsService
     let mockModelsService: ModelCatalogService
+    let mockPushToast: ReturnType<typeof vi.fn>
+    let currentModels: readonly ModelCatalogEntry[]
+    let currentModelStatus: 'idle' | 'loading' | 'ready' | 'error'
+    let currentModelError: string | null
     let listeners: Array<() => void>
+    let modelListeners: Array<() => void>
 
     beforeEach(() => {
         listeners = []
+        modelListeners = []
+        currentModels = testModels
+        currentModelStatus = 'ready'
+        currentModelError = null
+        mockPushToast = vi.fn()
         mockSettings = {
             modelSettings: {
                 ...DEFAULT_MODEL_SETTINGS,
@@ -75,11 +85,16 @@ describe('ModelsSection', () => {
         } as unknown as SettingsService
 
         mockModelsService = {
-            getModels: () => testModels,
-            getStatus: () => 'ready',
-            getError: () => null,
-            subscribe: () => () => {},
-            refresh: async () => {},
+            getModels: () => currentModels,
+            getStatus: () => currentModelStatus,
+            getError: () => currentModelError,
+            subscribe: vi.fn().mockImplementation((listener) => {
+                modelListeners.push(listener)
+                return () => {
+                    modelListeners = modelListeners.filter((l) => l !== listener)
+                }
+            }),
+            refresh: vi.fn().mockResolvedValue(undefined),
         } as unknown as ModelCatalogService
     })
 
@@ -88,6 +103,9 @@ describe('ModelsSection', () => {
             settings: mockSettingsService,
             models: mockModelsService,
             modelCatalog: mockModelsService,
+            ui: {
+                pushToast: mockPushToast,
+            },
         } as unknown as HostServices
 
         return render(
@@ -525,5 +543,107 @@ describe('ModelsSection', () => {
                 modelSettings: expect.objectContaining({ gemini4PeriodicTable: true }),
             }),
         )
+    })
+
+    it('renders search input and refresh models button side-by-side and refreshes global model catalog on click', async () => {
+        mockSettings.modelSettings.enableAll = false
+
+        let resolveRefresh!: () => void
+        const refreshedModel: ModelCatalogEntry = {
+            id: 'test-model-latest',
+            label: 'Test Model Latest',
+            description: 'Freshly loaded from CLIProxyAPI',
+            supportsFast: true,
+            reasoningLevels: [],
+            input: ['text'],
+            contextWindow: 200_000,
+            maxTokens: 32_768,
+        }
+
+        ;(mockModelsService.refresh as ReturnType<typeof vi.fn>).mockImplementation(
+            () =>
+                new Promise<void>((resolve) => {
+                    currentModelStatus = 'loading'
+                    modelListeners.forEach((l) => l())
+                    resolveRefresh = () => {
+                        currentModels = [...testModels, refreshedModel]
+                        currentModelStatus = 'ready'
+                        currentModelError = null
+                        modelListeners.forEach((l) => l())
+                        resolve()
+                    }
+                }),
+        )
+
+        renderWithServices(<ModelsSection />)
+
+        const searchInput = screen.getByRole('searchbox', { name: /Search models/i })
+        const refreshButton = screen.getByRole('button', { name: /Refresh models/i })
+        expect(searchInput).toBeInTheDocument()
+        expect(refreshButton).toBeInTheDocument()
+        expect(searchInput.closest('div')).toBe(refreshButton.parentElement)
+        expect(refreshButton).not.toBeDisabled()
+
+        fireEvent.click(refreshButton)
+
+        expect(mockModelsService.refresh).toHaveBeenCalledTimes(1)
+        expect(refreshButton).toBeDisabled()
+        expect(refreshButton).toHaveAttribute('aria-busy', 'true')
+        expect(refreshButton).toHaveTextContent(/Refreshing/i)
+
+        await act(async () => {
+            resolveRefresh()
+        })
+
+        await waitFor(() => {
+            expect(refreshButton).not.toBeDisabled()
+        })
+        expect(refreshButton).toHaveAttribute('aria-busy', 'false')
+        expect(screen.getByText('Test Model Latest')).toBeInTheDocument()
+        expect(mockPushToast).toHaveBeenCalledWith('Model list refreshed', 'success')
+    })
+
+    it('shows error toast and restores refresh button when model refresh fails', async () => {
+        mockSettings.modelSettings.enableAll = false
+
+        ;(mockModelsService.refresh as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+            currentModelStatus = 'error'
+            currentModelError = 'Model catalog request failed with status 502'
+            modelListeners.forEach((l) => l())
+        })
+
+        renderWithServices(<ModelsSection />)
+
+        const refreshButton = screen.getByRole('button', { name: /Refresh models/i })
+        fireEvent.click(refreshButton)
+
+        await waitFor(() => {
+            expect(mockPushToast).toHaveBeenCalledWith(
+                'Failed to refresh model list: Model catalog request failed with status 502',
+                'error',
+            )
+        })
+        expect(refreshButton).not.toBeDisabled()
+    })
+
+    it('shows error toast and restores refresh button when refresh throws an error', async () => {
+        mockSettings.modelSettings.enableAll = false
+
+        ;(mockModelsService.refresh as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+            new Error('Network timeout'),
+        )
+
+        renderWithServices(<ModelsSection />)
+
+        const refreshButton = screen.getByRole('button', { name: /Refresh models/i })
+        fireEvent.click(refreshButton)
+
+        await waitFor(() => {
+            expect(mockPushToast).toHaveBeenCalledWith(
+                'Failed to refresh model list: Network timeout',
+                'error',
+            )
+        })
+        expect(refreshButton).not.toBeDisabled()
     })
 })
