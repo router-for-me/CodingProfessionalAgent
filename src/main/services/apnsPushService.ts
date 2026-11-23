@@ -2,6 +2,7 @@ import type {
     AskRequestedNotificationPayload,
     NotificationClientRegistration,
     NotificationClientUnregistration,
+    NotificationDestination,
     NotificationEnvironment,
     RegisteredNotificationClient,
 } from '../../shared/types.js'
@@ -27,6 +28,10 @@ export const DEFAULT_APNS_PUSH_TIMEOUT_MS = 10_000
 
 const DEVICE_TOKEN_HEX_RE = /^[0-9a-f]{64,200}$/
 const MAX_APNS_THREAD_ID_LENGTH = 128
+const MAX_FCM_DEVICE_TOKEN_BYTES = 4096
+const FCM_RETRY_MIN_MS = 60_000
+const FCM_RETRY_WINDOW_MS = 5 * 60_000
+const MAX_FCM_RETRIES_PENDING = 128
 
 export interface TaskCompletedPushPayload {
     sessionId: string
@@ -64,6 +69,19 @@ interface StaleClientRecord {
     clientId: string
     connectionId: string
     deviceToken: string
+    platform: RegisteredNotificationClient['platform']
+    environment?: NotificationEnvironment
+}
+
+function sameDestination(left: StaleClientRecord, right: StaleClientRecord): boolean {
+    return left.clientId === right.clientId && left.connectionId === right.connectionId &&
+        left.platform === right.platform && left.environment === right.environment && left.deviceToken === right.deviceToken
+}
+
+function retryAt(retryAfter: string | null, now: number): number {
+    if (!retryAfter) return now + FCM_RETRY_MIN_MS
+    const requested = /^\d+$/.test(retryAfter) ? now + Number(retryAfter) * 1000 : Date.parse(retryAfter)
+    return Math.max(now + FCM_RETRY_MIN_MS, Number.isNaN(requested) ? 0 : requested)
 }
 
 function normalizeNonEmptyString(value: unknown, fieldName: string): string {
@@ -103,23 +121,33 @@ function normalizeOptionalString(value: unknown): string | undefined {
     return trimmed.length > 0 ? trimmed : undefined
 }
 
-function isStoredClientRecord(item: unknown): item is RegisteredNotificationClient {
-    if (!item || typeof item !== 'object' || Array.isArray(item)) {
-        return false
+// Registration RPC arguments and legacy settings both cross an untyped boundary.
+function normalizeDestination(input: {
+    provider?: unknown
+    platform?: unknown
+    deviceToken?: unknown
+    environment?: unknown
+}): NotificationDestination & { platform: 'ios' | 'android' } {
+    if (input.provider === 'fcm') {
+        if (input.platform !== 'android' || input.environment !== undefined) {
+            throw new Error('FCM requires Android without an APNs environment')
+        }
+        const token = input.deviceToken
+        if (typeof token !== 'string' || !token ||
+            Buffer.byteLength(token) > MAX_FCM_DEVICE_TOKEN_BYTES || /[\s\p{Cc}]/u.test(token)) {
+            throw new Error('Invalid FCM deviceToken')
+        }
+        return { provider: 'fcm', platform: 'android', deviceToken: token }
     }
-    const record = item as Record<string, unknown>
-    if (
-        typeof record.clientId !== 'string' ||
-        !record.clientId.trim() ||
-        typeof record.connectionId !== 'string' ||
-        !record.connectionId.trim() ||
-        typeof record.deviceToken !== 'string' ||
-        !DEVICE_TOKEN_HEX_RE.test(record.deviceToken.trim().toLowerCase()) ||
-        (record.environment !== 'production' && record.environment !== 'sandbox')
-    ) {
-        return false
+    if ((input.provider !== undefined && input.provider !== 'apns') ||
+        (input.platform !== undefined && input.platform !== 'ios')) {
+        throw new Error('Unsupported push provider or platform')
     }
-    return true
+    return {
+        platform: 'ios',
+        deviceToken: normalizeDeviceToken(input.deviceToken),
+        environment: normalizeEnvironment(input.environment),
+    }
 }
 
 function sanitizeStoredClients(raw: unknown): RegisteredNotificationClient[] {
@@ -128,33 +156,68 @@ function sanitizeStoredClients(raw: unknown): RegisteredNotificationClient[] {
     }
     const result: RegisteredNotificationClient[] = []
     for (const item of raw) {
-        if (!isStoredClientRecord(item)) {
+        if (!item || typeof item !== 'object') continue
+        const clientId = normalizeOptionalString(item.clientId)
+        const connectionId = normalizeOptionalString(item.connectionId)
+        if (!clientId || !connectionId) continue
+        let destination: ReturnType<typeof normalizeDestination>
+        try {
+            destination = normalizeDestination(item)
+        } catch {
+            // Ignore corrupt or unsupported entries without blocking other clients.
             continue
         }
         const deviceName = normalizeOptionalString(item.deviceName)
         const appVersion = normalizeOptionalString(item.appVersion)
         result.push({
-            clientId: item.clientId.trim(),
-            connectionId: item.connectionId.trim(),
-            deviceToken: item.deviceToken.trim().toLowerCase(),
-            environment: item.environment,
-            platform: 'ios',
+            clientId,
+            connectionId,
+            ...destination,
             ...(deviceName ? { deviceName } : {}),
             ...(appVersion ? { appVersion } : {}),
             enabled: typeof item.enabled === 'boolean' ? item.enabled : true,
-            registeredAt: typeof item.registeredAt === 'number' && Number.isFinite(item.registeredAt)
-                ? item.registeredAt
-                : 0,
-            updatedAt: typeof item.updatedAt === 'number' && Number.isFinite(item.updatedAt)
-                ? item.updatedAt
-                : 0,
+            registeredAt: Number.isFinite(item.registeredAt) ? item.registeredAt : 0,
+            updatedAt: Number.isFinite(item.updatedAt) ? item.updatedAt : 0,
         })
     }
     return result
 }
 
+interface TurnNotification {
+    notificationType: 'taskCompleted' | 'ask'
+    sessionId: string
+    bodyText: string
+    collapseId?: string
+    dataSessionTitle?: string
+}
+
+function buildGatewayRequest(client: RegisteredNotificationClient, event: TurnNotification) {
+    const route = { connectionId: client.connectionId, sessionId: event.sessionId }
+    if (client.provider === 'fcm') {
+        return {
+            provider: 'fcm',
+            deviceToken: client.deviceToken,
+            data: { ...route, notificationType: event.notificationType },
+        }
+    }
+    return {
+        deviceToken: client.deviceToken,
+        environment: client.environment,
+        title: 'Coding Professional Agent',
+        body: event.bodyText,
+        sound: 'default',
+        threadId: event.sessionId.slice(0, MAX_APNS_THREAD_ID_LENGTH),
+        collapseId: event.collapseId,
+        data: {
+            ...route,
+            ...(event.dataSessionTitle ? { sessionTitle: event.dataSessionTitle } : {}),
+            ...(event.notificationType === 'ask' ? { notificationType: 'ask' } : {}),
+        },
+    }
+}
+
 /**
- * Manages APNs client registrations in settings.json and dispatches push
+ * Manages mobile client registrations in settings.json and dispatches push
  * notifications asynchronously when top-level tasks complete.
  */
 export class ApnsPushService {
@@ -164,6 +227,8 @@ export class ApnsPushService {
     private readonly timeoutMs: number
     private readonly now: () => number
     private readonly logger: ApnsPushLogger
+    private readonly pendingRetries = new Map<string, { timer: NodeJS.Timeout; dueAt: number }>()
+    private disposed = false
     private writeQueue: Promise<void> = Promise.resolve()
 
     constructor(
@@ -184,7 +249,7 @@ export class ApnsPushService {
     }
 
     /**
-     * Registers or updates an iOS client keyed by (clientId, connectionId).
+     * Registers or updates a mobile client keyed by (clientId, connectionId).
      */
     async registerClient(input: NotificationClientRegistration): Promise<void> {
         if (!input || typeof input !== 'object') {
@@ -192,12 +257,7 @@ export class ApnsPushService {
         }
         const clientId = normalizeNonEmptyString(input.clientId, 'clientId')
         const connectionId = normalizeNonEmptyString(input.connectionId, 'connectionId')
-        const deviceToken = normalizeDeviceToken(input.deviceToken)
-        const environment = normalizeEnvironment(input.environment)
-
-        if (input.platform !== undefined && input.platform !== 'ios') {
-            throw new Error('Invalid platform: only "ios" is supported')
-        }
+        const destination = normalizeDestination(input)
         if (input.enabled !== undefined && typeof input.enabled !== 'boolean') {
             throw new Error('Invalid enabled flag: expected a boolean')
         }
@@ -217,9 +277,7 @@ export class ApnsPushService {
             const nextEntry: RegisteredNotificationClient = {
                 clientId,
                 connectionId,
-                deviceToken,
-                environment,
-                platform: 'ios',
+                ...destination,
                 ...(deviceName ? { deviceName } : {}),
                 ...(appVersion ? { appVersion } : {}),
                 enabled,
@@ -290,6 +348,7 @@ export class ApnsPushService {
             ? sliceUtf8Bytes(`turn-complete-${sessionId}`, MAX_APNS_COLLAPSE_ID_BYTES)
             : undefined
         await this.dispatchPushToEnabledClients({
+            notificationType: 'taskCompleted',
             sessionId,
             bodyText,
             collapseId,
@@ -309,94 +368,23 @@ export class ApnsPushService {
             ? sliceUtf8Bytes(`ask-${sessionId}`, MAX_APNS_COLLAPSE_ID_BYTES)
             : undefined
         await this.dispatchPushToEnabledClients({
+            notificationType: 'ask',
             sessionId,
             bodyText,
             collapseId,
             dataSessionTitle,
-            extraData: { notificationType: 'ask' },
         })
     }
 
-    private async dispatchPushToEnabledClients(options: {
-        sessionId: string
-        bodyText: string
-        collapseId?: string
-        dataSessionTitle?: string
-        extraData?: Record<string, string>
-    }): Promise<void> {
+    private async dispatchPushToEnabledClients(event: TurnNotification): Promise<void> {
         const clients = await this.listClients()
         const enabledClients = clients.filter((c) => c.enabled)
         if (enabledClients.length === 0) {
             return
         }
 
-        const pushUrl = this.resolvePushUrl()
-        const threadId = options.sessionId.length > MAX_APNS_THREAD_ID_LENGTH
-            ? options.sessionId.slice(0, MAX_APNS_THREAD_ID_LENGTH)
-            : options.sessionId
-
-        const results = await Promise.allSettled(
-            enabledClients.map(async (client): Promise<StaleClientRecord | null> => {
-                const requestBody = {
-                    deviceToken: client.deviceToken,
-                    environment: client.environment,
-                    title: 'Coding Professional Agent',
-                    body: options.bodyText,
-                    sound: 'default',
-                    threadId,
-                    collapseId: options.collapseId,
-                    data: {
-                        connectionId: client.connectionId,
-                        sessionId: options.sessionId,
-                        ...(options.dataSessionTitle ? { sessionTitle: options.dataSessionTitle } : {}),
-                        ...(options.extraData ?? {}),
-                    },
-                }
-
-                try {
-                    const response = await this.fetchFn(pushUrl, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify(requestBody),
-                        signal: AbortSignal.timeout(this.timeoutMs),
-                    })
-
-                    let parsedBody: Record<string, unknown> | null = null
-                    try {
-                        const jsonValue = await response.json()
-                        if (jsonValue && typeof jsonValue === 'object' && !Array.isArray(jsonValue)) {
-                            parsedBody = jsonValue as Record<string, unknown>
-                        }
-                    } catch {
-                        // Ignore non-JSON or empty response bodies
-                    }
-
-                    if (response.status === 410 || parsedBody?.unregistered === true) {
-                        return {
-                            clientId: client.clientId,
-                            connectionId: client.connectionId,
-                            deviceToken: client.deviceToken,
-                        }
-                    }
-
-                    if (!response.ok) {
-                        this.logger.warn?.(
-                            `[ApnsPushService] Push gateway returned status ${response.status} for client ${client.clientId}`,
-                        )
-                    }
-                } catch (err) {
-                    this.logger.warn?.(
-                        `[ApnsPushService] Failed to send APNs push to client ${client.clientId}:`,
-                        err,
-                    )
-                }
-
-                return null
-            }),
-        )
-
+        const expiresAt = this.now() + FCM_RETRY_WINDOW_MS
+        const results = await Promise.allSettled(enabledClients.map(client => this.sendPush(client, event, expiresAt)))
         const staleClients: StaleClientRecord[] = []
         for (const result of results) {
             if (result.status === 'fulfilled' && result.value) {
@@ -407,6 +395,80 @@ export class ApnsPushService {
         if (staleClients.length > 0) {
             await this.removeStaleClients(staleClients)
         }
+    }
+
+    private async sendPush(
+        client: RegisteredNotificationClient,
+        event: TurnNotification,
+        retryDeadline?: number,
+    ): Promise<StaleClientRecord | null> {
+        try {
+            const response = await this.fetchFn(this.resolvePushUrl(), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(buildGatewayRequest(client, event)),
+                signal: AbortSignal.timeout(this.timeoutMs),
+            })
+            const raw = await response.json().catch(() => null)
+            const result = raw && typeof raw === 'object' ? raw as Record<string, unknown> : undefined
+            // Legacy APNs gateways may return only the status or only the flag.
+            const unregistered = client.provider === 'fcm'
+                ? response.status === 410 && result?.unregistered === true
+                : response.status === 410 || result?.unregistered === true
+            if (unregistered) return client
+
+            if (!response.ok) {
+                this.logger.warn?.(`[ApnsPushService] Push gateway returned status ${response.status} for client ${client.clientId}`)
+                if (client.provider === 'fcm' && retryDeadline !== undefined &&
+                    (response.status === 429 || (response.status === 503 && result?.reason !== 'fcm not configured'))) {
+                    this.scheduleFcmRetry(client, event, retryDeadline, response.headers.get('retry-after'))
+                }
+            }
+        } catch (err) {
+            this.logger.warn?.(`[ApnsPushService] Failed to send push to client ${client.clientId}:`, err)
+        }
+        return null
+    }
+
+    private scheduleFcmRetry(
+        client: RegisteredNotificationClient,
+        event: TurnNotification,
+        expiresAt: number,
+        retryAfter: string | null,
+    ): void {
+        if (this.disposed) return
+        // One pending reminder per installation, connection, token, session and kind.
+        const key = JSON.stringify([client.clientId, client.connectionId, client.deviceToken, event.sessionId, event.notificationType])
+        const existing = this.pendingRetries.get(key)
+        const now = this.now()
+        const dueAt = Math.max(existing?.dueAt ?? 0, retryAt(retryAfter, now))
+        if (existing) {
+            clearTimeout(existing.timer)
+            this.pendingRetries.delete(key)
+        }
+        if (dueAt >= expiresAt || this.pendingRetries.size >= MAX_FCM_RETRIES_PENDING) return
+        const timer = setTimeout(() => {
+            this.pendingRetries.delete(key)
+            void this.retryFcmPush(client, event, expiresAt).catch(err => {
+                this.logger.warn?.('[ApnsPushService] Failed to process push retry:', err)
+            })
+        }, dueAt - now)
+        timer.unref()
+        this.pendingRetries.set(key, { timer, dueAt })
+    }
+
+    private async retryFcmPush(client: RegisteredNotificationClient, event: TurnNotification, expiresAt: number): Promise<void> {
+        const current = (await this.listClients()).find(record => record.enabled && sameDestination(record, client))
+        if (!current || this.disposed || this.now() >= expiresAt) return
+        // Omitting the deadline makes this the final attempt.
+        const stale = await this.sendPush(current, event)
+        if (stale) await this.removeStaleClients([stale])
+    }
+
+    dispose(): void {
+        this.disposed = true
+        for (const pending of this.pendingRetries.values()) clearTimeout(pending.timer)
+        this.pendingRetries.clear()
     }
 
     private resolvePushUrl(): string {
@@ -438,15 +500,7 @@ export class ApnsPushService {
 
             // Only remove an entry if its stored deviceToken still matches the failed push token,
             // preventing deletion of a newly rotated token while an earlier push was in flight.
-            const filtered = clients.filter((current) => {
-                const matchedStale = staleRecords.some(
-                    (stale) =>
-                        stale.clientId === current.clientId &&
-                        stale.connectionId === current.connectionId &&
-                        stale.deviceToken === current.deviceToken,
-                )
-                return !matchedStale
-            })
+            const filtered = clients.filter(current => !staleRecords.some(stale => sameDestination(stale, current)))
 
             if (filtered.length === clients.length) {
                 return
