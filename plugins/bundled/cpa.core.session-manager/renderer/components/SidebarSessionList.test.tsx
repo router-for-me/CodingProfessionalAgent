@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useMessageStore } from '@/stores/messageStore'
 import { useProjectStore } from '@/stores/projectStore'
 import { useSessionStore } from '@/stores/sessionStore'
+import { useSessionRunStore } from '@/stores/sessionRunStore'
 import { useUiStore } from '@/stores/uiStore'
 import { rendererPluginRuntime } from '@/plugins/platform/RendererPluginRuntimeHost'
 import type { ConversationEntry } from '@/features/agent-runtime/session/types'
@@ -515,6 +516,339 @@ describe('SidebarSessionList sorting by first prompt time', () => {
             rerender(<SidebarSessionList />)
             expect(screen.getByRole('button', { name: 'Unknown Project' })).toBeInTheDocument()
             expect(screen.queryByText(uuidProjId)).not.toBeInTheDocument()
+        })
+    })
+
+    describe('archive all completed chats in a project', () => {
+        const openProjectMenu = (projectName: string) => {
+            const projectToggleBtn = screen.getByRole('button', { name: projectName })
+            fireEvent.contextMenu(projectToggleBtn)
+        }
+
+        it('archives non-running sessions including pinned ones and skips running sessions', async () => {
+            useProjectStore.setState({
+                projects: [
+                    {
+                        id: 'proj-archive',
+                        name: 'Archive Project',
+                        pinned: false,
+                        createdAt: 1000,
+                        updatedAt: 1000,
+                    },
+                ],
+            })
+            useSessionStore.setState({
+                sessions: [
+                    {
+                        id: 'sess-plain',
+                        projectId: 'proj-archive',
+                        title: 'Plain Session',
+                        pinned: false,
+                        createdAt: 1000,
+                        updatedAt: 1000,
+                    },
+                    {
+                        id: 'sess-pinned',
+                        projectId: 'proj-archive',
+                        title: 'Pinned Session',
+                        pinned: true,
+                        createdAt: 1100,
+                        updatedAt: 1100,
+                    },
+                    {
+                        id: 'sess-running',
+                        projectId: 'proj-archive',
+                        title: 'Running Session',
+                        pinned: false,
+                        createdAt: 1200,
+                        updatedAt: 1200,
+                    },
+                ],
+                currentSessionId: null,
+            })
+            useUiStore.setState({ collapsedGroups: {} })
+            useSessionRunStore.setState({
+                activeRuns: {
+                    'sess-running': {
+                        sessionId: 'sess-running',
+                        runId: 'run-1',
+                        clientId: 'c1',
+                        status: 'running',
+                        updatedAt: Date.now(),
+                    },
+                },
+            })
+
+            render(<SidebarSessionList />)
+            openProjectMenu('Archive Project')
+
+            const archiveItem = await screen.findByRole('menuitem', {
+                name: 'Archive all completed chats',
+            })
+            fireEvent.click(archiveItem)
+
+            await vi.waitFor(() => {
+                const state = useSessionStore.getState()
+                const plain = state.sessions.find((s) => s.id === 'sess-plain')
+                const pinned = state.sessions.find((s) => s.id === 'sess-pinned')
+                const running = state.sessions.find((s) => s.id === 'sess-running')
+                expect(plain?.archivedAt).toBeDefined()
+                expect(pinned?.archivedAt).toBeDefined()
+                expect(running?.archivedAt).toBeUndefined()
+            })
+
+            useSessionRunStore.setState({ activeRuns: {} })
+        })
+
+        it('navigates to a remaining session when the currently viewed session is archived', async () => {
+            window.location.hash = '#/chat/sess-viewed'
+            useProjectStore.setState({
+                projects: [
+                    {
+                        id: 'proj-nav',
+                        name: 'Nav Project',
+                        pinned: false,
+                        createdAt: 1000,
+                        updatedAt: 1000,
+                    },
+                ],
+            })
+            useSessionStore.setState({
+                sessions: [
+                    {
+                        id: 'sess-viewed',
+                        projectId: 'proj-nav',
+                        title: 'Viewed Session',
+                        pinned: false,
+                        createdAt: 1000,
+                        updatedAt: 1000,
+                    },
+                    {
+                        id: 'sess-other-project',
+                        projectId: 'proj-other',
+                        title: 'Other Project Session',
+                        pinned: false,
+                        createdAt: 1100,
+                        updatedAt: 1100,
+                    },
+                ],
+                currentSessionId: 'sess-viewed',
+            })
+            useUiStore.setState({ collapsedGroups: {} })
+
+            const navigationService = getHostServices().navigation
+            const navigateSpy = vi
+                .spyOn(navigationService, 'navigate')
+                .mockResolvedValue(undefined)
+
+            try {
+                render(<SidebarSessionList />)
+                openProjectMenu('Nav Project')
+
+                const archiveItem = await screen.findByRole('menuitem', {
+                    name: 'Archive all completed chats',
+                })
+                fireEvent.click(archiveItem)
+
+                await vi.waitFor(() => {
+                    const state = useSessionStore.getState()
+                    expect(state.sessions.find((s) => s.id === 'sess-viewed')?.archivedAt).toBeDefined()
+                    expect(navigateSpy).toHaveBeenCalledWith({
+                        to: '/chat/$sessionId',
+                        params: { sessionId: 'sess-other-project' },
+                    })
+                })
+                expect(useSessionStore.getState().currentSessionId).toBe('sess-other-project')
+            } finally {
+                navigateSpy.mockRestore()
+                window.location.hash = ''
+            }
+        })
+
+        it('does not navigate when the user already left the archived session while archiving was in flight', async () => {
+            window.location.hash = '#/chat/sess-inflight'
+            useProjectStore.setState({
+                projects: [
+                    {
+                        id: 'proj-inflight',
+                        name: 'Inflight Project',
+                        pinned: false,
+                        createdAt: 1000,
+                        updatedAt: 1000,
+                    },
+                ],
+            })
+            useSessionStore.setState({
+                sessions: [
+                    {
+                        id: 'sess-inflight',
+                        projectId: 'proj-inflight',
+                        title: 'Inflight Session',
+                        pinned: false,
+                        createdAt: 1000,
+                        updatedAt: 1000,
+                    },
+                    {
+                        id: 'sess-elsewhere',
+                        projectId: 'proj-inflight',
+                        title: 'Elsewhere Session',
+                        pinned: false,
+                        createdAt: 1100,
+                        updatedAt: 1100,
+                    },
+                    {
+                        id: 'sess-untouched',
+                        projectId: 'proj-other',
+                        title: 'Untouched Session',
+                        pinned: false,
+                        createdAt: 1200,
+                        updatedAt: 1200,
+                    },
+                ],
+                currentSessionId: 'sess-inflight',
+            })
+            useUiStore.setState({ collapsedGroups: {} })
+
+            const navigationService = getHostServices().navigation
+            const navigateSpy = vi
+                .spyOn(navigationService, 'navigate')
+                .mockResolvedValue(undefined)
+
+            try {
+                render(<SidebarSessionList />)
+                openProjectMenu('Inflight Project')
+
+                const archiveItem = await screen.findByRole('menuitem', {
+                    name: 'Archive all completed chats',
+                })
+                fireEvent.click(archiveItem)
+
+                // Simulate the user navigating to another session while the
+                // batch archive is still in flight.
+                window.location.hash = '#/chat/sess-untouched'
+                useSessionStore.getState().setCurrentSession('sess-untouched')
+
+                await vi.waitFor(() => {
+                    const state = useSessionStore.getState()
+                    expect(state.sessions.find((s) => s.id === 'sess-inflight')?.archivedAt).toBeDefined()
+                })
+
+                // Give the post-archive navigation logic a chance to run.
+                await new Promise((resolve) => setTimeout(resolve, 50))
+                expect(navigateSpy).not.toHaveBeenCalled()
+                expect(useSessionStore.getState().currentSessionId).toBe('sess-untouched')
+            } finally {
+                navigateSpy.mockRestore()
+                window.location.hash = ''
+            }
+        })
+
+        it('navigates to home when every session was archived', async () => {
+            window.location.hash = '#/chat/sess-only'
+            useProjectStore.setState({
+                projects: [
+                    {
+                        id: 'proj-empty',
+                        name: 'Empty Project',
+                        pinned: false,
+                        createdAt: 1000,
+                        updatedAt: 1000,
+                    },
+                ],
+            })
+            useSessionStore.setState({
+                sessions: [
+                    {
+                        id: 'sess-only',
+                        projectId: 'proj-empty',
+                        title: 'Only Session',
+                        pinned: false,
+                        createdAt: 1000,
+                        updatedAt: 1000,
+                    },
+                ],
+                currentSessionId: 'sess-only',
+            })
+            useUiStore.setState({ collapsedGroups: {} })
+
+            const navigationService = getHostServices().navigation
+            const navigateSpy = vi
+                .spyOn(navigationService, 'navigate')
+                .mockResolvedValue(undefined)
+
+            try {
+                render(<SidebarSessionList />)
+                openProjectMenu('Empty Project')
+
+                const archiveItem = await screen.findByRole('menuitem', {
+                    name: 'Archive all completed chats',
+                })
+                fireEvent.click(archiveItem)
+
+                await vi.waitFor(() => {
+                    const state = useSessionStore.getState()
+                    expect(state.sessions.find((s) => s.id === 'sess-only')?.archivedAt).toBeDefined()
+                    expect(navigateSpy).toHaveBeenCalledWith('/')
+                })
+                expect(useSessionStore.getState().currentSessionId).toBeNull()
+            } finally {
+                navigateSpy.mockRestore()
+                window.location.hash = ''
+            }
+        })
+
+        it('does not archive anything when all project sessions are running', async () => {
+            useProjectStore.setState({
+                projects: [
+                    {
+                        id: 'proj-busy',
+                        name: 'Busy Project',
+                        pinned: false,
+                        createdAt: 1000,
+                        updatedAt: 1000,
+                    },
+                ],
+            })
+            useSessionStore.setState({
+                sessions: [
+                    {
+                        id: 'sess-busy',
+                        projectId: 'proj-busy',
+                        title: 'Busy Session',
+                        pinned: false,
+                        createdAt: 1000,
+                        updatedAt: 1000,
+                    },
+                ],
+                currentSessionId: null,
+            })
+            useUiStore.setState({ collapsedGroups: {} })
+            useSessionRunStore.setState({
+                activeRuns: {
+                    'sess-busy': {
+                        sessionId: 'sess-busy',
+                        runId: 'run-busy',
+                        clientId: 'c1',
+                        status: 'running',
+                        updatedAt: Date.now(),
+                    },
+                },
+            })
+
+            render(<SidebarSessionList />)
+            openProjectMenu('Busy Project')
+
+            const archiveItem = await screen.findByRole('menuitem', {
+                name: 'Archive all completed chats',
+            })
+            fireEvent.click(archiveItem)
+
+            // Give the async handler a chance to run; the running session must stay active.
+            await new Promise((resolve) => setTimeout(resolve, 50))
+            const state = useSessionStore.getState()
+            expect(state.sessions.find((s) => s.id === 'sess-busy')?.archivedAt).toBeUndefined()
+
+            useSessionRunStore.setState({ activeRuns: {} })
         })
     })
 })

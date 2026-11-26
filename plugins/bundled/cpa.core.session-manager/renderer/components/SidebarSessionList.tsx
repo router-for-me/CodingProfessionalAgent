@@ -21,12 +21,14 @@ import {
 import {
     cn,
     createHashRouteUrl,
+    getHashRoutePathname,
     useHostService,
     useProjects,
     useSessions,
     useTranslation,
     useUiState,
     useWorkspaceVisible,
+    Archive,
     Folder,
     FolderOpen,
     FolderSearch,
@@ -364,6 +366,8 @@ function ProjectGroup({
     const isMobile = useIsMobileBrowser()
     const menuId = useId()
     const uiService = useHostService(UiServiceToken)
+    const sessionService = useHostService(SessionServiceToken)
+    const navigationService = useHostService(NavigationServiceToken)
     const triggerRef = useRef<HTMLButtonElement>(null)
     const menuRef = useRef<HTMLDivElement>(null)
     const [menuOpen, setMenuOpen] = useState(false)
@@ -372,6 +376,82 @@ function ProjectGroup({
     const hasSessions = sessions.length > 0
     const projectPaths = project ? getProjectPaths(project) : []
     const primaryPath = projectPaths[0]
+
+    // All active (non-archived) sessions belonging to this project, including pinned ones.
+    const allSessions = useSessions()
+    const projectSessions = useMemo(
+        () =>
+            project
+                ? allSessions.filter(
+                      (session: SessionItem) =>
+                          session.projectId === project.id && session.archivedAt === undefined,
+                  )
+                : [],
+        [allSessions, project],
+    )
+
+    const handleArchiveAllCompleted = async () => {
+        closeMenu()
+        if (!sessionService?.update) return
+        // Capture the currently viewed session before archiving starts. The
+        // session store reassigns the current ID as soon as an archived session
+        // was the active one, so reading it afterwards would be meaningless.
+        const viewedSessionId = sessionService.getCurrentSessionId?.() ?? null
+        // Evaluate run state at click time so sessions that started or finished
+        // running after the menu opened are classified correctly.
+        const targets = projectSessions.filter((session: SessionItem) => {
+            const runState = sessionService.getActiveRun?.(session.id)
+            return !(runState && runState.status !== 'idle')
+        })
+        if (targets.length === 0) {
+            uiService?.pushToast(t('project.archiveAllCompleted.none'), 'info')
+            return
+        }
+        const archivedAt = Date.now()
+        const results = await Promise.allSettled(
+            targets.map((session: SessionItem) => sessionService.update(session.id, { archivedAt })),
+        )
+        const succeededIds = targets
+            .filter((_: SessionItem, index: number) => results[index]?.status === 'fulfilled')
+            .map((session: SessionItem) => session.id)
+        if (succeededIds.length === 0) {
+            uiService?.pushToast(t('project.archiveAllCompleted.none'), 'info')
+            return
+        }
+        uiService?.pushToast(
+            t('project.archiveAllCompleted.success', { count: succeededIds.length }),
+            'success',
+        )
+        // Navigate away only if the session the user was viewing before the
+        // batch archive started was archived. The session store reassigns the
+        // current session ID synchronously when the active session is archived,
+        // so the store alone cannot tell whether the user is still looking at
+        // the archived session; check the actual hash route instead. If the
+        // user already navigated elsewhere while the updates were in flight,
+        // their navigation is left untouched.
+        if (!viewedSessionId || !succeededIds.includes(viewedSessionId)) return
+        if (getHashRoutePathname() !== `/chat/${viewedSessionId}`) return
+        const snapshot = sessionService.getSnapshot?.() ?? allSessions
+        const remaining = snapshot.filter(
+            (session: SessionItem) =>
+                session.archivedAt === undefined && !succeededIds.includes(session.id),
+        )
+        if (remaining.length > 0) {
+            const nextId = remaining[0].id
+            sessionService.setCurrentSessionId?.(nextId)
+            if (navigationService) {
+                void navigationService.navigate({
+                    to: '/chat/$sessionId',
+                    params: { sessionId: nextId },
+                })
+            }
+        } else {
+            sessionService.setCurrentSessionId?.(null)
+            if (navigationService) {
+                void navigationService.navigate('/')
+            }
+        }
+    }
 
     useEffect(() => {
         if (collapsed) {
@@ -392,7 +472,7 @@ function ProjectGroup({
 
         const margin = 8
         const menuWidth = 192
-        const menuHeight = 140
+        const menuHeight = 176
         setMenuPosition({
             left: Math.min(
                 Math.max(margin, left),
@@ -550,6 +630,14 @@ function ProjectGroup({
                             onClick={() => {
                                 closeMenu()
                                 onTogglePin?.()
+                            }}
+                        />
+                        <ProjectMenuItem
+                            icon={Archive}
+                            label={t('project.archiveAllCompleted')}
+                            disabled={projectSessions.length === 0}
+                            onClick={() => {
+                                void handleArchiveAllCompleted()
                             }}
                         />
                         <ProjectMenuItem
