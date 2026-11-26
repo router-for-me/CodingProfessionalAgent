@@ -131,6 +131,39 @@ describe('persist pure helpers', () => {
     expectTypeOf<ElectronBridgeApi['SessionSet']>().returns.toEqualTypeOf<Promise<string>>()
   })
 
+  it('sanitizes tool result display metadata needed to restore session-scoped tool state', () => {
+    const entries = [{
+      id: 'tool-result:s1:call_1',
+      sessionId: 's1',
+      kind: 'toolResult',
+      version: 1,
+      createdAt: 2,
+      toolCallId: 'call_1|fc_1',
+      toolName: 'todo',
+      content: [{ type: 'text', text: 'Successfully updated todo list (1 items).' }],
+      displayMetadata: {
+        todoRevision: 42,
+        committedAt: 2,
+        todoSnapshot: [
+          { id: 1, title: 'Persisted task', description: 'restore after restart', status: 'in-progress' },
+        ],
+      },
+      isError: false,
+    }] as ConversationEntry[]
+
+    const sanitized = sanitizeConversationEntries({ s1: entries }).s1
+    expect(sanitized[0]).toMatchObject({
+      kind: 'toolResult',
+      toolName: 'todo',
+      displayMetadata: {
+        todoRevision: 42,
+        todoSnapshot: [
+          { id: 1, title: 'Persisted task', description: 'restore after restart', status: 'in-progress' },
+        ],
+      },
+    })
+  })
+
   it('sanitizes per-turn reasoning effort on user and assistant entries', () => {
     const entries = [
       { id: 'u1', sessionId: 's1', createdAt: 1, kind: 'user', content: [], reasoningEffort: 'off' },

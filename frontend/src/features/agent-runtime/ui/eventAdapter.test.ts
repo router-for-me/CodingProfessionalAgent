@@ -67,6 +67,83 @@ describe('createAgentEventAdapter', () => {
         expect(adapter.apply({ type: 'tool-display-update', sessionId: 's', runId: 'old', toolCallId: 'parent', displayMetadata: { status: 'failed' } }).changed).toBe(false)
     })
 
+    it('preserves result display metadata when building a canonical tool result entry', () => {
+        const adapter = createAgentEventAdapter(useMessageStore)
+        const scope = { sessionId: 's', runId: 'r' }
+        const displayMetadata = {
+            todoRevision: 42,
+            committedAt: 10,
+            todoSnapshot: [
+                { id: 1, title: 'Persisted task', description: 'restore after restart', status: 'in-progress' },
+            ],
+        }
+        adapter.apply({ type: 'agent-start', ...scope })
+        const assistant = baseAssistant({
+            id: 'a',
+            sessionId: 's',
+            status: 'done',
+            stopReason: 'toolUse',
+            content: [{ type: 'toolCall', id: 'todo-call', name: 'todo', arguments: { operation: 'write' } }],
+        })
+        adapter.apply({ type: 'assistant-end', ...scope, entry: assistant })
+
+        const applied = adapter.apply({
+            type: 'tool-end',
+            ...scope,
+            toolCallId: 'todo-call',
+            toolName: 'todo',
+            result: {
+                content: [{ type: 'text', text: 'Successfully updated todo list (1 items).' }],
+                displayMetadata,
+                isError: false,
+            },
+            isError: false,
+        })
+
+        expect(applied.changed).toBe(true)
+        const stored = useMessageStore.getState().getEntries('s')
+        const result = stored.find((entry) => entry.kind === 'toolResult') as ToolResultEntry | undefined
+        expect(result?.displayMetadata).toEqual(displayMetadata)
+        expect(result?.displayMetadata).not.toBe(displayMetadata)
+    })
+
+    it('preserves special own keys in result display metadata', () => {
+        const adapter = createAgentEventAdapter(useMessageStore)
+        const scope = { sessionId: 's', runId: 'r' }
+        const displayMetadata = JSON.parse('{"__proto__":{"todoRevision":42}}') as Record<string, unknown>
+        adapter.apply({ type: 'agent-start', ...scope })
+        adapter.apply({
+            type: 'assistant-end',
+            ...scope,
+            entry: baseAssistant({
+                id: 'a',
+                sessionId: 's',
+                status: 'done',
+                stopReason: 'toolUse',
+                content: [{ type: 'toolCall', id: 'todo-call', name: 'todo', arguments: { operation: 'write' } }],
+            }),
+        })
+
+        adapter.apply({
+            type: 'tool-end',
+            ...scope,
+            toolCallId: 'todo-call',
+            toolName: 'todo',
+            result: {
+                content: [{ type: 'text', text: 'result' }],
+                displayMetadata,
+                isError: false,
+            },
+            isError: false,
+        })
+
+        const result = useMessageStore.getState().getEntries('s').find((entry) => entry.kind === 'toolResult') as ToolResultEntry | undefined
+        const metadata = result?.displayMetadata as Record<string, unknown>
+        expect(Object.prototype.hasOwnProperty.call(metadata, '__proto__')).toBe(true)
+        expect((metadata.__proto__ as Record<string, unknown>).todoRevision).toBe(42)
+        expect(({} as Record<string, unknown>).todoRevision).toBeUndefined()
+    })
+
     it('does not let an active run overwrite historical display metadata', () => {
         const entry: ToolResultEntry = { kind: 'toolResult', id: 'historic', version: 1, createdAt: 1, sessionId: 's', toolCallId: 'old', toolName: 'compose', content: [], isError: false, displayMetadata: { status: 'completed' } }
         useMessageStore.getState().replaceSessionEntries('s', [entry])

@@ -3,6 +3,60 @@ import { migrateLegacyMessages } from './migration'
 import type { ConversationEntry } from './types'
 
 describe('migrateLegacyMessages', () => {
+    it('preserves canonical tool result display metadata across restart hydration', () => {
+        const displayMetadata = {
+            todoRevision: 42,
+            committedAt: 1000,
+            todoSnapshot: [
+                { id: 1, title: 'Persisted task', description: 'restore after restart', status: 'in-progress' },
+            ],
+        }
+        const entries = migrateLegacyMessages('s1', [{
+            id: 'tool-result:s1:call_1',
+            sessionId: 's1',
+            createdAt: 1,
+            kind: 'toolResult',
+            version: 1,
+            toolCallId: 'call_1|fc_1',
+            toolName: 'todo',
+            content: [{ type: 'text', text: 'Successfully updated todo list (1 items).' }],
+            displayMetadata,
+            isError: false,
+        }])
+
+        expect(entries).toHaveLength(1)
+        expect(entries[0]).toMatchObject({
+            kind: 'toolResult',
+            toolCallId: 'call_1|fc_1',
+            toolName: 'todo',
+            displayMetadata,
+        })
+        expect((entries[0] as Extract<ConversationEntry, { kind: 'toolResult' }>).displayMetadata).not.toBe(displayMetadata)
+        expect(migrateLegacyMessages('s1', JSON.parse(JSON.stringify(entries)))).toEqual(entries)
+    })
+
+    it('preserves special own keys in tool result display metadata', () => {
+        const displayMetadata = JSON.parse('{"__proto__":{"todoRevision":42}}') as Record<string, unknown>
+        const entries = migrateLegacyMessages('s1', [{
+            id: 'tool-result:s1:call_proto',
+            sessionId: 's1',
+            createdAt: 1,
+            kind: 'toolResult',
+            version: 1,
+            toolCallId: 'call_proto|fc_1',
+            toolName: 'todo',
+            content: [{ type: 'text', text: 'result' }],
+            displayMetadata,
+            isError: false,
+        }])
+
+        const migrated = (entries[0] as Extract<ConversationEntry, { kind: 'toolResult' }>).displayMetadata as Record<string, unknown>
+        expect(Object.prototype.hasOwnProperty.call(migrated, '__proto__')).toBe(true)
+        expect((migrated.__proto__ as Record<string, unknown>).todoRevision).toBe(42)
+        expect(({} as Record<string, unknown>).todoRevision).toBeUndefined()
+        expect(migrateLegacyMessages('s1', JSON.parse(JSON.stringify(entries)))).toEqual(entries)
+    })
+
     it('round-trips isolated accounting without adding isolated chat messages', () => {
         const invocation = { id: 'isolated-B', model: 'model-B', parentToolCallId: 'call_A', usage: { input: 3, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 5, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }
         const entries = migrateLegacyMessages('s1', [{ id: 'tool-A', sessionId: 's1', createdAt: 1, kind: 'toolResult', toolCallId: 'call_A', toolName: 'delegated', content: [{ type: 'text', text: 'findings' }], isError: false, isolatedModelInvocations: [invocation] }])

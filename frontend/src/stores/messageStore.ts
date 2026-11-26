@@ -175,7 +175,14 @@ function deepClone<T>(value: T, seen = new WeakMap<object, unknown>()): T {
   const out: Record<string, unknown> = {}
   seen.set(value as object, out)
   for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
-    out[key] = deepClone(nested, seen)
+    // Preserve keys such as "__proto__" as data properties instead of
+    // assigning through the object prototype machinery.
+    Object.defineProperty(out, key, {
+      value: deepClone(nested, seen),
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    })
   }
   return out as T
 }

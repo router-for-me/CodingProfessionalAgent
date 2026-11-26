@@ -564,6 +564,9 @@ function normalizeCanonicalEntry(
             toolCallId,
             toolName: asNonEmptyString(item.toolName) ?? 'tool',
             content: deepCloneJson(normalizeToolResultContent(item.content)),
+            ...(isRecord(item.displayMetadata)
+                ? { displayMetadata: deepCloneJson(item.displayMetadata) }
+                : {}),
             isError: item.isError === true,
             ...(Array.isArray(item.isolatedModelInvocations)
                 ? {
@@ -642,7 +645,14 @@ function deepCloneValue(
     for (const [key, nested] of Object.entries(
         value as Record<string, unknown>,
     )) {
-        out[key] = deepCloneValue(nested, seen)
+        // Preserve keys such as "__proto__" as data properties instead of
+        // assigning through the object prototype machinery.
+        Object.defineProperty(out, key, {
+            value: deepCloneValue(nested, seen),
+            writable: true,
+            enumerable: true,
+            configurable: true,
+        })
     }
     return out
 }

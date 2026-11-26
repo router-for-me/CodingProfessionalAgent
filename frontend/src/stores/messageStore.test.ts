@@ -197,6 +197,29 @@ describe('messageStore canonical entries', () => {
     unsub()
   })
 
+  it('replaceSessionEntries preserves special own keys in nested entry metadata', () => {
+    const entry = {
+      kind: 'toolResult',
+      id: 'tool-result:s1:call_1',
+      version: 1,
+      createdAt: 1,
+      sessionId: 's1',
+      toolCallId: 'call_1',
+      toolName: 'todo',
+      content: [],
+      isError: false,
+      displayMetadata: JSON.parse('{"__proto__":{"todoRevision":42}}'),
+    } as ConversationEntry
+
+    useMessageStore.getState().replaceSessionEntries('s1', [entry])
+    const stored = useMessageStore.getState().getEntries('s1')[0] as Extract<ConversationEntry, { kind: 'toolResult' }>
+    const metadata = stored.displayMetadata as Record<string, unknown>
+
+    expect(Object.prototype.hasOwnProperty.call(metadata, '__proto__')).toBe(true)
+    expect((metadata.__proto__ as Record<string, unknown>).todoRevision).toBe(42)
+    expect(({} as Record<string, unknown>).todoRevision).toBeUndefined()
+  })
+
   it('removeEntry deletes by session + id only', () => {
     useMessageStore.getState().appendEntry(user({ id: 'u1', sessionId: 's1' }))
     useMessageStore.getState().appendEntry(assistant({ id: 'a1', sessionId: 's1' }))

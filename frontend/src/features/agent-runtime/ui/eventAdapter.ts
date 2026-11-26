@@ -144,7 +144,14 @@ function deepClone<T>(value: T, seen = new WeakMap<object, unknown>()): T {
   const out: Record<string, unknown> = {}
   seen.set(value as object, out)
   for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
-    out[key] = deepClone(nested, seen)
+    // Preserve keys such as "__proto__" as data properties instead of
+    // assigning through the object prototype machinery.
+    Object.defineProperty(out, key, {
+      value: deepClone(nested, seen),
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    })
   }
   return out as T
 }
@@ -155,17 +162,18 @@ function buildToolResultEntry(
   toolName: string,
   content: ToolResultContentBlock[],
   isError: boolean,
-  existing?: ToolResultEntry,
+  displayMetadata?: Record<string, unknown>,
 ): ToolResultEntry {
   return {
-    id: existing?.id ?? deterministicToolResultId(sessionId, toolCallId),
+    id: deterministicToolResultId(sessionId, toolCallId),
     sessionId,
-    createdAt: existing?.createdAt ?? Date.now(),
+    createdAt: Date.now(),
     kind: 'toolResult',
     version: 1,
     toolCallId,
     toolName,
     content: deepClone(content),
+    ...(displayMetadata ? { displayMetadata: deepClone(displayMetadata) } : {}),
     isError,
   }
 }
@@ -1074,6 +1082,7 @@ export function createAgentEventAdapter(
             event.toolName,
             canonicalToolContent(event.result?.content),
             Boolean(event.isError ?? event.result?.isError),
+            event.result?.displayMetadata,
           )
         }
 
